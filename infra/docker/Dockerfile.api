@@ -1,0 +1,23 @@
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY packages/shared-types ./packages/shared-types
+COPY packages/api-contracts ./packages/api-contracts
+COPY apps/api/package*.json ./apps/api/
+COPY apps/api/tsconfig*.json ./apps/api/
+COPY apps/api/nest-cli.json ./apps/api/
+WORKDIR /app/packages/shared-types
+RUN npm install && npm run build
+WORKDIR /app/packages/api-contracts
+RUN npm install && npm run build
+WORKDIR /app/apps/api
+RUN npm install
+COPY apps/api/src ./src
+RUN npm run build
+
+FROM node:20-alpine
+WORKDIR /app
+COPY --from=builder /app/apps/api/dist ./dist
+COPY --from=builder /app/apps/api/node_modules ./node_modules
+COPY --from=builder /app/apps/api/package.json ./
+EXPOSE 3001
+CMD ["node", "dist/main.js"]

@@ -1,0 +1,17 @@
+{
+  "name": "@viro-reach/api-contracts",
+  "version": "0.1.0",
+  "description": "API contract definitions for Viro Reach",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@viro-reach/shared-types": "file:../shared-types"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

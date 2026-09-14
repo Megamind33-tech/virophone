@@ -1,0 +1,64 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+.next/
+out/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+*.pem
+*.key
+*.jks
+*.keystore
+secrets/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Android SDK (local dev only)
+.android-sdk/
+
+# Android
+apps/android/.gradle/
+apps/android/build/
+apps/android/**/build/
+apps/android/local.properties
+apps/android/.cxx/
+apps/android/captures/
+apps/android/*.iml
+apps/android/.idea/
+apps/android/app/release/
+
+# Docker volumes
+infra/docker/data/
+
+# Misc
+*.orig
+.cache/
+tmp/

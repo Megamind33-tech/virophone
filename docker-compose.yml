@@ -1,0 +1,94 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: viro-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-viro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-viro_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-viro_reach}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-viro} -d ${POSTGRES_DB:-viro_reach}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: viro-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.api
+    container_name: viro-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-viro}:${POSTGRES_PASSWORD:-viro_dev_password}@postgres:5432/${POSTGRES_DB:-viro_reach}
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: ${NODE_ENV:-development}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-dev_access_secret}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev_refresh_secret}
+      JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+      OTP_PROVIDER: ${OTP_PROVIDER:-console}
+      CONTACT_HASH_SALT: ${CONTACT_HASH_SALT:-dev_contact_salt}
+      API_PORT: 3001
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: viro-caddy
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  coturn:
+    image: coturn/coturn:latest
+    container_name: viro-coturn
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./infra/coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
