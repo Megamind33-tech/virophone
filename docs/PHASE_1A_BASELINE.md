@@ -39,8 +39,17 @@
 |--------|--------|
 | Foreign VPS SSH | **BLOCKED** — no credentials in environment |
 | Docker Compose full stack | **BLOCKED** — overlay filesystem error on build VM |
+| `docker-compose.prod.yml` | Created — ready for VPS deploy |
 | Host PostgreSQL + Redis | Available (used by integration tests) |
 | Physical Android devices | **BLOCKED** — not available in cloud agent VM |
+
+## Post-implementation tests (Phase 1A software)
+
+| Suite | Result |
+|-------|--------|
+| API unit | 28/28 PASS |
+| API integration | 30/30 PASS |
+| Android assembleDebug test | PASS |
 
 ## Phase 0.6 carry-forward
 

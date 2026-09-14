@@ -63,6 +63,13 @@ data class ResolveEphemeralBody(val ephemeralId: String, val authorizedUserIds: 
 data class ResolveEphemeralResponse(val authorized: Boolean, val userId: String? = null)
 data class TurnCredentialsResponse(val urls: List<String>, val username: String, val credential: String, val ttlSeconds: Int)
 data class OfflineTrustMaterialResponse(val material: List<OfflineTrustEntry>, val syncedAt: String)
-data class OfflineTrustEntry(val peerUserId: String, val trustToken: String, val epoch: Int, val expiresAt: String)
+data class OfflineTrustEntry(
+    val peerUserId: String,
+    val trustToken: String,
+    val epoch: Int,
+    val expiresAt: String,
+    val protocolVersion: Int = 1,
+    val deviceId: String = "",
+)
 data class OfflineCallTicketsResponse(val tickets: List<OfflineCallTicket>, val syncedAt: String)
 data class OfflineCallTicket(val ticket: String, val peerUserId: String, val expiresAt: String)

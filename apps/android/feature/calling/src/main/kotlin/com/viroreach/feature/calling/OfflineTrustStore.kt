@@ -29,7 +29,9 @@ class OfflineTrustStore(context: Context) {
                     .put("peerUserId", e.peerUserId)
                     .put("trustToken", e.trustToken)
                     .put("epoch", e.epoch)
-                    .put("expiresAt", e.expiresAt),
+                    .put("expiresAt", e.expiresAt)
+                    .put("protocolVersion", e.protocolVersion)
+                    .put("deviceId", e.deviceId),
             )
         }
         prefs.edit().putString(KEY_MATERIAL, arr.toString()).apply()
@@ -38,15 +40,20 @@ class OfflineTrustStore(context: Context) {
     fun getMaterial(): List<OfflineTrustEntry> {
         val raw = prefs.getString(KEY_MATERIAL, null) ?: return emptyList()
         val arr = JSONArray(raw)
+        val now = System.currentTimeMillis()
         return buildList {
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
+                val expiresAt = o.getString("expiresAt")
+                if (java.time.Instant.parse(expiresAt).toEpochMilli() < now) continue
                 add(
                     OfflineTrustEntry(
                         peerUserId = o.getString("peerUserId"),
                         trustToken = o.getString("trustToken"),
                         epoch = o.getInt("epoch"),
-                        expiresAt = o.getString("expiresAt"),
+                        expiresAt = expiresAt,
+                        protocolVersion = o.optInt("protocolVersion", 1),
+                        deviceId = o.optString("deviceId", ""),
                     ),
                 )
             }
@@ -63,8 +70,9 @@ class OfflineTrustStore(context: Context) {
         ).take(22)
     }
 
-    fun resolvePeerByBindingTag(ephemeralId: String, bindingTag: String): String? {
+    fun resolvePeerByBindingTag(ephemeralId: String, bindingTag: String, localDeviceId: String? = null): String? {
         for (entry in getMaterial()) {
+            if (localDeviceId != null && entry.deviceId.isNotEmpty() && entry.deviceId != localDeviceId) continue
             if (computeBindingTag(entry.trustToken, ephemeralId) == bindingTag) {
                 return entry.peerUserId
             }
