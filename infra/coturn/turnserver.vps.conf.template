@@ -1,0 +1,18 @@
+# Rendered by scripts/vps-render-config.sh — do not edit turnserver.vps.conf directly
+listening-port=3479
+tls-listening-port=0
+listening-ip=0.0.0.0
+relay-ip=0.0.0.0
+external-ip=__EXTERNAL_IP__
+min-port=49160
+max-port=49200
+fingerprint
+lt-cred-mech
+use-auth-secret
+static-auth-secret=__TURN_SECRET__
+realm=__TURN_REALM__
+no-cli
+no-tls
+no-dtls
+log-file=stdout
+simple-log

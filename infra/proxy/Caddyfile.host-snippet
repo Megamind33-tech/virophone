@@ -1,0 +1,19 @@
+# Add this block to your EXISTING host Caddyfile (other app unchanged).
+# Replace reach.example.com with your Viro Reach subdomain.
+# API binds on host 127.0.0.1:13001 when VIRO_CADDY_MODE=existing
+
+reach.example.com {
+    encode gzip
+
+    handle /api/v1/signaling/* {
+        reverse_proxy 127.0.0.1:13001
+    }
+
+    handle /api/* {
+        reverse_proxy 127.0.0.1:13001
+    }
+
+    handle /health/* {
+        reverse_proxy 127.0.0.1:13001
+    }
+}
