@@ -1,14 +1,15 @@
 package com.viroreach.feature.discovery
 
 import java.security.SecureRandom
-import java.util.UUID
+import java.util.Base64
 
 /**
- * Generates rotating ephemeral discovery identifiers.
- * No personally identifying data is encoded.
+ * 128-bit cryptographically random ephemeral discovery identifiers.
+ * Format: vr1_<url-safe-base64-no-padding>
+ * NOT derived from phone, Viro ID, device ID, MAC, or IP.
  */
 class EphemeralIdGenerator(
-    private val rotationIntervalMs: Long = 5 * 60 * 1000
+    private val rotationIntervalMs: Long = 15 * 60 * 1000L
 ) {
     private var currentId: String = generate()
     private var generatedAt: Long = System.currentTimeMillis()
@@ -27,10 +28,9 @@ class EphemeralIdGenerator(
     }
 
     private fun generate(): String {
-        val random = SecureRandom()
-        val bytes = ByteArray(4)
-        random.nextBytes(bytes)
-        val hex = bytes.joinToString("") { "%02x".format(it) }
-        return "vr-eph-$hex"
+        val bytes = ByteArray(16) // 128 bits
+        SecureRandom().nextBytes(bytes)
+        val encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+        return "vr1_$encoded"
     }
 }

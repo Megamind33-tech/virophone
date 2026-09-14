@@ -171,6 +171,11 @@ export class AuthService {
       throw new ViroException('DEVICE_REVOKED', 'Device has been revoked.', HttpStatus.UNAUTHORIZED);
     }
 
+    const user = await this.userRepo.findOne({ where: { id: session.userId } });
+    if (!user || user.status !== 'ACTIVE') {
+      throw new ViroException('UNAUTHORIZED', 'Account unavailable.', HttpStatus.UNAUTHORIZED);
+    }
+
     session.revokedAt = new Date();
     await this.sessionRepo.save(session);
 

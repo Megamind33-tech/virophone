@@ -4,3 +4,6 @@ process.env.JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'test_refresh
 process.env.CONTACT_HASH_SALT = process.env.CONTACT_HASH_SALT || 'test_contact_salt';
 process.env.OTP_PROVIDER = process.env.OTP_PROVIDER || 'test';
 process.env.TEST_OTP_CODE = process.env.TEST_OTP_CODE || '123456';
+process.env.REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+process.env.EPHEMERAL_SIGNING_SECRET = process.env.EPHEMERAL_SIGNING_SECRET || 'test_ephemeral_signing_secret';
+process.env.TURN_SECRET = process.env.TURN_SECRET || 'test_turn_secret';

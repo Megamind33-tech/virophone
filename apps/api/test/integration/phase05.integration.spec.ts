@@ -2,10 +2,9 @@
  * Phase 0.5 integration tests — require real PostgreSQL (+ Redis for full stack).
  * Run: DATABASE_URL=postgresql://viro:viro_dev_password@localhost:5432/viro_reach npm run test:integration
  */
-import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
-import { AppModule } from '../../src/app.module';
+import { createTestApp } from './test-app';
 import { Client } from 'pg';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -91,13 +90,7 @@ describe('Phase 0.5 Integration (PostgreSQL)', () => {
       return;
     }
 
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication();
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
-    await app.init();
+    app = await createTestApp();
   });
 
   afterAll(async () => {

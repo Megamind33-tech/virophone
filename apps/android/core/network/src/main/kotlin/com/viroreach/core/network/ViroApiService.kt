@@ -26,6 +26,15 @@ interface ViroApiService {
 
     @POST("api/v1/calls/authorize")
     suspend fun authorizeCall(@Body body: AuthorizeCallBody): AuthorizeCallResponse
+
+    @POST("api/v1/discovery/ephemeral")
+    suspend fun registerEphemeral(@Body body: RegisterEphemeralBody): RegisterEphemeralResponse
+
+    @POST("api/v1/discovery/ephemeral/resolve")
+    suspend fun resolveEphemeral(@Body body: ResolveEphemeralBody): ResolveEphemeralResponse
+
+    @POST("api/v1/turn/credentials")
+    suspend fun getTurnCredentials(): TurnCredentialsResponse
 }
 
 data class OtpRequestBody(val phoneE164: String)
@@ -39,3 +48,8 @@ data class DiscoverBody(val phonesE164: List<String>, val defaultRegion: String?
 data class DiscoverResponse(val matches: List<ContactDiscoveryMatch>)
 data class AuthorizeCallBody(val targetUserId: String, val preferredRoute: String? = null)
 data class AuthorizeCallResponse(val callId: String, val authorized: Boolean, val expiresAt: String, val routeType: String, val sessionMaterial: Map<String, String>?)
+data class RegisterEphemeralBody(val ephemeralId: String)
+data class RegisterEphemeralResponse(val expiresAt: String)
+data class ResolveEphemeralBody(val ephemeralId: String, val authorizedUserIds: List<String>)
+data class ResolveEphemeralResponse(val authorized: Boolean, val userId: String? = null)
+data class TurnCredentialsResponse(val urls: List<String>, val username: String, val credential: String, val ttlSeconds: Int)

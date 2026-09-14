@@ -6,35 +6,31 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.viroreach.core.model.*
-import com.viroreach.feature.discovery.EphemeralIdGenerator
-import com.viroreach.feature.discovery.LocalNetworkDiscoveryService
-import com.viroreach.feature.discovery.AuthorizedPeerResolver
+import com.viroreach.feature.discovery.*
 import com.viroreach.transport.lan.LanCallTransport
 import com.viroreach.transport.wifidirect.WifiDirectCallTransport
 import com.viroreach.transport.internet.InternetSipCallTransport
 import kotlinx.coroutines.launch
 
-/** Local discovery mode — NSD not implemented in Phase 0. */
-enum class DiscoveryMode {
-    /** No peers — real NSD not wired */
-    REAL_NOT_IMPLEMENTED,
-    /** Manual injection for privacy logic testing only */
-    SIMULATED
+enum class DiagnosticDataSource {
+    REAL,
+    SIMULATED,
+    STUBBED,
+    NOT_IMPLEMENTED,
+    BLOCKED
 }
 
-/**
- * Internal development diagnostic screen — NOT production design.
- * Local peer discovery is SIMULATED until NSD/mDNS is implemented.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DiscoveryDiagnosticScreen() {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val ephemeralGen = remember { EphemeralIdGenerator() }
 
-    var discoveryMode by remember { mutableStateOf(DiscoveryMode.REAL_NOT_IMPLEMENTED) }
+    var discoveryMode by remember { mutableStateOf(DiagnosticDataSource.NOT_IMPLEMENTED) }
 
     val stubResolver = remember {
         object : AuthorizedPeerResolver {
@@ -42,13 +38,25 @@ fun DiscoveryDiagnosticScreen() {
         }
     }
 
-    val discoveryService = remember { LocalNetworkDiscoveryService(ephemeralGen, stubResolver) }
+    val discoveryService = remember {
+        lateinit var service: LocalNetworkDiscoveryService
+        val nsd = NsdLanDiscovery(context, ephemeralGen) { eid, transport ->
+            service.onPeerDiscovered(eid, transport)
+        }
+        val wifi = WifiDirectDiscovery(context, ephemeralGen) { eid, transport ->
+            service.onPeerDiscovered(eid, transport)
+        }
+        service = LocalNetworkDiscoveryService(ephemeralGen, stubResolver, nsd, wifi)
+        service
+    }
+
     val authorizedMatches by discoveryService.authorizedMatches.collectAsState()
+    val anonymousCount by discoveryService.anonymousPeerCount.collectAsState()
 
     var lanAvailable by remember { mutableStateOf(TransportAvailability.UNAVAILABLE) }
     var wifiDirectAvailable by remember { mutableStateOf(TransportAvailability.UNAVAILABLE) }
     var internetAvailable by remember { mutableStateOf(TransportAvailability.UNAVAILABLE) }
-    var peerCount by remember { mutableIntStateOf(0) }
+    var nsdRunning by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         lanAvailable = LanCallTransport().checkAvailability()
@@ -58,7 +66,7 @@ fun DiscoveryDiagnosticScreen() {
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("Viro Reach — Phase 0 Diagnostic") })
+            TopAppBar(title = { Text("Viro Reach — Phase 0.6 Diagnostic") })
         }
     ) { padding ->
         LazyColumn(
@@ -66,34 +74,45 @@ fun DiscoveryDiagnosticScreen() {
                 .fillMaxSize()
                 .padding(padding)
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                     Column(Modifier.padding(12.dp)) {
-                        Text("Discovery mode: ${discoveryMode.name}", style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            "NSD/mDNS: NOT IMPLEMENTED. Wi-Fi Direct SD: STUBBED. " +
-                                "Peer counts below are SIMULATED only when you tap the button.",
-                            style = MaterialTheme.typography.bodySmall
-                        )
+                        Text("Engineering diagnostic — not production UI", style = MaterialTheme.typography.titleSmall)
+                        Text("Values labeled with data source. No fabricated production state.", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
 
             item {
-                Text("Transport Status", style = MaterialTheme.typography.titleMedium)
-                StatusRow("Local transport (LAN)", lanAvailable, "STUBBED")
-                StatusRow("Wi-Fi Direct", wifiDirectAvailable, "STUBBED")
-                StatusRow("Internet", internetAvailable, "STUBBED")
+                Text("Account / Device", style = MaterialTheme.typography.titleMedium)
+                StatusLine("ACCOUNT", "NOT AVAILABLE", DiagnosticDataSource.NOT_IMPLEMENTED)
+                StatusLine("DEVICE / Keystore", "NOT AVAILABLE", DiagnosticDataSource.BLOCKED)
+            }
+
+            item {
+                Text("Server / Signaling", style = MaterialTheme.typography.titleMedium)
+                StatusLine("SERVER", "NOT AVAILABLE", DiagnosticDataSource.NOT_IMPLEMENTED)
+                StatusLine("WEBSOCKET", "NOT IMPLEMENTED", DiagnosticDataSource.NOT_IMPLEMENTED)
+                StatusLine("VOICE ENGINE", "WebRTC (module built)", DiagnosticDataSource.REAL)
+            }
+
+            item {
+                Text("Transport", style = MaterialTheme.typography.titleMedium)
+                StatusLine("LAN transport", lanAvailable.name, DiagnosticDataSource.STUBBED)
+                StatusLine("Wi-Fi Direct", wifiDirectAvailable.name, DiagnosticDataSource.REAL)
+                StatusLine("Internet (legacy SIP transport)", internetAvailable.name, DiagnosticDataSource.STUBBED)
             }
 
             item {
                 HorizontalDivider()
                 Text("Local Discovery", style = MaterialTheme.typography.titleMedium)
-                Text("Ephemeral ID: ${ephemeralGen.getCurrentId()}")
-                Text("Detected anonymous Viro services: $peerCount (${discoveryMode.name})")
-                Text("Authorized contact matches: ${authorizedMatches.size}")
+                StatusLine("Ephemeral ID", ephemeralGen.getCurrentId(), DiagnosticDataSource.REAL)
+                StatusLine("LAN NSD", if (nsdRunning) "Running" else "Stopped", if (nsdRunning) DiagnosticDataSource.REAL else DiagnosticDataSource.NOT_IMPLEMENTED)
+                StatusLine("Discovery mode", discoveryMode.name, discoveryMode)
+                StatusLine("Anonymous peers", anonymousCount.toString(), discoveryMode)
+                StatusLine("Authorized local contacts", authorizedMatches.size.toString(), discoveryMode)
             }
 
             if (authorizedMatches.isNotEmpty()) {
@@ -102,7 +121,7 @@ fun DiscoveryDiagnosticScreen() {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Text(match.contact.localName, style = MaterialTheme.typography.bodyLarge)
-                            Text("${match.transportType.name} reachable", style = MaterialTheme.typography.bodySmall)
+                            Text("${match.transportType.name} — ${discoveryMode.name}", style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
@@ -111,54 +130,67 @@ fun DiscoveryDiagnosticScreen() {
             item {
                 Button(
                     onClick = {
-                        scope.launch {
-                            discoveryMode = DiscoveryMode.SIMULATED
-                            discoveryService.clear()
-                            listOf(
-                                "vr-eph-sim001", "vr-eph-sim002", "vr-eph-sim003",
-                                "vr-eph-sim004", "vr-eph-sim005", "vr-eph-sim006", "vr-eph-sim007"
-                            ).forEach { id ->
-                                discoveryService.onPeerDiscovered(id, CallRouteType.LAN)
-                            }
-                            peerCount = discoveryService.getAnonymousPeerCount()
-                        }
+                        discoveryService.startLanDiscovery()
+                        discoveryService.startWifiDirectDiscovery()
+                        nsdRunning = true
+                        discoveryMode = DiagnosticDataSource.REAL
                     },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Run SIMULATED discovery (7 peers, 0 authorized)")
-                }
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Start REAL NSD + Wi-Fi Direct discovery") }
             }
 
             item {
                 Button(
                     onClick = {
                         scope.launch {
-                            ephemeralGen.rotate()
+                            discoveryMode = DiagnosticDataSource.SIMULATED
                             discoveryService.clear()
-                            peerCount = 0
-                            discoveryMode = DiscoveryMode.REAL_NOT_IMPLEMENTED
+                            listOf(
+                                "vr1_SimPeer00000000000001",
+                                "vr1_SimPeer00000000000002",
+                                "vr1_SimPeer00000000000003",
+                            ).forEach { id ->
+                                discoveryService.onPeerDiscovered(id, CallRouteType.LAN)
+                            }
                         }
                     },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Rotate Ephemeral ID & Reset")
-                }
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Run SIMULATED privacy test (3 anonymous peers)") }
+            }
+
+            item {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            discoveryService.stopLanDiscovery()
+                            discoveryService.stopWifiDirectDiscovery()
+                            ephemeralGen.rotate()
+                            discoveryService.clear()
+                            nsdRunning = false
+                            discoveryMode = DiagnosticDataSource.NOT_IMPLEMENTED
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Stop discovery & rotate ephemeral ID") }
+            }
+
+            item {
+                Text("Call / ICE", style = MaterialTheme.typography.titleMedium)
+                StatusLine("ICE", "NOT AVAILABLE", DiagnosticDataSource.NOT_IMPLEMENTED)
+                StatusLine("ROUTE", "NOT AVAILABLE", DiagnosticDataSource.NOT_IMPLEMENTED)
+                StatusLine("RTT / PACKET LOSS", "NOT AVAILABLE", DiagnosticDataSource.NOT_IMPLEMENTED)
             }
         }
     }
 }
 
 @Composable
-private fun StatusRow(label: String, status: TransportAvailability, implementation: String) {
+private fun StatusLine(label: String, value: String, source: DiagnosticDataSource) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
             Text(label)
-            Text(implementation, style = MaterialTheme.typography.labelSmall)
+            Text(value, style = MaterialTheme.typography.bodyMedium)
         }
-        Text(
-            status.name,
-            color = if (status == TransportAvailability.AVAILABLE)
-                MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-        )
+        Text(source.name, style = MaterialTheme.typography.labelSmall)
     }
 }

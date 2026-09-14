@@ -12,10 +12,16 @@ import { BlocksModule } from './blocks/blocks.module';
 import { CallsModule } from './calls/calls.module';
 import { HealthModule } from './health/health.module';
 import { SecurityModule } from './security/security.module';
+import { RedisModule } from './redis/redis.module';
+import { DiscoveryModule } from './discovery/discovery.module';
+import { PresenceModule } from './presence/presence.module';
+import { SignalingModule } from './signaling/signaling.module';
+import { TurnModule } from './turn/turn.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    RedisModule,
     ThrottlerModule.forRoot([
       {
         ttl: parseInt(process.env.RATE_LIMIT_TTL_SECONDS || '60', 10) * 1000,
@@ -39,6 +45,10 @@ import { SecurityModule } from './security/security.module';
     CallsModule,
     HealthModule,
     SecurityModule,
+    DiscoveryModule,
+    PresenceModule,
+    SignalingModule,
+    TurnModule,
   ],
 })
 export class AppModule {}

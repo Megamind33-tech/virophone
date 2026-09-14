@@ -11,7 +11,9 @@ android {
 }
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:network"))
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.retrofit)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
 }

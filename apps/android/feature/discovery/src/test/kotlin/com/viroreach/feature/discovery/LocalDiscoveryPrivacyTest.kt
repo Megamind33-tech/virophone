@@ -6,8 +6,8 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LocalDiscoveryPrivacyTest {
-    private val authorizedEphemeralId = "vr-eph-known01"
-    private val unknownEphemeralId = "vr-eph-unknown"
+    private val authorizedEphemeralId = "vr1_AuthorizedPeerTestId128bit"
+    private val unknownEphemeralId = "vr1_UnknownPeerTestId128bitxx"
 
     private val resolver = object : AuthorizedPeerResolver {
         override suspend fun resolve(ephemeralId: String): AuthorizedNearbyContact? {
@@ -31,8 +31,8 @@ class LocalDiscoveryPrivacyTest {
         val service = LocalNetworkDiscoveryService(EphemeralIdGenerator(), resolver)
 
         service.onPeerDiscovered(unknownEphemeralId, CallRouteType.LAN)
-        service.onPeerDiscovered("vr-eph-unknown2", CallRouteType.LAN)
-        service.onPeerDiscovered("vr-eph-unknown3", CallRouteType.LAN)
+        service.onPeerDiscovered("vr1_UnknownPeerTestId2xxxxxxxx", CallRouteType.LAN)
+        service.onPeerDiscovered("vr1_UnknownPeerTestId3xxxxxxxx", CallRouteType.LAN)
 
         assertEquals(3, service.getAnonymousPeerCount())
         assertEquals(0, service.authorizedMatches.value.size)
@@ -55,7 +55,8 @@ class LocalDiscoveryPrivacyTest {
         val gen = EphemeralIdGenerator(rotationIntervalMs = 0)
         val id1 = gen.getCurrentId()
         val id2 = gen.rotate()
-        assertTrue(id1.startsWith("vr-eph-"))
-        assertTrue(id2.startsWith("vr-eph-"))
+        assertTrue(id1.startsWith("vr1_"))
+        assertTrue(id2.startsWith("vr1_"))
+        assertNotEquals(id1, id2)
     }
 }

@@ -22,7 +22,7 @@ CI pipeline: `.github/workflows/ci.yml`
 | API unit | `cd apps/api && npm test` | **28/28 PASS** |
 | API integration | `npm run test:integration` | **29/29 PASS** (21 phase05 + 2 redis + 6 phase06) |
 | Android module unit | `./gradlew :feature:*:test :core:*:test` | **PASS** (discovery, calling, contacts, model) |
-| Android app assemble | `./gradlew assembleDebug` | **BLOCKED** — app module compile error on build VM (see matrix) |
+| Android app assemble | `./gradlew assembleDebug` | **PASS** |
 | Hardware voice/discovery | Physical devices | **BLOCKED** |
 | Docker full stack | `docker compose up` | **BLOCKED** — daemon inaccessible on build VM |
 | VPS deployment | Production smoke | **BLOCKED** — no credentials |

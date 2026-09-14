@@ -11,10 +11,13 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 class LocalNetworkDiscoveryService(
     private val ephemeralIdGenerator: EphemeralIdGenerator,
-    private val authorizedResolver: AuthorizedPeerResolver
+    private val authorizedResolver: AuthorizedPeerResolver,
+    private val nsdLanDiscovery: NsdLanDiscovery? = null,
+    private val wifiDirectDiscovery: WifiDirectDiscovery? = null,
 ) {
     private val _anonymousPeers = MutableStateFlow<List<AnonymousPeer>>(emptyList())
-    val anonymousPeerCount: StateFlow<Int> = MutableStateFlow(0)
+    private val _anonymousPeerCount = MutableStateFlow(0)
+    val anonymousPeerCount: StateFlow<Int> = _anonymousPeerCount.asStateFlow()
 
     private val _authorizedMatches = MutableStateFlow<List<AuthorizedNearbyContact>>(emptyList())
     val authorizedMatches: StateFlow<List<AuthorizedNearbyContact>> = _authorizedMatches.asStateFlow()
@@ -35,6 +38,7 @@ class LocalNetworkDiscoveryService(
         if (current.none { it.ephemeralId == ephemeralId }) {
             current.add(peer)
             _anonymousPeers.value = current
+            _anonymousPeerCount.value = current.size
         }
 
         // Attempt authorized resolution — unknown peers are silently discarded
@@ -50,9 +54,28 @@ class LocalNetworkDiscoveryService(
 
     fun getAnonymousPeerCount(): Int = _anonymousPeers.value.size
 
+    fun startLanDiscovery() {
+        nsdLanDiscovery?.start()
+    }
+
+    fun stopLanDiscovery() {
+        nsdLanDiscovery?.stop()
+    }
+
+    fun startWifiDirectDiscovery() {
+        wifiDirectDiscovery?.start()
+    }
+
+    fun stopWifiDirectDiscovery() {
+        wifiDirectDiscovery?.stop()
+    }
+
+    fun isWifiDirectAvailable(): Boolean = wifiDirectDiscovery?.isAvailable() == true
+
     fun clear() {
         _anonymousPeers.value = emptyList()
         _authorizedMatches.value = emptyList()
+        _anonymousPeerCount.value = 0
     }
 }
 
