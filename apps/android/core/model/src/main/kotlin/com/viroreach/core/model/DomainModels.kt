@@ -94,7 +94,7 @@ data class PublicProfile(
 )
 
 data class ContactDiscoveryMatch(
-    val phoneHash: String,
+    val phoneE164: String,
     val userId: String,
     val viroId: String,
     val displayName: String,

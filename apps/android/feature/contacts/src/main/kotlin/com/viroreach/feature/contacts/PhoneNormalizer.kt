@@ -1,21 +1,24 @@
 package com.viroreach.feature.contacts
 
+import com.google.i18n.phonenumbers.PhoneNumberUtil
+import com.google.i18n.phonenumbers.NumberParseException
+
 /**
- * Client-side E.164 phone normalization.
- * Phase 0: basic normalization. Production should use libphonenumber-android.
+ * E.164 normalization via libphonenumber (Google).
+ * Supports international numbers; default region configurable (ZM for Zambia).
  */
 object PhoneNormalizer {
-    fun normalizeToE164(phone: String, defaultCountryCode: String = "+260"): String? {
-        val cleaned = phone.replace(Regex("[\\s\\-\\(\\)\\.]"), "")
-        if (cleaned.startsWith("+")) {
-            val digits = cleaned.substring(1)
-            return if (digits.matches(Regex("\\d{7,15}"))) "+$digits" else null
+    private val util = PhoneNumberUtil.getInstance()
+
+    fun normalizeToE164(phone: String, defaultRegion: String = "ZM"): String? {
+        val trimmed = phone.trim()
+        if (trimmed.isEmpty()) return null
+        try {
+            val parsed = util.parse(trimmed, defaultRegion)
+            if (!util.isValidNumber(parsed)) return null
+            return util.format(parsed, PhoneNumberUtil.PhoneNumberFormat.E164)
+        } catch (_: NumberParseException) {
+            return null
         }
-        if (cleaned.startsWith("0")) {
-            val withoutZero = cleaned.substring(1)
-            val cc = defaultCountryCode.removePrefix("+")
-            return if (withoutZero.matches(Regex("\\d{7,14}"))) "+$cc$withoutZero" else null
-        }
-        return null
     }
 }

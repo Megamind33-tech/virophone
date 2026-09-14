@@ -3,16 +3,16 @@ package com.viroreach.feature.contacts
 import com.viroreach.core.model.ContactDiscoveryMatch
 import com.viroreach.core.network.DiscoverBody
 import com.viroreach.core.network.ViroApiService
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 
 /**
- * Private contact discovery — uploads only hashed phone identifiers.
+ * Authenticated contact discovery.
+ * Client normalizes phones locally; sends E.164 over TLS to server.
+ * Server hashes with server-only salt — no client-side secrets.
  * Contact names NEVER leave the device.
  */
 class ContactDiscoveryService(
     private val api: ViroApiService,
-    private val hashSalt: String
+    private val defaultRegion: String = "ZM"
 ) {
     companion object {
         const val MAX_BATCH_SIZE = 200
@@ -25,7 +25,8 @@ class ContactDiscoveryService(
 
     suspend fun discover(localContacts: List<LocalContact>): List<ContactMatchResult> {
         val normalized = localContacts.mapNotNull { contact ->
-            val e164 = PhoneNormalizer.normalizeToE164(contact.phoneE164) ?: return@mapNotNull null
+            val e164 = PhoneNormalizer.normalizeToE164(contact.phoneE164, defaultRegion)
+                ?: return@mapNotNull null
             LocalContact(contact.localName, e164)
         }
 
@@ -35,28 +36,19 @@ class ContactDiscoveryService(
         val allMatches = mutableListOf<ContactDiscoveryMatch>()
 
         for (batch in batches) {
-            val hashes = batch.map { hashPhone(it.phoneE164) }
-            val response = api.discoverContacts(DiscoverBody(hashes))
+            val phones = batch.map { it.phoneE164 }
+            val response = api.discoverContacts(DiscoverBody(phones, defaultRegion))
             allMatches.addAll(response.matches)
         }
 
-        val hashToLocal = normalized.associateBy { hashPhone(it.phoneE164) }
+        val phoneToLocal = normalized.associateBy { it.phoneE164 }
 
         return allMatches.mapNotNull { match ->
-            val local = hashToLocal[match.phoneHash]
+            val local = phoneToLocal[match.phoneE164]
             if (local != null) {
-                ContactMatchResult(
-                    localName = local.localName,
-                    match = match
-                )
+                ContactMatchResult(localName = local.localName, match = match)
             } else null
         }
-    }
-
-    fun hashPhone(phoneE164: String): String {
-        val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(hashSalt.toByteArray(), "HmacSHA256"))
-        return mac.doFinal(phoneE164.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 }
 

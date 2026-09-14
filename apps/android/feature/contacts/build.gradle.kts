@@ -12,6 +12,7 @@ android {
 dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:network"))
+    implementation(libs.libphonenumber)
     implementation(libs.kotlinx.coroutines.android)
     testImplementation(libs.junit)
 }

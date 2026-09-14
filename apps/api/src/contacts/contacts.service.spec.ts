@@ -12,6 +12,7 @@ describe('ContactsService - Discovery Privacy', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env.CONTACT_HASH_SALT = 'test_salt';
     service = new ContactsService(
       mockPhoneRepo as any,
       mockProfileRepo as any,
@@ -24,14 +25,15 @@ describe('ContactsService - Discovery Privacy', () => {
 
   it('returns empty for no matching phones', async () => {
     mockPhoneRepo.find.mockResolvedValue([]);
-    const result = await service.discover('user-1', ['hash1', 'hash2']);
+    const result = await service.discover('user-1', ['+260961582985']);
     expect(result.matches).toHaveLength(0);
   });
 
   it('returns only submitted contact matches', async () => {
+    const { hashPhoneForStorage } = require('../common/utils/hash.util');
+    const hash = hashPhoneForStorage('+260961582985', 'test_salt');
     mockPhoneRepo.find.mockResolvedValue([
-      { userId: 'user-2', phoneHash: 'hash1', status: 'VERIFIED' },
-      { userId: 'user-3', phoneHash: 'hash-unknown', status: 'VERIFIED' },
+      { userId: 'user-2', phoneHash: hash, status: 'VERIFIED' },
     ]);
     mockProfileRepo.findOne.mockImplementation(({ where }: any) => {
       if (where.userId === 'user-2') {
@@ -40,34 +42,43 @@ describe('ContactsService - Discovery Privacy', () => {
       return null;
     });
 
-    const result = await service.discover('user-1', ['hash1']);
+    const result = await service.discover('user-1', ['+260961582985']);
     expect(result.matches).toHaveLength(1);
     expect(result.matches[0].userId).toBe('user-2');
+    expect(result.matches[0].phoneE164).toBe('+260961582985');
   });
 
   it('excludes blocked users', async () => {
+    const { hashPhoneForStorage } = require('../common/utils/hash.util');
+    const hash = hashPhoneForStorage('+260961582985', 'test_salt');
     mockPhoneRepo.find.mockResolvedValue([
-      { userId: 'user-blocked', phoneHash: 'hash1', status: 'VERIFIED' },
+      { userId: 'user-blocked', phoneHash: hash, status: 'VERIFIED' },
     ]);
     mockBlockRepo.find.mockResolvedValue([
       { blockerUserId: 'user-1', blockedUserId: 'user-blocked' },
     ]);
 
-    const result = await service.discover('user-1', ['hash1']);
+    const result = await service.discover('user-1', ['+260961582985']);
     expect(result.matches).toHaveLength(0);
   });
 
   it('does not return self', async () => {
+    const { hashPhoneForStorage } = require('../common/utils/hash.util');
+    const hash = hashPhoneForStorage('+260961582985', 'test_salt');
     mockPhoneRepo.find.mockResolvedValue([
-      { userId: 'user-1', phoneHash: 'hash1', status: 'VERIFIED' },
+      { userId: 'user-1', phoneHash: hash, status: 'VERIFIED' },
     ]);
 
-    const result = await service.discover('user-1', ['hash1']);
+    const result = await service.discover('user-1', ['+260961582985']);
     expect(result.matches).toHaveLength(0);
   });
 
+  it('rejects invalid E.164', async () => {
+    await expect(service.discover('user-1', ['not-a-phone'])).rejects.toThrow();
+  });
+
   it('rejects oversized batches', async () => {
-    const hashes = Array.from({ length: 201 }, (_, i) => `hash${i}`);
-    await expect(service.discover('user-1', hashes)).rejects.toThrow();
+    const phones = Array.from({ length: 201 }, (_, i) => `+26096158${String(i).padStart(4, '0')}`);
+    await expect(service.discover('user-1', phones)).rejects.toThrow();
   });
 });

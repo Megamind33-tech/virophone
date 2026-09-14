@@ -13,7 +13,7 @@ import { OtpChallenge } from '../database/entities/otp-challenge.entity';
 import { ConsoleOtpProvider } from './otp/console-otp.provider';
 import { ViroException } from '../common/exceptions/viro.exception';
 import { normalizeE164, isValidE164 } from '../common/utils/phone.util';
-import { hashPhoneForMatching, hashRefreshToken } from '../common/utils/hash.util';
+import { hashPhoneForStorage, hashRefreshToken } from '../common/utils/hash.util';
 import { SecurityService } from '../security/security.service';
 import { HttpStatus } from '@nestjs/common';
 
@@ -40,7 +40,10 @@ export class AuthService {
       throw new ViroException('INVALID_E164', 'Invalid phone number format.', HttpStatus.BAD_REQUEST);
     }
 
-    const code = String(randomInt(100000, 999999));
+    const code =
+      process.env.OTP_PROVIDER === 'test' && process.env.TEST_OTP_CODE
+        ? process.env.TEST_OTP_CODE
+        : String(randomInt(100000, 999999));
     const codeHash = this.hashOtp(code);
     const expiresAt = new Date(Date.now() + this.otpExpiresSeconds * 1000);
 
@@ -105,7 +108,7 @@ export class AuthService {
       phoneIdentity = this.phoneRepo.create({
         userId,
         phoneE164: challenge.phoneE164,
-        phoneHash: hashPhoneForMatching(challenge.phoneE164, salt),
+        phoneHash: hashPhoneForStorage(challenge.phoneE164, salt),
         verifiedAt: new Date(),
         status: 'VERIFIED',
       });

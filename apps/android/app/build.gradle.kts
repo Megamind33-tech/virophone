@@ -14,7 +14,6 @@ android {
         versionCode = 1
         versionName = "0.1.0-phase0"
         buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:3001\"")
-        buildConfigField("String", "CONTACT_HASH_SALT", "\"dev_contact_salt\"")
     }
 
     buildTypes {

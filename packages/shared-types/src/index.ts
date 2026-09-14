@@ -118,13 +118,14 @@ export interface PublicProfile {
   viroId: string;
 }
 
-// Contact discovery
+// Contact discovery — client sends E.164 over authenticated TLS; server hashes internally
 export interface ContactDiscoveryRequest {
-  phoneHashes: string[];
+  phonesE164: string[];
+  defaultRegion?: string;
 }
 
 export interface ContactDiscoveryMatch {
-  phoneHash: string;
+  phoneE164: string;
   userId: string;
   viroId: string;
   displayName: string;

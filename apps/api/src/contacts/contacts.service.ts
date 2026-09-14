@@ -9,11 +9,14 @@ import { ViroConnection } from '../database/entities/viro-connection.entity';
 import { SecurityService } from '../security/security.service';
 import { ViroException } from '../common/exceptions/viro.exception';
 import { HttpStatus } from '@nestjs/common';
+import { normalizeE164 } from '../common/utils/phone.util';
+import { hashPhoneForStorage } from '../common/utils/hash.util';
 import type { ContactDiscoveryMatch } from '@viro-reach/shared-types';
 
 @Injectable()
 export class ContactsService {
   private readonly maxBatch = parseInt(process.env.CONTACT_DISCOVERY_MAX_BATCH || '200', 10);
+  private readonly hashSalt = process.env.CONTACT_HASH_SALT || 'dev_contact_salt';
 
   constructor(
     @InjectRepository(PhoneIdentity) private readonly phoneRepo: Repository<PhoneIdentity>,
@@ -24,8 +27,17 @@ export class ContactsService {
     private readonly securityService: SecurityService,
   ) {}
 
-  async discover(userId: string, phoneHashes: string[]): Promise<{ matches: ContactDiscoveryMatch[] }> {
-    if (phoneHashes.length > this.maxBatch) {
+  /**
+   * Authenticated contact discovery.
+   * Client sends normalized E.164 numbers over TLS; server hashes with server-only salt.
+   * This is enumeration-resistant for UNAUTHENTICATED callers only — NOT PSI.
+   */
+  async discover(
+    userId: string,
+    phonesE164: string[],
+    defaultRegion = 'ZM',
+  ): Promise<{ matches: ContactDiscoveryMatch[] }> {
+    if (phonesE164.length > this.maxBatch) {
       throw new ViroException(
         'VALIDATION_ERROR',
         `Maximum ${this.maxBatch} contacts per batch.`,
@@ -33,19 +45,29 @@ export class ContactsService {
       );
     }
 
-    if (phoneHashes.length === 0) {
+    if (phonesE164.length === 0) {
       return { matches: [] };
     }
 
-    // Audit suspicious enumeration
-    if (phoneHashes.length > this.maxBatch * 0.9) {
+    if (phonesE164.length > this.maxBatch * 0.9) {
       await this.securityService.logEvent({
         userId,
         eventType: 'SUSPICIOUS_ENUMERATION',
         severity: 'MEDIUM',
-        metadata: { batchSize: phoneHashes.length },
+        metadata: { batchSize: phonesE164.length },
       });
     }
+
+    const normalizedPhones: string[] = [];
+    for (const raw of phonesE164) {
+      const e164 = normalizeE164(raw, defaultRegion as 'ZM');
+      if (!e164) {
+        throw new ViroException('INVALID_E164', `Invalid phone number: ${raw}`, HttpStatus.BAD_REQUEST);
+      }
+      normalizedPhones.push(e164);
+    }
+
+    const phoneHashes = normalizedPhones.map((p) => hashPhoneForStorage(p, this.hashSalt));
 
     const identities = await this.phoneRepo.find({
       where: { phoneHash: In(phoneHashes), status: 'VERIFIED' },
@@ -75,9 +97,11 @@ export class ContactsService {
     );
 
     const hashToIdentity = new Map(identities.map((i) => [i.phoneHash, i]));
+    const phoneToHash = new Map(normalizedPhones.map((p, i) => [p, phoneHashes[i]]));
     const matches: ContactDiscoveryMatch[] = [];
 
-    for (const hash of phoneHashes) {
+    for (const phoneE164 of normalizedPhones) {
+      const hash = phoneToHash.get(phoneE164)!;
       const identity = hashToIdentity.get(hash);
       if (!identity || identity.userId === userId) continue;
       if (blockedIds.has(identity.userId)) continue;
@@ -91,7 +115,7 @@ export class ContactsService {
         : 'PHONE_CONTACT';
 
       matches.push({
-        phoneHash: hash,
+        phoneE164,
         userId: identity.userId,
         viroId: profile.viroId || '',
         displayName: profile.displayName,
@@ -99,7 +123,6 @@ export class ContactsService {
         relationshipState,
       });
 
-      // Store match metadata (not address book copy)
       const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
       await this.matchRepo.upsert(
         { userId, matchedUserId: identity.userId, phoneHash: hash, expiresAt },

@@ -1,19 +1,23 @@
+import { parsePhoneNumberFromString, CountryCode } from 'libphonenumber-js';
+
 /**
- * E.164 phone number normalization and validation.
- * Phase 0: basic validation. Production should use libphonenumber.
+ * E.164 normalization via libphonenumber-js.
+ * @param phone Raw phone input
+ * @param defaultRegion ISO 3166-1 alpha-2 default when number has no country code (e.g. ZM)
  */
-export function normalizeE164(phone: string): string | null {
-  const cleaned = phone.replace(/[\s\-\(\)\.]/g, '');
-  if (!cleaned.startsWith('+')) {
+export function normalizeE164(phone: string, defaultRegion: CountryCode = 'ZM'): string | null {
+  const trimmed = phone.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = parsePhoneNumberFromString(trimmed, defaultRegion);
+    if (!parsed || !parsed.isValid()) return null;
+    return parsed.format('E.164');
+  } catch {
     return null;
   }
-  const digits = cleaned.slice(1);
-  if (!/^\d{7,15}$/.test(digits)) {
-    return null;
-  }
-  return `+${digits}`;
 }
 
-export function isValidE164(phone: string): boolean {
-  return normalizeE164(phone) !== null;
+export function isValidE164(phone: string, defaultRegion: CountryCode = 'ZM'): boolean {
+  return normalizeE164(phone, defaultRegion) !== null;
 }

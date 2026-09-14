@@ -56,13 +56,23 @@ jobs:
           DATABASE_URL: postgresql://viro:viro_test@localhost:5432/viro_reach_test
         run: cd apps/api && npm run migration:run
 
-      - name: Test API
+      - name: Test API (unit)
         env:
           DATABASE_URL: postgresql://viro:viro_test@localhost:5432/viro_reach_test
           JWT_ACCESS_SECRET: test_access_secret
           JWT_REFRESH_SECRET: test_refresh_secret
           CONTACT_HASH_SALT: test_salt
         run: cd apps/api && npm test
+
+      - name: Test API (integration — real PostgreSQL)
+        env:
+          DATABASE_URL: postgresql://viro:viro_test@localhost:5432/viro_reach_test
+          JWT_ACCESS_SECRET: test_access_secret
+          JWT_REFRESH_SECRET: test_refresh_secret
+          CONTACT_HASH_SALT: test_salt
+          OTP_PROVIDER: test
+          TEST_OTP_CODE: 123456
+        run: cd apps/api && npm run test:integration
 
       - name: Build API
         run: cd apps/api && npm run build

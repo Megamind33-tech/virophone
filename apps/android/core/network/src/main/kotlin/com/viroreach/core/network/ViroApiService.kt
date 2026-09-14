@@ -35,7 +35,7 @@ data class OtpVerifyResponse(val accessToken: String, val refreshToken: String, 
 data class RefreshBody(val refreshToken: String)
 data class RefreshResponse(val accessToken: String, val refreshToken: String, val expiresIn: Int)
 data class MeResponse(val userId: String, val phoneE164: String, val displayName: String, val avatarUrl: String?, val viroId: String?, val allowCallsFromViroId: String)
-data class DiscoverBody(val phoneHashes: List<String>)
+data class DiscoverBody(val phonesE164: List<String>, val defaultRegion: String? = "ZM")
 data class DiscoverResponse(val matches: List<ContactDiscoveryMatch>)
 data class AuthorizeCallBody(val targetUserId: String, val preferredRoute: String? = null)
 data class AuthorizeCallResponse(val callId: String, val authorized: Boolean, val expiresAt: String, val routeType: String, val sessionMaterial: Map<String, String>?)
