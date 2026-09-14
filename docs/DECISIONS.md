@@ -1,4 +1,4 @@
-# Architecture Decision Records (Phase 0)
+# Architecture Decision Records
 
 ## Index
 
@@ -14,6 +14,14 @@
 | [ADR-008](#adr-008-jwt-access-with-rotating-refresh-tokens) | JWT access with rotating refresh tokens | Accepted |
 | [ADR-009](#adr-009-exact-only-viro-id-directory) | Exact-only Viro ID directory | Accepted |
 | [ADR-010](#adr-010-stub-first-phase-0-delivery) | Stub-first Phase 0 delivery | Accepted |
+| [ADR-011](#adr-011-webrtc-via-stream-webrtc-android) | WebRTC via stream-webrtc-android | Accepted |
+| [ADR-012](#adr-012-redis-for-realtime-state) | Redis for realtime state | Accepted |
+| [ADR-013](#adr-013-authenticated-wss-signaling) | Authenticated WSS signaling | Accepted |
+| [ADR-014](#adr-014-turn-credentials-hmac-sha1) | TURN credentials (HMAC-SHA1 coturn style) | Accepted |
+| [ADR-015](#adr-015-128-bit-ephemeral-ids-vr1) | 128-bit ephemeral IDs (`vr1_`) | Accepted |
+| [ADR-016](#adr-016-real-nsd-and-wifi-direct-discovery) | Real NSD and Wi-Fi Direct discovery | Accepted |
+| [ADR-017](#adr-017-production-fail-closed-config) | Production fail-closed config | Accepted |
+| [ADR-018](#adr-018-liblinphone-flexisip-deferred) | Liblinphone/FlexiSIP deferred | Accepted |
 
 ---
 
@@ -104,7 +112,7 @@ Server: `ContactsService.discover`, `hashPhoneForMatching()`
 
 **Decision:**
 
-- Advertise `LocalDiscoveryAdvertisement` with rotating `ephemeralId` (`vr-eph-<hex>`)
+- Advertise `LocalDiscoveryAdvertisement` with rotating `ephemeralId` (Phase 0.6: `vr1_<url-safe-base64>` — see ADR-015)
 - No phone numbers, Viro IDs, or display names in broadcast payload
 - Discovered peers stored as `AnonymousPeer` until `AuthorizedPeerResolver` maps ID to a known contact
 - Unknown peers visible only as anonymous count, never in UI lists
@@ -116,7 +124,7 @@ Implementation: `EphemeralIdGenerator.kt`, `LocalNetworkDiscoveryService.kt`
 - (+) Strong default privacy on untrusted networks
 - (+) Testable via `LocalDiscoveryPrivacyTest.kt`
 - (−) Requires secure ephemeral-to-identity binding server protocol (Phase 1)
-- (−) ID rotation every 5 minutes may drop in-progress resolution if not handled
+- (−) ID rotation every 15 minutes may drop in-progress resolution if not handled (ADR-015)
 
 **References:** `docs/DISCOVERY_PRIVACY.md`, diagnostic screen demo
 
@@ -277,6 +285,199 @@ Acceptance measured by unit tests and API contracts, not live calls.
 - (−) Demo does not prove audio quality or NAT traversal
 
 **References:** `docs/ACCEPTANCE_TESTS.md`, `MainActivity.kt`
+
+**Note:** Phase 0.6 supersedes portions of this ADR for NSD, Redis, signaling, and voice — see ADR-011 through ADR-018.
+
+---
+
+## ADR-011: WebRTC via stream-webrtc-android
+
+**Status:** Accepted (Phase 0.6)
+
+**Context:** ADR-006 isolated VoIP behind `VoiceEngine` with a Linphone stub. AGPL licensing and SIP-centric architecture conflict with WebRTC-first signaling delivered in Phase 0.6.
+
+**Decision:** Select `io.getstream:stream-webrtc-android:1.1.3` (Apache 2.0) as the production voice engine in module `:voice:webrtc` (`WebRtcVoiceEngine`). SDP/ICE exchange is application-owned via the signaling gateway.
+
+**Consequences:**
+
+- (+) Permissive license for commercial Android distribution
+- (+) Aligns with WSS signaling and TURN credential service
+- (−) SIP/FlexiSIP path deprecated for production
+- (−) Hardware voice validation not completed
+
+**References:** [VOICE_ENGINE_DECISION.md](VOICE_ENGINE_DECISION.md), `WebRtcVoiceEngine.kt`
+
+---
+
+## ADR-012: Redis for realtime state
+
+**Status:** Accepted (Phase 0.6)
+
+**Context:** ADR-007 provisioned Redis for future use. Phase 0.6 requires ephemeral TTL data, presence, and WebSocket routing without polluting PostgreSQL.
+
+**Decision:** Wire `RedisService` (ioredis) for:
+
+| Key pattern | Purpose | TTL |
+|-------------|---------|-----|
+| `presence:{userId}` | Online/offline/busy state | 120s |
+| `ephemeral:{id}` | Ephemeral ID → user/device | 900s |
+| `ws:device:{deviceId}` | Active WSS connection metadata | 3600s |
+
+PostgreSQL remains system of record; Redis is ephemeral coordination layer.
+
+**Consequences:**
+
+- (+) Fast presence and signaling relay
+- (+) Health endpoint reports Redis connectivity
+- (−) Redis loss requires client re-registration (acceptable — see BACKUP_RESTORE.md)
+- (−) No Redis cluster HA configured in Phase 0.6
+
+**References:** `redis.service.ts`, `presence.service.ts`, `discovery.service.ts`, `signaling.gateway.ts`
+
+---
+
+## ADR-013: Authenticated WSS signaling
+
+**Status:** Accepted (Phase 0.6)
+
+**Context:** WebRTC requires SDP and ICE candidate exchange between authorized call participants. FlexiSIP SIP signaling is deferred.
+
+**Decision:** Implement `SignalingGateway` at WebSocket path `/api/v1/signaling/ws`:
+
+- JWT passed as `?token=` query parameter on connect
+- Validates user ACTIVE, device not revoked
+- `signal` message relays payload to `targetDeviceId` via Redis connection lookup
+- Call authorization still required at `POST /calls/authorize` before media
+
+Uses `@nestjs/platform-ws` with `WsAdapter`.
+
+**Consequences:**
+
+- (+) Reuses existing JWT/device revocation model
+- (+) No AGPL signaling server in production path
+- (−) No dedicated WSS integration test with live clients yet
+- (−) Token in query string — ensure TLS-only in production
+
+**References:** `signaling.gateway.ts`, `main.ts`
+
+---
+
+## ADR-014: TURN credentials (HMAC-SHA1 coturn style)
+
+**Status:** Accepted (Phase 0.6)
+
+**Context:** WebRTC NAT traversal requires STUN/TURN. Long-lived TURN passwords in client binaries are unacceptable.
+
+**Decision:** Expose `POST /api/v1/turn/credentials` (JWT required, throttled):
+
+```
+username = "{expiry}:{userId}:{deviceId}"
+credential = base64(HMAC-SHA1(TURN_SECRET, username))
+```
+
+coturn configured with `use-auth-secret` matching `TURN_SECRET`.
+
+**Consequences:**
+
+- (+) Industry-standard coturn temporary credentials
+- (+) Per-device accountability in username
+- (−) TURN relay not verified on production network (deployment blocked)
+- (−) `TURN_SECRET` required in production fail-closed config
+
+**References:** `turn-credential.service.ts`, `infra/coturn/turnserver.conf`
+
+---
+
+## ADR-015: 128-bit ephemeral IDs (`vr1_`)
+
+**Status:** Accepted (Phase 0.6) — supersedes ADR-004 entropy/format details
+
+**Context:** Phase 0 used `vr-eph-<8 hex>` (32-bit entropy). LAN-scale discovery and tracking resistance require higher entropy and server-backed TTL.
+
+**Decision:**
+
+- Format: `vr1_<url-safe-base64>` encoding 128 bits from `SecureRandom`
+- Client rotation: 15 minutes (`EphemeralIdGenerator`)
+- Server TTL: 900 seconds in Redis
+- Register via `POST /api/v1/discovery/ephemeral`; resolve via authorized `POST /api/v1/discovery/ephemeral/resolve`
+
+**Consequences:**
+
+- (+) Collision and tracking resistance materially improved
+- (+) Server-mediated authorized resolution implemented
+- (−) Offline resolution not implemented (design only)
+- (−) Client must re-register after rotation
+
+**References:** [EPHEMERAL_ID_DESIGN.md](EPHEMERAL_ID_DESIGN.md), `EphemeralIdGenerator.kt`, `discovery.service.ts`
+
+---
+
+## ADR-016: Real NSD and Wi-Fi Direct discovery
+
+**Status:** Accepted (Phase 0.6) — supersedes ADR-010 stub for LAN discovery
+
+**Context:** Phase 0 stubbed NSD and reported Wi-Fi Direct unavailable. Privacy design requires real broadcast with ephemeral IDs only.
+
+**Decision:** Implement:
+
+- `NsdLanDiscovery` — Android `NsdManager`, service type `_viroreach._tcp.`, TXT `eid`
+- `WifiDirectDiscovery` — `WifiP2pDnsSdServiceInfo` on `_viroreach._tcp`
+- Orchestrated by `LocalNetworkDiscoveryService` with `ServerAuthorizedPeerResolver`
+
+**Consequences:**
+
+- (+) Real LAN/Wi-Fi Direct discovery code paths exist
+- (+) Privacy tests pass (`LocalDiscoveryPrivacyTest.kt`)
+- (−) Hardware validation blocked — runtime permissions not fully implemented
+- (−) Simulated peer injection still available on diagnostic screen
+
+**References:** `NsdLanDiscovery.kt`, `WifiDirectDiscovery.kt`, `DiscoveryDiagnosticScreen.kt`
+
+---
+
+## ADR-017: Production fail-closed config
+
+**Status:** Accepted (Phase 0.6)
+
+**Context:** Development defaults (`dev_*`, `change_me`) must never reach production deployments.
+
+**Decision:** Call `validateProductionConfig()` at API bootstrap (`main.ts`). When `NODE_ENV=production`:
+
+- Refuse startup if any of `DATABASE_URL`, `REDIS_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `CONTACT_HASH_SALT`, `TURN_SECRET`, `EPHEMERAL_SIGNING_SECRET` missing
+- Refuse dev fallback pattern values
+- Enforce `JWT_ACCESS_SECRET` length ≥ 32
+
+**Consequences:**
+
+- (+) Prevents accidental insecure production boot
+- (+) Covered by `production-config.spec.ts`
+- (−) Operators must provision all secrets before first deploy
+
+**References:** `production-config.ts`, [DEPLOYMENT.md](DEPLOYMENT.md)
+
+---
+
+## ADR-018: Liblinphone/FlexiSIP deferred
+
+**Status:** Accepted (Phase 0.6)
+
+**Context:** Linphone SDK and FlexiSIP are AGPL. Phase 0.6 delivers WebRTC + WSS signaling without SIP registration.
+
+**Decision:**
+
+- **Defer** Liblinphone SDK integration — `LiblinphoneVoiceEngine` remains stub
+- **Remove** FlexiSIP from production deployment path (config stub retained in `infra/flexisip/`)
+- **Do not** add FlexiSIP to default `docker-compose.yml` production topology
+- Internet calling path: WebRTC + TURN, not `InternetSipCallTransport` SIP
+
+**Consequences:**
+
+- (+) Avoids AGPL distribution blocker for Phase 0.6
+- (+) Simpler operational stack (no SIP registrar)
+- (−) `CALL_ROUTING.md` SIP sections are legacy relative to WebRTC path
+- (−) Commercial Linphone license option remains documented for future evaluation
+
+**References:** [VOICE_ENGINE_DECISION.md](VOICE_ENGINE_DECISION.md), [DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md)
 
 ---
 

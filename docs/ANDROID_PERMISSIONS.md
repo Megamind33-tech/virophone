@@ -1,4 +1,4 @@
-# Android Permissions (Phase 0)
+# Android Permissions (Phase 0.6)
 
 ## Overview
 
@@ -8,7 +8,9 @@ Permissions are declared in:
 apps/android/app/src/main/AndroidManifest.xml
 ```
 
-Runtime permission requests are not fully implemented in Phase 0 (diagnostic screen only). This document explains each declared permission, Android version behavior, and user-facing rationale for production.
+Runtime permission requests are **not fully implemented** in Phase 0.6 (diagnostic screen only). Real NSD (`NsdLanDiscovery`) and Wi-Fi Direct (`WifiDirectDiscovery`) discovery require location/nearby-Wi-Fi permissions at runtime on physical devices — **not verified on hardware in Phase 0.6**.
+
+This document explains each declared permission, Android version behavior, Phase 0.6 usage, and user-facing rationale for production.
 
 **Target SDK:** 34 (`compileSdk = 34` in Gradle modules)
 
@@ -18,19 +20,19 @@ Runtime permission requests are not fully implemented in Phase 0 (diagnostic scr
 
 ## Permission reference
 
-| Permission | maxSdkVersion | Android versions | Why Viro Reach needs it |
-|------------|---------------|------------------|-------------------------|
-| `INTERNET` | — | All | API calls (`ViroApiService`), SIP signaling, TURN |
-| `ACCESS_NETWORK_STATE` | — | All | Detect connectivity before route selection (`CallRouteEngine`) |
-| `ACCESS_WIFI_STATE` | — | All | Inspect Wi-Fi for LAN discovery and Wi-Fi Direct readiness |
-| `CHANGE_WIFI_STATE` | — | All | Enable Wi-Fi Direct group owner / negotiation (future) |
-| `ACCESS_FINE_LOCATION` | — | All | Required by Android for Wi-Fi scan and Wi-Fi Direct on API 23+ |
-| `NEARBY_WIFI_DEVICES` | — | API 33+ (Tiramisu) | Discover nearby Wi-Fi devices without coarse location when flagged |
-| `READ_CONTACTS` | — | All | Local address book for hashed contact discovery (`ContactDiscoveryService`) |
-| `RECORD_AUDIO` | — | All | Voice calls (`VoiceEngine`, microphone capture) |
-| `MODIFY_AUDIO_SETTINGS` | — | All | Route audio to earpiece, speaker, Bluetooth |
-| `BLUETOOTH` | 30 | API ≤ 30 | Legacy Bluetooth headset routing |
-| `BLUETOOTH_CONNECT` | — | API 31+ (S) | Connect to Bluetooth audio devices for calls |
+| Permission | maxSdkVersion | Android versions | Phase 0.6 usage | Why Viro Reach needs it |
+|------------|---------------|------------------|-----------------|-------------------------|
+| `INTERNET` | — | All | **Active** — REST API, WSS signaling, TURN | API calls (`ViroApiService`), WebRTC signaling, TURN |
+| `ACCESS_NETWORK_STATE` | — | All | **Active** — route engine | Detect connectivity before route selection (`CallRouteEngine`) |
+| `ACCESS_WIFI_STATE` | — | All | **Active** — NSD + Wi-Fi Direct | Inspect Wi-Fi for LAN discovery and Wi-Fi Direct readiness |
+| `CHANGE_WIFI_STATE` | — | All | **Active** — Wi-Fi Direct | Wi-Fi Direct group owner / service advertisement |
+| `ACCESS_FINE_LOCATION` | — | All | **Required at runtime** for NSD/Wi-Fi Direct on many devices | Android requires location for Wi-Fi scan on API 23+ |
+| `NEARBY_WIFI_DEVICES` | — | API 33+ (Tiramisu) | **Preferred** on API 33+ with `neverForLocation` | Discover nearby Wi-Fi devices without coarse location |
+| `READ_CONTACTS` | — | All | **Implemented** — `ContactDiscoveryService` | Local address book for server-side contact matching |
+| `RECORD_AUDIO` | — | All | **Declared** — `WebRtcVoiceEngine` (not hardware-tested) | Voice calls (`VoiceEngine`, microphone capture) |
+| `MODIFY_AUDIO_SETTINGS` | — | All | **Declared** — audio routing API | Route audio to earpiece, speaker, Bluetooth |
+| `BLUETOOTH` | 30 | API ≤ 30 | **Declared** | Legacy Bluetooth headset routing |
+| `BLUETOOTH_CONNECT` | — | API 31+ (S) | **Declared** | Connect to Bluetooth audio devices for calls |
 
 ---
 
@@ -62,7 +64,7 @@ Runtime permission requests are not fully implemented in Phase 0 (diagnostic scr
 
 **User explanation:** "Lets Viro Reach see whether Wi-Fi is available for faster local calling on the same network."
 
-**Used by:** `LanCallTransport`, future NSD/mDNS discovery on LAN.
+**Used by:** `NsdLanDiscovery` (real NSD on `_viroreach._tcp.`), `LanCallTransport` availability checks.
 
 ---
 
@@ -70,9 +72,9 @@ Runtime permission requests are not fully implemented in Phase 0 (diagnostic scr
 
 **User explanation:** "Lets Viro Reach set up direct device-to-device connections when you're not on the same router."
 
-**Used by:** Future `WifiDirectCallTransport` implementation.
+**Used by:** `WifiDirectDiscovery` (real DNS-SD on `_viroreach._tcp`), `WifiDirectCallTransport`.
 
-**Notes:** Protected permission; user does not grant at runtime, but Wi-Fi Direct flows may show system dialogs.
+**Notes:** Protected permission; user does not grant at runtime, but Wi-Fi Direct flows may show system dialogs. Hardware validation **BLOCKED** in Phase 0.6.
 
 ---
 
@@ -87,7 +89,9 @@ Runtime permission requests are not fully implemented in Phase 0 (diagnostic scr
 
 **Privacy alignment:** Local discovery uses ephemeral IDs only ([DISCOVERY_PRIVACY.md](DISCOVERY_PRIVACY.md)). Do not log or upload GPS coordinates.
 
-**Runtime:** `dangerous` — must request at runtime before Wi-Fi discovery.
+**Runtime:** `dangerous` — must request at runtime before NSD/Wi-Fi Direct discovery on API ≤ 32 or when `NEARBY_WIFI_DEVICES` unavailable.
+
+**Phase 0.6:** Diagnostic screen starts discovery without runtime permission flow — expect discovery failure on physical devices until permission UX is implemented.
 
 ---
 
@@ -128,7 +132,7 @@ Runtime permission requests are not fully implemented in Phase 0 (diagnostic scr
 
 **Runtime:** `dangerous` — request before first call.
 
-**Used by:** `VoiceEngine` / future Linphone integration.
+**Used by:** `WebRtcVoiceEngine` (`:voice:webrtc`). End-to-end microphone capture **not verified on hardware** in Phase 0.6.
 
 ---
 
@@ -169,7 +173,17 @@ Runtime permission requests are not fully implemented in Phase 0 (diagnostic scr
 
 ---
 
-## Permissions not declared (Phase 0)
+## Discovery service type
+
+Both LAN and Wi-Fi Direct advertise:
+
+```
+_viroreach._tcp.
+```
+
+TXT record `eid` contains ephemeral ID only (`vr1_*`). See [EPHEMERAL_ID_DESIGN.md](EPHEMERAL_ID_DESIGN.md).
+
+## Permissions not declared (Phase 0.6)
 
 | Permission | Why omitted |
 |------------|-------------|
@@ -177,6 +191,8 @@ Runtime permission requests are not fully implemented in Phase 0 (diagnostic scr
 | `READ_PHONE_STATE` | Not required for VoIP-only client |
 | `POST_NOTIFICATIONS` | API 33+; incoming call notifications in Phase 1 |
 | `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_PHONE_CALL` | Background call handling Phase 1 |
+| `CHANGE_NETWORK_STATE` | Not required for current discovery implementation |
+| `ACCESS_COARSE_LOCATION` | Prefer `NEARBY_WIFI_DEVICES` + `neverForLocation` on API 33+ |
 | `USE_FULL_SCREEN_INTENT` | Incoming call UI Phase 1 |
 
 ---

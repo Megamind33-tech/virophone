@@ -1,251 +1,164 @@
-# Phase 0 Acceptance Tests
+# Phase 0.6 Acceptance Tests
 
 ## Purpose
 
-This document defines acceptance criteria for Viro Reach Phase 0 and maps them to automated test coverage in the repository. Phase 0 validates architecture, privacy rules, and server-authoritative security — not end-to-end voice quality or production UX.
+This document defines acceptance criteria for Viro Reach Phase 0.6 and maps them to automated test coverage. Phase 0.6 validates architecture, privacy rules, server-authoritative security, Redis-backed realtime features, and Android discovery/voice **integration** — not end-to-end voice quality on physical hardware.
 
 **Verification commands:**
 
 ```bash
-make bootstrap   # Full setup + API tests
-make test        # API + Android unit tests
+make bootstrap   # Full setup + API tests (when Postgres/Redis available)
+make test        # API unit + Android module tests
+cd apps/api && npm run test:integration   # 29 integration tests
 make health      # API liveness/readiness
 ```
 
 CI pipeline: `.github/workflows/ci.yml`
 
+## Test baseline (2026-09-14)
+
+| Suite | Command | Result |
+|-------|---------|--------|
+| API unit | `cd apps/api && npm test` | **28/28 PASS** |
+| API integration | `npm run test:integration` | **29/29 PASS** (21 phase05 + 2 redis + 6 phase06) |
+| Android module unit | `./gradlew :feature:*:test :core:*:test` | **PASS** (discovery, calling, contacts, model) |
+| Android app assemble | `./gradlew assembleDebug` | **BLOCKED** — app module compile error on build VM (see matrix) |
+| Hardware voice/discovery | Physical devices | **BLOCKED** |
+| Docker full stack | `docker compose up` | **BLOCKED** — daemon inaccessible on build VM |
+| VPS deployment | Production smoke | **BLOCKED** — no credentials |
+
 ---
 
-## Acceptance criteria
+## Phase 0.6 acceptance matrix
+
+| ID | Criterion | Status | Evidence |
+|----|-----------|--------|----------|
+| **Voice / media** |
+| AC-06-01 | WebRTC selected via `stream-webrtc-android` (Apache 2.0) | **PASS** | `voice/webrtc/build.gradle.kts`, `WebRtcVoiceEngine.kt` |
+| AC-06-02 | Liblinphone deferred — stub only, not production path | **PASS** | `LiblinphoneVoiceEngine.kt` stub; no SDK dependency |
+| AC-06-03 | FlexiSIP removed from production path | **PASS** | Not in `docker-compose.yml`; signaling via WSS |
+| AC-06-04 | End-to-end voice call on hardware | **BLOCKED** | No physical devices; no audio path verification |
+| AC-06-05 | WebRTC ICE connect on real network | **BLOCKED** | Requires hardware + TURN deployment |
+| **Ephemeral IDs** |
+| AC-06-10 | Format `vr1_<url-safe-base64>` 128-bit | **PASS** | `EphemeralIdGenerator.kt` |
+| AC-06-11 | 15-minute client rotation | **PASS** | `rotationIntervalMs = 15 * 60 * 1000` |
+| AC-06-12 | Server Redis TTL 900s | **PASS** | `discovery.service.ts`, `redis.integration.spec.ts` |
+| AC-06-13 | Register ephemeral `POST /discovery/ephemeral` | **PASS** | `redis.integration.spec.ts` |
+| AC-06-14 | Authorized resolve only | **PASS** | `phase06.integration.spec.ts`, `LocalDiscoveryPrivacyTest.kt` |
+| AC-06-15 | Offline trust discovery | **DESIGN ONLY** | [OFFLINE_TRUST_DISCOVERY.md](OFFLINE_TRUST_DISCOVERY.md) |
+| **Local discovery (Android)** |
+| AC-06-20 | Real NSD `_viroreach._tcp.` | **PASS** (code) | `NsdLanDiscovery.kt` — hardware **BLOCKED** |
+| AC-06-21 | Real Wi-Fi Direct DNS-SD | **PASS** (code) | `WifiDirectDiscovery.kt` — hardware **BLOCKED** |
+| AC-06-22 | Advertisement contains ephemeral ID only | **PASS** | Unit tests + TXT record inspection in code |
+| AC-06-23 | Unknown peers counted, not listed | **PASS** | `LocalDiscoveryPrivacyTest.kt` |
+| AC-06-24 | Runtime permissions before discovery | **FAIL** | Not implemented — diagnostic starts without permission flow |
+| **Server realtime** |
+| AC-06-30 | Redis presence with block privacy | **PASS** | `phase06.integration.spec.ts` |
+| AC-06-31 | Redis WS device connection map | **PASS** | `signaling.gateway.ts` |
+| AC-06-32 | Authenticated WSS `/api/v1/signaling/ws` | **PASS** | `signaling.gateway.ts` (no live WSS integration test) |
+| AC-06-33 | Health ready reports Redis | **PASS** | `redis.integration.spec.ts` |
+| **TURN** |
+| AC-06-40 | `POST /api/v1/turn/credentials` requires auth | **PASS** | `phase06.integration.spec.ts` |
+| AC-06-41 | HMAC-SHA1 coturn-style credentials | **PASS** | `turn-credential.service.ts` |
+| AC-06-42 | coturn relay on real network | **BLOCKED** | Docker/VPS blocked |
+| **Production safety** |
+| AC-06-50 | Fail-closed production config | **PASS** | `production-config.spec.ts` (4 tests) |
+| AC-06-51 | Suspended user cannot refresh | **PASS** | `phase06.integration.spec.ts` |
+| **Infrastructure** |
+| AC-06-60 | Docker Compose full stack | **BLOCKED** | Overlay/permission errors on build VM |
+| AC-06-61 | VPS production deployment | **BLOCKED** | No credentials |
+| AC-06-62 | npm audit disposition documented | **PASS** | [DEPENDENCY_SECURITY.md](DEPENDENCY_SECURITY.md) |
+
+---
+
+## Carried forward: Phase 0 acceptance criteria
 
 ### AC-1: Monorepo builds and bootstraps
 
 | ID | Criterion | Status |
 |----|-----------|--------|
-| AC-1.1 | `make bootstrap` installs packages, starts Postgres, runs migrations, builds API, runs tests | Required |
-| AC-1.2 | `make dev` starts infra and API on port 3001 | Required |
-| AC-1.3 | `GET /health/live` returns `{ status: "ok" }` | Required |
-| AC-1.4 | `GET /health/ready` reports database connected after migrate | Required |
-| AC-1.5 | Android `./gradlew assembleDebug test` passes when SDK available | Required |
-
-**Evidence:** `scripts/bootstrap.sh`, `Makefile`, `.github/workflows/ci.yml`
-
----
-
-### AC-2: Database schema
-
-| ID | Criterion | Status |
-|----|-----------|--------|
-| AC-2.1 | Migration `001_initial_schema.sql` creates all Phase 0 tables | Required |
-| AC-2.2 | Foreign keys and unique constraints match [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) | Required |
-| AC-2.3 | `npm run migration:run` is idempotent via `schema_migrations` tracking | Required |
-
-**Evidence:** `apps/api/src/database/migrations/001_initial_schema.sql`
-
----
+| AC-1.1 | `make bootstrap` installs packages, runs migrations, tests | **PASS** (without Docker) |
+| AC-1.2 | `make dev` starts infra and API | **BLOCKED** (Docker) |
+| AC-1.3 | `GET /health/live` returns ok | **PASS** |
+| AC-1.4 | `GET /health/ready` reports database + redis | **PASS** |
+| AC-1.5 | Android `./gradlew assembleDebug test` | **BLOCKED** (app compile); module tests **PASS** |
 
 ### AC-3: Authentication and sessions
 
 | ID | Criterion | Status |
 |----|-----------|--------|
-| AC-3.1 | OTP request validates E.164 format | Required |
-| AC-3.2 | OTP codes stored as HMAC hashes, not plaintext | Required |
-| AC-3.3 | Successful verify returns access + refresh tokens and device ID | Required |
-| AC-3.4 | Refresh token rotation revokes previous session | Required |
-| AC-3.5 | Refresh token reuse revokes entire session family | Required |
-| AC-3.6 | JWT validation rejects revoked devices and non-ACTIVE users | Required |
+| AC-3.1–AC-3.6 | OTP, JWT, refresh rotation, reuse detection | **PASS** |
 
-**Automated tests:**
-
-| Test | File |
-|------|------|
-| Refresh token hashing consistency | `apps/api/src/auth/auth.service.spec.ts` |
-| OTP hash length | `apps/api/src/auth/auth.service.spec.ts` |
-
-**Manual verification:**
-
-```bash
-# Request OTP (check API console for code)
-curl -X POST http://localhost:3001/api/v1/auth/otp/request \
-  -H 'Content-Type: application/json' \
-  -d '{"phoneE164":"+15551234567"}'
-```
-
----
+Integration: `phase05.integration.spec.ts`, `phase06.integration.spec.ts`
 
 ### AC-4: Contact discovery privacy
 
 | ID | Criterion | Status |
 |----|-----------|--------|
-| AC-4.1 | Discovery accepts max 200 phone hashes per request | Required |
-| AC-4.2 | Only submitted hashes are evaluated — no full user enumeration | Required |
-| AC-4.3 | Blocked users excluded from discovery results | Required |
-| AC-4.4 | User cannot discover themselves | Required |
-| AC-4.5 | Client sends hashes only; names remain on device | Required |
-| AC-4.6 | Large batches log `SUSPICIOUS_ENUMERATION` event | Required |
-
-**Automated tests:**
-
-| Test | File |
-|------|------|
-| Empty matches | `apps/api/src/contacts/contacts.service.spec.ts` |
-| Submitted hash only | `apps/api/src/contacts/contacts.service.spec.ts` |
-| Block exclusion | `apps/api/src/contacts/contacts.service.spec.ts` |
-| Self exclusion | `apps/api/src/contacts/contacts.service.spec.ts` |
-| Batch limit 201 rejected | `apps/api/src/contacts/contacts.service.spec.ts` |
-| Phone normalization | `apps/android/feature/contacts/.../PhoneNormalizerTest.kt` |
-
----
+| AC-4.1–AC-4.6 | Batch limits, blocks, server-side hashing | **PASS** |
 
 ### AC-5: Local discovery privacy
 
 | ID | Criterion | Status |
 |----|-----------|--------|
-| AC-5.1 | Advertisement contains ephemeral ID only — no PII | Required |
-| AC-5.2 | Unknown nearby peers counted but not shown to user | Required |
-| AC-5.3 | Authorized peers resolved via `AuthorizedPeerResolver` | Required |
-| AC-5.4 | Ephemeral IDs rotate on interval | Required |
-| AC-5.5 | Diagnostic screen demonstrates 7 anonymous / 1 authorized | Required |
+| AC-5.1 | Ephemeral ID only in advertisement | **PASS** |
+| AC-5.2 | Unknown peers counted only | **PASS** |
+| AC-5.3 | Authorized resolver | **PASS** (`ServerAuthorizedPeerResolver`) |
+| AC-5.4 | Ephemeral rotation | **PASS** (15 min) |
+| AC-5.5 | Diagnostic screen demo | **PASS** (with simulated peer injection option) |
 
-**Automated tests:**
-
-| Test | File |
-|------|------|
-| Unknown peers not exposed | `apps/android/feature/discovery/.../LocalDiscoveryPrivacyTest.kt` |
-| Authorized resolution | `apps/android/feature/discovery/.../LocalDiscoveryPrivacyTest.kt` |
-| Ephemeral ID rotation | `apps/android/feature/discovery/.../LocalDiscoveryPrivacyTest.kt` |
-
-**Manual verification:** Launch Android app → `DiscoveryDiagnosticScreen`
-
----
-
-### AC-6: Server-authoritative call authorization
+### AC-6: Call authorization
 
 | ID | Criterion | Status |
 |----|-----------|--------|
-| AC-6.1 | Calls require authorized relationship (contact match, connection, or Viro ID policy) | Required |
-| AC-6.2 | Blocked callers receive generic unavailable response | Required |
-| AC-6.3 | Self-calls rejected | Required |
-| AC-6.4 | Authorization returns `callId` and `sessionMaterial` | Required |
-| AC-6.5 | Client route selection happens after authorization (documented contract) | Required |
-
-**Automated tests:**
-
-| Test | File |
-|------|------|
-| Deny unknown relationship | `apps/api/src/calls/calls.service.spec.ts` |
-| Authorize phone contact | `apps/api/src/calls/calls.service.spec.ts` |
-| Deny blocked | `apps/api/src/calls/calls.service.spec.ts` |
-| Authorize accepted connection | `apps/api/src/calls/calls.service.spec.ts` |
-
----
+| AC-6.1–AC-6.5 | Server-authoritative authorize | **PASS** |
 
 ### AC-7: Call route selection
 
 | ID | Criterion | Status |
 |----|-----------|--------|
-| AC-7.1 | Priority order: LAN → Wi-Fi Direct → Internet P2P → TURN | Required |
-| AC-7.2 | Unavailable transports skipped | Required |
-| AC-7.3 | TURN used when all direct paths unavailable | Required |
-| AC-7.4 | `CallTransport` interface shared across transport modules | Required |
-
-**Automated tests:**
-
-| Test | File |
-|------|------|
-| LAN preferred over internet | `apps/android/feature/calling/.../CallRouteEngineTest.kt` |
-| TURN fallback | `apps/android/feature/calling/.../CallRouteEngineTest.kt` |
-
----
+| AC-7.1–AC-7.4 | Priority LAN → Wi-Fi Direct → Internet → TURN | **PASS** (unit tests; transports partially stubbed) |
 
 ### AC-8: Voice engine abstraction
 
 | ID | Criterion | Status |
 |----|-----------|--------|
-| AC-8.1 | Feature modules depend on `VoiceEngine` interface, not Linphone directly | Required |
-| AC-8.2 | `LiblinphoneVoiceEngine` stub implements full interface | Required |
-| AC-8.3 | Stub simulates call state machine transitions | Required |
+| AC-8.1 | Feature modules use `VoiceEngine` interface | **PASS** |
+| AC-8.2 | `WebRtcVoiceEngine` implements interface | **PASS** |
+| AC-8.3 | `LiblinphoneVoiceEngine` stub remains for boundary test | **PASS** (deferred) |
 
-**Evidence:** `apps/android/voice/api/VoiceEngine.kt`, `apps/android/voice/linphone/LiblinphoneVoiceEngine.kt`
+### AC-9–AC-11: Contracts, device identity, security hygiene
 
----
-
-### AC-9: API contracts and shared types
-
-| ID | Criterion | Status |
-|----|-----------|--------|
-| AC-9.1 | `packages/shared-types` builds and exports domain enums | Required |
-| AC-9.2 | `packages/api-contracts` defines all v1 endpoint paths | Required |
-| AC-9.3 | Android `ViroApiService` matches v1 routes | Required |
-| AC-9.4 | Viro ID normalization rules enforced | Required |
-
-**Automated tests:**
-
-| Test | File |
-|------|------|
-| Viro ID normalize/format | `apps/api/src/common/utils/viro-id.util.spec.ts` |
-| E.164 validation | `apps/api/src/common/utils/phone.util.spec.ts` |
-| Domain model enums | `apps/android/core/model/.../DomainModelsTest.kt` |
+| Area | Status |
+|------|--------|
+| Shared types / API contracts | **PASS** |
+| Device Keystore (unit) | **PASS** |
+| Keystore on hardware | **BLOCKED** |
+| Security events, rate limiting | **PASS** |
 
 ---
 
-### AC-10: Device identity
+## Integration test inventory
 
-| ID | Criterion | Status |
-|----|-----------|--------|
-| AC-10.1 | Android Keystore generates EC key pair | Required |
-| AC-10.2 | Private key not exportable | Required |
-| AC-10.3 | Public key sent at OTP verify and device register | Required |
-| AC-10.4 | Device revocation invalidates JWT | Required |
-
-**Evidence:** `DeviceIdentityManager.kt`, `JwtStrategy.validate`
+| File | Tests | Focus |
+|------|-------|-------|
+| `phase05.integration.spec.ts` | 21 | Auth, discovery, blocks, calls, directory, refresh reuse |
+| `redis.integration.spec.ts` | 2 | Health/redis, ephemeral register+resolve |
+| `phase06.integration.spec.ts` | 6 | Token expiry, presence+block, suspend, ephemeral, TURN |
 
 ---
 
-### AC-11: Security hygiene
+## Explicit non-goals (Phase 0.6)
 
-| ID | Criterion | Status |
-|----|-----------|--------|
-| AC-11.1 | `.env` not committed; CI secret scan passes | Required |
-| AC-11.2 | `allowBackup=false` on Android application | Required |
-| AC-11.3 | Security events persisted to `security_events` table | Required |
-| AC-11.4 | Rate limiting configured via ThrottlerModule | Required |
-
-**Evidence:** `.github/workflows/ci.yml` secret scan step, `AndroidManifest.xml`
-
----
-
-## Explicit non-goals (Phase 0)
-
-The following are **not** acceptance criteria for Phase 0:
-
-| Item | Phase |
-|------|-------|
-| Production UI / navigation | Phase 1 |
-| Live Linphone audio | Phase 1 |
-| Real NSD/mDNS peer discovery | Phase 1 |
-| Wi-Fi Direct sessions | Phase 1 |
-| FlexiSIP registration | Phase 1 |
+| Item | Status |
+|------|--------|
+| Production UI / navigation | Deferred |
+| Live voice on hardware | **BLOCKED** |
+| Offline trusted-contact discovery | **DESIGN ONLY** |
+| FlexiSIP / SIP registration | Removed from production path |
 | Admin UI | Future |
 | iOS client | Future |
 | Push notifications | Phase 1 |
-| Call quality persistence | Phase 1 |
-| Subscription billing | Future |
-
----
-
-## Test coverage matrix
-
-| Area | API tests | Android tests | Manual |
-|------|-----------|---------------|--------|
-| Auth hashing | ✓ | — | OTP flow |
-| Contact discovery | ✓ | ✓ PhoneNormalizer | — |
-| Local discovery privacy | — | ✓ | Diagnostic screen |
-| Call authorization | ✓ | — | curl authorize |
-| Route engine | — | ✓ | Diagnostic transport badges |
-| Viro ID utils | ✓ | — | — |
-| Domain models | — | ✓ | — |
-| E2E voice call | — | — | Not Phase 0 |
 
 ---
 
@@ -253,18 +166,19 @@ The following are **not** acceptance criteria for Phase 0:
 
 Pull requests to `main` and `cursor/**` branches must pass:
 
-1. API lint (`npm run lint`)
+1. API lint
 2. Migrations against test Postgres
-3. API unit tests (`npm test`)
-4. API build (`npm run build`)
-5. Android assembleDebug, test, lint
+3. API unit tests (28)
+4. API integration tests (29) — requires Postgres + Redis services
+5. API build
+6. Android assembleDebug, test, lint (target; app compile may need fix)
 
 ---
 
 ## Related documents
 
-- [ARCHITECTURE.md](ARCHITECTURE.md)
-- [DISCOVERY_PRIVACY.md](DISCOVERY_PRIVACY.md)
-- [SECURITY_MODEL.md](SECURITY_MODEL.md)
-- [CALL_ROUTING.md](CALL_ROUTING.md)
+- [PHASE_0_6_BASELINE.md](PHASE_0_6_BASELINE.md)
+- [VOICE_ENGINE_DECISION.md](VOICE_ENGINE_DECISION.md)
+- [OFFLINE_TRUST_DISCOVERY.md](OFFLINE_TRUST_DISCOVERY.md)
 - [DECISIONS.md](DECISIONS.md)
+- [DEPLOYMENT.md](DEPLOYMENT.md)
