@@ -7,7 +7,8 @@ android {
     compileSdk = 34
     defaultConfig {
         minSdk = 26
-        buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:3001\"")
+        buildConfigField("String", "API_BASE_URL", "\"https://reach.viro3.online\"")
+        buildConfigField("String", "WSS_URL", "\"wss://reach.viro3.online/api/v1/signaling/ws\"")
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }

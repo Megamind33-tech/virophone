@@ -2,16 +2,66 @@
 
 **Date:** 2026-09-14  
 **Branch:** `cursor/phase06-docs-c131`  
-**Commit under test:** post-audit security hardening (device-bound offline trust)  
-**APK:** `apps/android/app/build/outputs/apk/debug/app-debug.apk` (52,243,800 bytes, `assembleDebug` clean build)
+**Commit under test:** Contabo VPS deploy of Phase 1A isolated stack  
+**Production domain:** `https://reach.viro3.online`  
+**APK:** **BLOCKED** on this PC (no JDK / Android SDK). Debug config now points at the VPS.
 
 ---
 
 ## EXECUTIVE VERDICT
 
-**PHASE 1B: NO-GO**
+**VPS SIDE: GO for hardware testing. PHASE 1B: NO-GO until physical Android devices.**
 
-Software regression suite passes (34 unit + 30 integration, Android build PASS). **No hardware or foreign VPS verification was possible in this environment.** All voice, discovery, Keystore, and production deployment gates remain **BLOCKED** pending physical devices and VPS SSH access.
+The Phase 1A stack is deployed on Contabo (`vmi3566248`, `79.143.177.140`) at `/opt/viro-reach`, isolated from the other app (`/opt/viro3`). HTTPS, WSS, Postgres, Redis, migrations, fail-closed boot, backup/restore, and Docker restart recovery are proven. Two-device voice, Keystore, LAN, and Wi-Fi Direct remain **BLOCKED — PHYSICAL DEVICES REQUIRED**.
+
+`docker-compose.prod.yml` **config** validates, but was **not** used for `up`: host nginx already binds 80/443. Production run uses the existing isolated file `docker-compose.vps.yml` (same API/Postgres/Redis/coturn services; API on `127.0.0.1:13001`; TURN on **3479**). Full VPS reboot was **not** performed (shared host).
+
+---
+
+## VPS DEPLOYMENT (Contabo)
+
+| Requirement | Status | Evidence |
+| ----------- | ------ | -------- |
+| SSH access | PASS | `ssh viro3deploy@79.143.177.140` (alias host `viro3` uses `claudeagent`; deploy user `viro3deploy` has Docker). Ubuntu 24.04.4, 7.8Gi RAM, Docker 29.8.0, Compose v5.5.1 |
+| Docker | PASS | Engine + Compose plugin already installed; not in `claudeagent` group — deploy via `viro3deploy` |
+| production compose | PASS | `docker compose -f docker-compose.vps.yml --env-file .env.vps` project `viro-reach`. `docker compose -f docker-compose.prod.yml config` also OK (not started — would steal 80/443) |
+| Caddy | PASS | Host **nginx** reverse-proxy (existing 80/443). New site `reach.viro3.online` only; other vhosts untouched. Container Caddy profile left off (`VIRO_CADDY_MODE=existing`) |
+| TLS | PASS | Let's Encrypt `reach.viro3.online`, expires 2026-12-13. `curl -I https://reach.viro3.online/health/live` → HTTP 200 (no `-k`) from VPS and from this PC |
+| WSS | PASS | `wss://reach.viro3.online/api/v1/signaling/ws`. Unauthenticated close **4001**. Valid token stays open. Revoked device close **4003** |
+| PostgreSQL | PASS | Container `viro-reach-postgres` publishes **no host port**. Host `:5432` is the other app on `127.0.0.1` only. Ready check: `database: connected` |
+| Redis | PASS | Container `viro-reach-redis` no public port. `PING` = PONG. After signaling: keys with prefixes `ws` and `presence` |
+| migrations | PASS | Entrypoint ran `001_initial_schema` + `002_offline_trust`; subsequent boots skip |
+| coturn | PASS | `viro-reach-coturn` host network, realm `reach.viro3.online`, listen **3479**, relay **49160–49200**, `use-auth-secret` (shared secret server-side). UFW opened 3479 tcp/udp + relay UDP |
+| TURN credential issuance | PASS | `POST /api/v1/turn/credentials` 201 with JWT; 401 unauthenticated; 401 after device revoke |
+| TURN allocation test | PASS | Valid REST-issued creds: TCP `turnutils_uclient` reached Allocate (`create permission error 403` with no peer). Expired HMAC username and junk user: `Cannot complete Allocation`. UDP STUN bind from host timed out — not treated as media-relay proof |
+| firewall | PASS | UFW default deny inbound. Exposed: SSH/80/443 (pre-existing) + TURN 3479 + 49160–49200/udp. Postgres/Redis/API 3001 not public (API loopback 13001) |
+| backup/restore | PASS | `pg_dump -Fc` 31634 bytes → restore DB `viro_reach_restore_test` (16 tables, both migration versions) → dropped |
+| restart recovery | PASS | `docker compose ... restart`; api/postgres/redis healthy, coturn up, HTTPS 200. Full VPS reboot skipped (other production app on same host) |
+| production log security | PASS | API logs: 0 JWT-like strings, 0 OTP codes, 0 `static-auth-secret=`, 0 `EPHEMERAL_SIGNING_SECRET=`. Console OTP provider no longer prints codes when `NODE_ENV=production` |
+| Android APK build | BLOCKED | `apps/android/gradlew` present; this PC has no `java` / `ANDROID_HOME`. Debug `API_BASE_URL`/`WSS_URL` set to the VPS |
+
+**Services after restart**
+
+- `viro-reach-api` — healthy, `127.0.0.1:13001->3001`
+- `viro-reach-postgres` — healthy, 5432 internal
+- `viro-reach-redis` — healthy, 6379 internal
+- `viro-reach-coturn` — up, UDP/TCP 3479 on host
+
+Fail-closed: missing `JWT_ACCESS_SECRET` → exit 1 `Production startup refused`; secret restored; API live/ready again.
+
+---
+
+## HARDWARE BLOCKERS (do not mark PASS)
+
+| Test | Status |
+|------|--------|
+| Keystore persistence across phone restart | BLOCKED — PHYSICAL DEVICES REQUIRED |
+| Two-device Internet P2P voice | BLOCKED — PHYSICAL DEVICES REQUIRED |
+| Forced TURN voice | BLOCKED — PHYSICAL DEVICES REQUIRED |
+| LAN voice | BLOCKED — PHYSICAL DEVICES REQUIRED |
+| Same-LAN / no-WAN voice | BLOCKED — PHYSICAL DEVICES REQUIRED |
+| Three-device privacy | BLOCKED — PHYSICAL DEVICES REQUIRED |
+| Wi-Fi Direct voice | BLOCKED — PHYSICAL DEVICES REQUIRED |
 
 ---
 
@@ -69,12 +119,12 @@ Call tickets are **not one-time consume** on server (offline design); replay wit
 
 | Check | Result |
 |-------|--------|
-| Foreign VPS SSH | **BLOCKED** — no credentials in environment; no linked Cursor environment |
-| VM inspected (build agent) | Linux 6.12.94+, 15Gi RAM, 233G free disk |
-| Docker | 29.1.3 installed |
-| Docker Compose | 2.40.3 |
+| Foreign VPS SSH | **PASS** — Contabo `vmi3566248` / `79.143.177.140`, user `viro3deploy` |
+| VM inspected | Ubuntu 24.04.4 LTS, 7.8Gi RAM, ~20G free on `/` |
+| Docker | 29.8.0 |
+| Docker Compose | v5.5.1 |
 
-**Status: BLOCKED**
+**Status: PASS**
 
 ---
 
@@ -82,22 +132,21 @@ Call tickets are **not one-time consume** on server (offline design); replay wit
 
 | Check | Result |
 |-------|--------|
-| Production `.env` on VPS | **BLOCKED** — no VPS access |
-| Fail-closed boot | **PASS** (software) — `production-config.spec.ts` verifies missing secrets refuse startup |
+| Production `.env` on VPS | **PASS** — `/opt/viro-reach/.env.vps` (not in git) |
+| Fail-closed boot | **PASS** (software + VPS) — omitted `JWT_ACCESS_SECRET`, process refused, then restored |
 
-**Status: BLOCKED** (VPS); **PASS** (fail-closed logic)
+**Status: PASS**
 
 ---
 
 ## GATE 6 — DEPLOY
 
 ```
-docker compose -f docker-compose.prod.yml config  → partial (missing env on VM)
-docker compose -f docker-compose.prod.yml build → FAIL (overlay mount error)
-docker compose -f docker-compose.prod.yml up -d   → FAIL
+docker compose -f docker-compose.prod.yml --env-file .env.vps config  → OK
+docker compose -f docker-compose.vps.yml --env-file .env.vps build/up → OK (isolated)
 ```
 
-**Status: BLOCKED** on build VM. `docker-compose.prod.yml` ready for VPS.
+**Status: PASS** (isolated VPS compose). Prod compose not started: would bind 80/443 already used by host nginx.
 
 ---
 
@@ -105,7 +154,7 @@ docker compose -f docker-compose.prod.yml up -d   → FAIL
 
 Prod compose design: PostgreSQL and Redis on `viro_internal` network only — no public ports.
 
-**Status: PASS** (design); **BLOCKED** (not deployed)
+**Status: PASS** — VPS containers do not publish Postgres/Redis. Host 5432/6379 remain loopback-only (other app).
 
 ---
 
@@ -113,11 +162,11 @@ Prod compose design: PostgreSQL and Redis on `viro_internal` network only — no
 
 | Gate | Status |
 |------|--------|
-| HTTPS `curl -I https://<domain>/health/live` | **BLOCKED** |
-| `/health/ready` | **BLOCKED** |
-| WSS authenticated connect | **BLOCKED** |
-| coturn unauthenticated fail | **BLOCKED** |
-| TURN relay network test | **BLOCKED** |
+| HTTPS `curl -I https://reach.viro3.online/health/live` | **PASS** (200, valid LE cert, no `-k`) |
+| `/health/ready` | **PASS** (`database: connected`, `redis: connected`) |
+| WSS authenticated connect | **PASS** (stays open); unauth 4001; revoked 4003 |
+| coturn unauthenticated fail | **PASS** (junk/expired Allocate fails) |
+| TURN relay network test | **BLOCKED — PHYSICAL DEVICES REQUIRED** (TCP Allocate with valid creds only) |
 
 ---
 
@@ -125,23 +174,19 @@ Prod compose design: PostgreSQL and Redis on `viro_internal` network only — no
 
 ```
 cd apps/android && ./gradlew clean assembleDebug
-→ BUILD SUCCESSFUL
-→ apps/android/app/build/outputs/apk/debug/app-debug.apk (52,243,800 bytes)
+→ not run on this PC (no java / ANDROID_HOME)
 ```
 
-**Status: PASS**
+**Status: BLOCKED** — wrapper exists (`gradlew`); JDK and Android SDK are missing here. Do not reuse the old 52MB APK (it still targeted the emulator).
 
 ---
 
 ## GATE 14 — ENGINEERING APK CONFIG
 
-Current `API_BASE_URL` in `app/build.gradle.kts`: `http://10.0.2.2:3001` (emulator default).
+Current debug `API_BASE_URL`: `https://reach.viro3.online`  
+Current debug `WSS_URL`: `wss://reach.viro3.online/api/v1/signaling/ws`
 
-**Must be overridden to `https://<CADDY_DOMAIN>` before hardware test on VPS.**
-
-WSS derived in `CallManager.connectSignaling()` from API base URL.
-
-**Status: NOT IMPLEMENTED** on device — requires VPS domain + hardware session.
+**Status: PASS** (config). Fresh `assembleDebug` on this PC: **BLOCKED** (no JDK/SDK).
 
 ---
 
@@ -220,10 +265,10 @@ Hardware re-verification: **BLOCKED**
 
 | Test | Status |
 |------|--------|
-| Server restart recovery | **BLOCKED** |
-| DB backup/restore on VPS | **BLOCKED** |
-| Production log review | **BLOCKED** |
-| Android Logcat review | **BLOCKED** |
+| Server restart recovery | **PASS** (Docker compose restart). Full VPS reboot skipped (shared host) |
+| DB backup/restore on VPS | **PASS** |
+| Production log review | **PASS** |
+| Android Logcat review | **BLOCKED** — PHYSICAL DEVICES REQUIRED |
 
 ---
 
@@ -240,9 +285,9 @@ Hardware re-verification: **BLOCKED**
 | API unit | **34/34 PASS** |
 | API integration | **30/30 PASS** |
 | Android tests | **PASS** |
-| Android assembleDebug | **PASS** |
-| API build | **PASS** |
-| Docker prod build | **BLOCKED** |
+| Android assembleDebug | **BLOCKED** on this PC (no JDK/SDK); prior cloud APK not reused |
+| API build | **PASS** (VPS image) |
+| Docker prod build | **PASS** (isolated `docker-compose.vps.yml` image `viro-reach-api`) |
 
 ---
 
@@ -253,13 +298,13 @@ Hardware re-verification: **BLOCKED**
 | Offline trust: no APK signing secret | **PASS** | Code audit; no secret in Android |
 | Offline trust: device-bound tokens | **PASS** | `offline-trust.service.ts`, unit tests |
 | Offline trust replay tests | **PASS** | `offline-trust.service.spec.ts` |
-| VPS deployment | **BLOCKED** | No SSH credentials |
-| Docker prod stack running | **BLOCKED** | Overlay mount error |
-| HTTPS live | **BLOCKED** | No deployed domain |
-| WSS production | **BLOCKED** | No VPS |
-| coturn operational | **BLOCKED** | No VPS |
-| Engineering APK built | **PASS** | `app-debug.apk` 52MB |
-| Internet P2P two-device voice | **BLOCKED** | No hardware |
+| VPS deployment | **PASS** | Contabo `/opt/viro-reach`, commit deployed via rsync |
+| Docker prod stack running | **PASS** | api/postgres/redis/coturn; nginx TLS |
+| HTTPS live | **PASS** | `https://reach.viro3.online/health/live` |
+| WSS production | **PASS** | 4001 / open / 4003 |
+| coturn operational | **PASS** | 3479 + REST time-limited credentials |
+| Engineering APK built | **BLOCKED** | No JDK/SDK here; URLs already set |
+| Internet P2P two-device voice | **BLOCKED** | PHYSICAL DEVICES REQUIRED |
 | Forced TURN voice | **BLOCKED** | No hardware |
 | Real NSD on device | **BLOCKED** | No hardware |
 | Local authorized resolution | **BLOCKED** | No hardware |
@@ -325,24 +370,12 @@ Hardware re-verification: **BLOCKED**
 
 ## GATE 50 — PHASE DECISION
 
-**PHASE 1B: NO-GO**
-
-Minimum gates for Phase 1B all require hardware and/or VPS:
-
-- VPS stack, HTTPS, WSS, coturn → **BLOCKED**
-- Two-device Internet voice → **BLOCKED**
-- Forced TURN → **BLOCKED**
-- Real NSD + privacy → **BLOCKED**
-- Same-LAN voice → **BLOCKED**
-- Same-LAN no-Internet → **BLOCKED** (strategic feature — untested)
-- Keystore → **BLOCKED**
+**VPS: ready. PHASE 1B: NO-GO** until two (preferably three) physical Android devices run the remaining gates.
 
 ### What you need to do next
 
-1. **Provide VPS SSH access** (or deploy manually using `docker-compose.prod.yml` + `Caddyfile.prod`)
-2. **Set `API_BASE_URL=https://<domain>`** in Android debug build
-3. **Install `app-debug.apk`** on two phones (+ third for privacy test)
-4. **Run the gate checklist** and record evidence in this document
-5. **Same-WiFi/no-Internet** is the defining test — do not skip
-
-Software is ready for verification. The question *"Does Viro Reach actually work?"* cannot be answered without real phones and a deployed server.
+1. On a machine with Android SDK: `cd apps/android` then `gradlew clean assembleDebug`
+2. Install the APK on two phones (third for privacy)
+3. Confirm `API_BASE_URL=https://reach.viro3.online` and `WSS_URL=wss://reach.viro3.online/api/v1/signaling/ws`
+4. Run the hardware checklist; record evidence here
+5. Same-WiFi/no-Internet remains the defining product test — do not skip

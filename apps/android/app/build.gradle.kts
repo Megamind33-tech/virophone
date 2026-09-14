@@ -13,7 +13,8 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0-phase1a"
-        buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:3001\"")
+        buildConfigField("String", "API_BASE_URL", "\"https://reach.viro3.online\"")
+        buildConfigField("String", "WSS_URL", "\"wss://reach.viro3.online/api/v1/signaling/ws\"")
         buildConfigField("boolean", "FORCE_TURN_RELAY", "false")
     }
 

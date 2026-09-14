@@ -49,10 +49,7 @@ class CallManager(
 
     suspend fun connectSignaling() {
         val token = tokenStore.getAccessToken() ?: return
-        val base = com.viroreach.core.network.BuildConfig.API_BASE_URL
-            .replace("http://", "ws://")
-            .replace("https://", "wss://")
-        signaling.connect("$base/api/v1/signaling/ws", token)
+        signaling.connect(com.viroreach.core.network.BuildConfig.WSS_URL, token)
     }
 
     suspend fun startCall(targetUserId: String) {

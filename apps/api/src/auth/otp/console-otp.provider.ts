@@ -10,6 +10,10 @@ export class ConsoleOtpProvider implements OtpProvider {
   private readonly logger = new Logger('ConsoleOtpProvider');
 
   async sendOtp(phoneE164: string, code: string): Promise<void> {
+    if (process.env.NODE_ENV === 'production') {
+      this.logger.log(`OTP dispatched for ${phoneE164.slice(0, 4)}**** (code not logged)`);
+      return;
+    }
     this.logger.warn(
       `[DEV ONLY] OTP for ${phoneE164.slice(0, 4)}****: ${code}`,
     );
