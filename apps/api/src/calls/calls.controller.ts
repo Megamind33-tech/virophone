@@ -19,8 +19,16 @@ export class CallsController {
   constructor(private readonly callsService: CallsService) {}
 
   @Post('authorize')
-  async authorize(@Req() req: { user: { sub: string } }, @Body() body: AuthorizeCallDto) {
-    return this.callsService.authorize(req.user.sub, body.targetUserId, body.preferredRoute);
+  async authorize(
+    @Req() req: { user: { sub: string; deviceId: string } },
+    @Body() body: AuthorizeCallDto,
+  ) {
+    return this.callsService.authorize(
+      req.user.sub,
+      req.user.deviceId,
+      body.targetUserId,
+      body.preferredRoute,
+    );
   }
 
   @Post(':id/end')

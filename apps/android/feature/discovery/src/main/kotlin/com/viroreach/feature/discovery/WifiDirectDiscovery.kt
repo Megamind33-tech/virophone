@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
 class WifiDirectDiscovery(
     private val context: Context,
     private val ephemeralIdGenerator: EphemeralIdGenerator,
-    private val onPeerDiscovered: suspend (ephemeralId: String, transport: CallRouteType) -> Unit,
+    private val onPeerDiscovered: suspend (ephemeralId: String, transport: CallRouteType, bindingTag: String?) -> Unit,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val manager = context.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
@@ -83,10 +83,11 @@ class WifiDirectDiscovery(
                 { _, _, _ -> /* service instance discovered; TXT arrives separately */ },
                 { _, txtRecord, _ ->
                     val eid = txtRecord["eid"] ?: return@setDnsSdResponseListeners
+                    val btag = txtRecord["btag"]
                     if (!eid.startsWith("vr1_")) return@setDnsSdResponseListeners
                     if (eid == ephemeralIdGenerator.getCurrentId()) return@setDnsSdResponseListeners
                     if (discovered.add(eid)) {
-                        scope.launch { onPeerDiscovered(eid, CallRouteType.WIFI_DIRECT) }
+                        scope.launch { onPeerDiscovered(eid, CallRouteType.WIFI_DIRECT, btag) }
                     }
                 },
             )

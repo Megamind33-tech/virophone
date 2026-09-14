@@ -27,6 +27,9 @@ interface ViroApiService {
     @POST("api/v1/calls/authorize")
     suspend fun authorizeCall(@Body body: AuthorizeCallBody): AuthorizeCallResponse
 
+    @POST("api/v1/calls/{callId}/end")
+    suspend fun endCall(@Path("callId") callId: String)
+
     @POST("api/v1/discovery/ephemeral")
     suspend fun registerEphemeral(@Body body: RegisterEphemeralBody): RegisterEphemeralResponse
 
@@ -35,6 +38,12 @@ interface ViroApiService {
 
     @POST("api/v1/turn/credentials")
     suspend fun getTurnCredentials(): TurnCredentialsResponse
+
+    @GET("api/v1/offline-trust/material")
+    suspend fun getOfflineTrustMaterial(): OfflineTrustMaterialResponse
+
+    @GET("api/v1/offline-trust/call-tickets")
+    suspend fun getOfflineCallTickets(): OfflineCallTicketsResponse
 }
 
 data class OtpRequestBody(val phoneE164: String)
@@ -53,3 +62,7 @@ data class RegisterEphemeralResponse(val expiresAt: String)
 data class ResolveEphemeralBody(val ephemeralId: String, val authorizedUserIds: List<String>)
 data class ResolveEphemeralResponse(val authorized: Boolean, val userId: String? = null)
 data class TurnCredentialsResponse(val urls: List<String>, val username: String, val credential: String, val ttlSeconds: Int)
+data class OfflineTrustMaterialResponse(val material: List<OfflineTrustEntry>, val syncedAt: String)
+data class OfflineTrustEntry(val peerUserId: String, val trustToken: String, val epoch: Int, val expiresAt: String)
+data class OfflineCallTicketsResponse(val tickets: List<OfflineCallTicket>, val syncedAt: String)
+data class OfflineCallTicket(val ticket: String, val peerUserId: String, val expiresAt: String)

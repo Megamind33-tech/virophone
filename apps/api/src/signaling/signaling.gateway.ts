@@ -15,16 +15,35 @@ import { Device } from '../database/entities/device.entity';
 import { User } from '../database/entities/user.entity';
 import { RedisService } from '../redis/redis.service';
 import { PresenceService } from '../presence/presence.service';
+import { CallSessionService } from '../calls/call-session.service';
 
 interface AuthenticatedSocket extends WebSocket {
   userId?: string;
   deviceId?: string;
-  isAlive?: boolean;
 }
 
 interface JwtPayload {
   sub: string;
   deviceId: string;
+}
+
+export type SignalingEventType =
+  | 'call.invite'
+  | 'call.offer'
+  | 'call.answer'
+  | 'call.ice'
+  | 'call.ringing'
+  | 'call.accept'
+  | 'call.reject'
+  | 'call.end'
+  | 'call.busy'
+  | 'call.error';
+
+export interface SignalingEnvelope {
+  type: SignalingEventType;
+  callId: string;
+  targetDeviceId?: string;
+  payload?: unknown;
 }
 
 @WebSocketGateway({ path: '/api/v1/signaling/ws' })
@@ -36,6 +55,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     private readonly jwtService: JwtService,
     private readonly redis: RedisService,
     private readonly presenceService: PresenceService,
+    private readonly callSessionService: CallSessionService,
     @InjectRepository(Device) private readonly deviceRepo: Repository<Device>,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
   ) {}
@@ -68,11 +88,15 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
       client.userId = payload.sub;
       client.deviceId = payload.deviceId;
-      client.isAlive = true;
 
       await this.redis.setJson(
         `ws:device:${payload.deviceId}`,
         { userId: payload.sub, connectedAt: Date.now() },
+        3600,
+      );
+      await this.redis.setJson(
+        `ws:user:${payload.sub}`,
+        { deviceId: payload.deviceId, connectedAt: Date.now() },
         3600,
       );
       await this.presenceService.setPresence(payload.sub, 'ONLINE');
@@ -86,36 +110,93 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       await this.redis.del(`ws:device:${client.deviceId}`);
     }
     if (client.userId) {
+      await this.redis.del(`ws:user:${client.userId}`);
       await this.presenceService.setPresence(client.userId, 'OFFLINE');
     }
   }
 
-  @SubscribeMessage('signal')
-  async handleSignal(
+  @SubscribeMessage('signaling')
+  async handleSignaling(
     @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { callId: string; targetDeviceId: string; payload: unknown },
+    @MessageBody() envelope: SignalingEnvelope,
   ) {
-    if (!client.userId || !client.deviceId) return { error: 'unauthorized' };
-
-    const targetConn = await this.redis.getJson<{ userId: string }>(`ws:device:${data.targetDeviceId}`);
-    if (!targetConn) {
-      return { error: 'target_offline' };
+    if (!client.userId || !client.deviceId) {
+      return { error: 'unauthorized' };
     }
 
-    // Relay only to connected devices; full call authorization verified at /calls/authorize
-    this.server.clients.forEach((ws) => {
-      const sock = ws as unknown as AuthenticatedSocket;
-      if (sock.deviceId === data.targetDeviceId && sock.readyState === 1) {
-        sock.send(JSON.stringify({
-          type: 'signal',
-          callId: data.callId,
-          fromUserId: client.userId,
-          fromDeviceId: client.deviceId,
-          payload: data.payload,
-        }));
-      }
+    const { type, callId, targetDeviceId, payload } = envelope;
+    if (!callId || !type) {
+      return { error: 'invalid_envelope' };
+    }
+
+    const session = await this.callSessionService.getSession(callId);
+    if (!session) {
+      return { error: 'call_not_found' };
+    }
+
+    const isParticipant = await this.callSessionService.isParticipant(
+      callId,
+      client.userId,
+      client.deviceId,
+    );
+    if (!isParticipant) {
+      return { error: 'not_participant' };
+    }
+
+    let recipientDeviceId = targetDeviceId;
+    if (!recipientDeviceId) {
+      recipientDeviceId =
+        client.deviceId === session.callerDeviceId
+          ? session.calleeDeviceId
+          : session.callerDeviceId;
+    }
+
+    const allowedRecipient =
+      recipientDeviceId === session.callerDeviceId ||
+      recipientDeviceId === session.calleeDeviceId;
+    if (!allowedRecipient) {
+      return { error: 'invalid_target' };
+    }
+
+    if (type === 'call.invite' && client.deviceId !== session.callerDeviceId) {
+      return { error: 'only_caller_may_invite' };
+    }
+    if (type === 'call.answer' && client.deviceId !== session.calleeDeviceId) {
+      return { error: 'only_callee_may_answer' };
+    }
+
+    const stateTransitions: Partial<Record<SignalingEventType, string>> = {
+      'call.ringing': 'RINGING',
+      'call.accept': 'CONNECTING',
+      'call.end': 'ENDED',
+      'call.reject': 'ENDED',
+      'call.busy': 'ENDED',
+    };
+    const nextState = stateTransitions[type];
+    if (nextState) {
+      await this.callSessionService.updateState(callId, nextState as 'RINGING');
+    }
+
+    this.deliverToDevice(recipientDeviceId, {
+      type,
+      callId,
+      fromUserId: client.userId,
+      fromDeviceId: client.deviceId,
+      payload,
     });
 
     return { delivered: true };
+  }
+
+  private deliverToDevice(
+    deviceId: string,
+    message: Record<string, unknown>,
+  ) {
+    this.server.clients.forEach((ws) => {
+      const sock = ws as unknown as AuthenticatedSocket;
+      if (sock.deviceId === deviceId && sock.readyState === 1) {
+        sock.send(JSON.stringify(message));
+      }
+    });
   }
 }

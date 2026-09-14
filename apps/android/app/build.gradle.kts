@@ -12,8 +12,9 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "0.1.0-phase0"
+        versionName = "0.1.0-phase1a"
         buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:3001\"")
+        buildConfigField("boolean", "FORCE_TURN_RELAY", "false")
     }
 
     buildTypes {
@@ -58,7 +59,7 @@ dependencies {
     implementation(project(":transport:wifidirect"))
     implementation(project(":transport:internet"))
     implementation(project(":voice:api"))
-    implementation(project(":voice:linphone"))
+    implementation(project(":voice:webrtc"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

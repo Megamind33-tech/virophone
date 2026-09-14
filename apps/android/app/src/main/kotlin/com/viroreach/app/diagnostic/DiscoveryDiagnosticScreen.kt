@@ -34,17 +34,17 @@ fun DiscoveryDiagnosticScreen() {
 
     val stubResolver = remember {
         object : AuthorizedPeerResolver {
-            override suspend fun resolve(ephemeralId: String): AuthorizedNearbyContact? = null
+            override suspend fun resolve(ephemeralId: String, bindingTag: String?): AuthorizedNearbyContact? = null
         }
     }
 
     val discoveryService = remember {
         lateinit var service: LocalNetworkDiscoveryService
-        val nsd = NsdLanDiscovery(context, ephemeralGen) { eid, transport ->
-            service.onPeerDiscovered(eid, transport)
+        val nsd = NsdLanDiscovery(context, ephemeralGen, bindingTagProvider = null) { eid, transport, btag ->
+            service.onPeerDiscovered(eid, transport, btag)
         }
-        val wifi = WifiDirectDiscovery(context, ephemeralGen) { eid, transport ->
-            service.onPeerDiscovered(eid, transport)
+        val wifi = WifiDirectDiscovery(context, ephemeralGen) { eid, transport, btag ->
+            service.onPeerDiscovered(eid, transport, btag)
         }
         service = LocalNetworkDiscoveryService(ephemeralGen, stubResolver, nsd, wifi)
         service

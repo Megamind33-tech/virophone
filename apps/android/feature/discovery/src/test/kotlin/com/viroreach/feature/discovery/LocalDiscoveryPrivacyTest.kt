@@ -10,7 +10,7 @@ class LocalDiscoveryPrivacyTest {
     private val unknownEphemeralId = "vr1_UnknownPeerTestId128bitxx"
 
     private val resolver = object : AuthorizedPeerResolver {
-        override suspend fun resolve(ephemeralId: String): AuthorizedNearbyContact? {
+        override suspend fun resolve(ephemeralId: String, bindingTag: String?): AuthorizedNearbyContact? {
             if (ephemeralId != authorizedEphemeralId) return null
             return AuthorizedNearbyContact(
                 contact = KnownContact(

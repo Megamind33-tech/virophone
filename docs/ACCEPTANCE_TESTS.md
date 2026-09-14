@@ -51,7 +51,7 @@ CI pipeline: `.github/workflows/ci.yml`
 | AC-06-21 | Real Wi-Fi Direct DNS-SD | **PASS** (code) | `WifiDirectDiscovery.kt` — hardware **BLOCKED** |
 | AC-06-22 | Advertisement contains ephemeral ID only | **PASS** | Unit tests + TXT record inspection in code |
 | AC-06-23 | Unknown peers counted, not listed | **PASS** | `LocalDiscoveryPrivacyTest.kt` |
-| AC-06-24 | Runtime permissions before discovery | **FAIL** | Not implemented — diagnostic starts without permission flow |
+| AC-06-24 | Runtime permissions before discovery | **NOT IMPLEMENTED** | Permission audit documented; runtime flow deferred to Phase 1 |
 | **Server realtime** |
 | AC-06-30 | Redis presence with block privacy | **PASS** | `phase06.integration.spec.ts` |
 | AC-06-31 | Redis WS device connection map | **PASS** | `signaling.gateway.ts` |

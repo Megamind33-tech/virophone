@@ -15,6 +15,7 @@ android {
 }
 dependencies {
     implementation(project(":core:model"))
+    implementation(libs.androidx.security.crypto)
     implementation(libs.retrofit)
     implementation(libs.retrofit.gson)
     implementation(libs.okhttp)

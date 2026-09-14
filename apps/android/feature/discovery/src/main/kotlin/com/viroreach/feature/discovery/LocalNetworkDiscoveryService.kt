@@ -32,7 +32,7 @@ class LocalNetworkDiscoveryService(
     /**
      * Called when NSD/mDNS discovers a peer. Peer is NOT shown to user yet.
      */
-    suspend fun onPeerDiscovered(ephemeralId: String, transportType: CallRouteType) {
+    suspend fun onPeerDiscovered(ephemeralId: String, transportType: CallRouteType, bindingTag: String? = null) {
         val peer = AnonymousPeer(ephemeralId, listOf("voice"), transportType)
         val current = _anonymousPeers.value.toMutableList()
         if (current.none { it.ephemeralId == ephemeralId }) {
@@ -42,7 +42,7 @@ class LocalNetworkDiscoveryService(
         }
 
         // Attempt authorized resolution — unknown peers are silently discarded
-        val resolved = authorizedResolver.resolve(ephemeralId)
+        val resolved = authorizedResolver.resolve(ephemeralId, bindingTag)
         if (resolved != null) {
             val matches = _authorizedMatches.value.toMutableList()
             if (matches.none { it.ephemeralId == ephemeralId }) {
@@ -83,5 +83,5 @@ class LocalNetworkDiscoveryService(
  * Resolves ephemeral IDs against the user's authorized relationship set.
  */
 interface AuthorizedPeerResolver {
-    suspend fun resolve(ephemeralId: String): AuthorizedNearbyContact?
+    suspend fun resolve(ephemeralId: String, bindingTag: String? = null): AuthorizedNearbyContact?
 }

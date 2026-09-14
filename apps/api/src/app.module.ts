@@ -17,6 +17,7 @@ import { DiscoveryModule } from './discovery/discovery.module';
 import { PresenceModule } from './presence/presence.module';
 import { SignalingModule } from './signaling/signaling.module';
 import { TurnModule } from './turn/turn.module';
+import { OfflineTrustModule } from './offline-trust/offline-trust.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { TurnModule } from './turn/turn.module';
     PresenceModule,
     SignalingModule,
     TurnModule,
+    OfflineTrustModule,
   ],
 })
 export class AppModule {}

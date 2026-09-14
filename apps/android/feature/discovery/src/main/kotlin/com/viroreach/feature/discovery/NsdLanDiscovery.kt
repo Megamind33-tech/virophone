@@ -20,7 +20,8 @@ import kotlinx.coroutines.launch
 class NsdLanDiscovery(
     private val context: Context,
     private val ephemeralIdGenerator: EphemeralIdGenerator,
-    private val onPeerDiscovered: suspend (ephemeralId: String, transport: CallRouteType) -> Unit
+    private val bindingTagProvider: (() -> String?)? = null,
+    private val onPeerDiscovered: suspend (ephemeralId: String, transport: CallRouteType, bindingTag: String?) -> Unit,
 ) {
     companion object {
         private const val TAG = "NsdLanDiscovery"
@@ -63,6 +64,7 @@ class NsdLanDiscovery(
             setAttribute("version", SERVICE_VERSION)
             setAttribute("eid", ephemeralIdGenerator.getCurrentId())
             setAttribute("cap", "voice")
+            bindingTagProvider?.invoke()?.let { setAttribute("btag", it) }
         }
 
         registrationListener = object : NsdManager.RegistrationListener {
@@ -90,11 +92,12 @@ class NsdLanDiscovery(
                     override fun onResolveFailed(info: NsdServiceInfo, code: Int) {}
                     override fun onServiceResolved(info: NsdServiceInfo) {
                         val eid = info.attributes?.get("eid")?.let { String(it) } ?: return
+                        val btag = info.attributes?.get("btag")?.let { String(it) }
                         if (eid == ephemeralIdGenerator.getCurrentId()) return
                         if (discoveredEphemeralIds.add(eid)) {
                             _anonymousPeerCount.value = discoveredEphemeralIds.size
                             scope.launch {
-                                onPeerDiscovered(eid, CallRouteType.LAN)
+                                onPeerDiscovered(eid, CallRouteType.LAN, btag)
                             }
                         }
                     }

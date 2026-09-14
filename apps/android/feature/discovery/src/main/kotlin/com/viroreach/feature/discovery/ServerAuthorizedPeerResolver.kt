@@ -18,7 +18,8 @@ class ServerAuthorizedPeerResolver(
     private val knownContacts: () -> List<KnownContact>
 ) : AuthorizedPeerResolver {
 
-    override suspend fun resolve(ephemeralId: String): AuthorizedNearbyContact? {
+    override suspend fun resolve(ephemeralId: String, bindingTag: String?): AuthorizedNearbyContact? {
+        if (bindingTag != null) return null // server path ignores offline binding tags
         val authorizedIds = knownContacts().map { it.userId }
         try {
             val response = api.resolveEphemeral(
