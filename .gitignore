@@ -17,7 +17,6 @@ out/
 .env.vps
 !.env.example
 !.env.vps.example
-infra/coturn/turnserver.vps.conf
 *.pem
 *.key
 *.jks

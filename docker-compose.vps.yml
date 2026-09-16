@@ -114,7 +114,13 @@ services:
     network_mode: host
     volumes:
       - ./infra/coturn/turnserver.vps.conf:/etc/coturn/turnserver.conf:ro
-    command: ["-c", "/etc/coturn/turnserver.conf"]
+    command:
+      - "-c"
+      - "/etc/coturn/turnserver.conf"
+      - "--static-auth-secret=${TURN_SECRET}"
+      - "--realm=${TURN_REALM:-viro-reach}"
+      - "--listening-port=${VIRO_TURN_PORT:-3479}"
+      - "--external-ip=${EXTERNAL_IP}"
 
 networks:
   viro_reach_internal:
