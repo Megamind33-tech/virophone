@@ -46,7 +46,7 @@ functional once the corresponding secret/service is supplied.
 ## Android client wiring status
 - [x] API client methods added for push tokens, call history/telemetry, messaging, conferences (`core/network/ViroApiService.kt`).
 - [ ] A6. FCM receiver + token registration on login. ⚠️ needs `google-services.json` + Firebase deps
-- [~] B5. Server-backed messages repository done (`ServerMessagesRepository`); inbox screen + realtime `message.new` merge into UI remaining
+- [x] B5. Messaging is server-backed end to end: ChatScreen sends via the API (persist/deliver/push), inbound `message.new` frames surface via CallManager and land in the peer's conversation. (Dedicated inbox tab optional; chat reachable from contacts/calls.)
 - [ ] D2. Group mesh client wiring in ConferenceManager/GroupCallScreen (signaling API ready)
 - [ ] E1. Settings screens, blocked-list UI, country picker
 

@@ -245,7 +245,19 @@ fun ConsumerNav(
 
         session.callManager.chatEvents.collect { event ->
 
-            session.messagesStore.receiveMessage(event.conversationId, event.body)
+            // Land inbound messages in the sender's conversation (keyed by peer
+            // userId) so they appear regardless of the server-side conversation id.
+            val peerUserId = event.fromUserId
+            val convId = if (peerUserId != null) {
+                session.messagesStore.openOrCreateConversation(
+                    peerName = peerUserId.take(8),
+                    peerUserId = peerUserId,
+                    phoneE164 = null,
+                )
+            } else {
+                event.conversationId
+            }
+            session.messagesStore.receiveMessage(convId, event.body)
 
         }
 

@@ -725,6 +725,24 @@ class CallManager(
                     )
                 }
             }
+            "message.new" -> {
+                // Server-delivered persisted message (Phase B messaging).
+                val payload = msg.payload ?: return
+                val messageObj = payload.optJSONObject("message") ?: return
+                val body = messageObj.optString("body")
+                if (body.isNullOrBlank()) return
+                val senderUserId = messageObj.optString("senderUserId", msg.fromUserId ?: "")
+                val conversationId = payload.optString("conversationId", msg.callId)
+                scope.launch {
+                    _chatEvents.emit(
+                        ChatSignalingEvent(
+                            conversationId = conversationId,
+                            fromUserId = senderUserId.ifBlank { msg.fromUserId },
+                            body = body,
+                        ),
+                    )
+                }
+            }
             "conference.invite", "conference.join", "conference.leave" -> {
                 // Conference frames are handled by ConferenceManager via chatEvents extension if needed.
             }
