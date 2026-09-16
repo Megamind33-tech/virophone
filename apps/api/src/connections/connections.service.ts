@@ -44,14 +44,14 @@ export class ConnectionsService {
     const existing = await this.connectionRepo.findOne({
       where: { requesterUserId: requesterId, recipientUserId: targetUserId },
     });
-    if (existing) return existing;
+    if (existing) return this.toDto(existing, requesterId);
 
     const connection = this.connectionRepo.create({
       requesterUserId: requesterId,
       recipientUserId: targetUserId,
       status: 'PENDING',
     });
-    return this.connectionRepo.save(connection);
+    return this.toDto(await this.connectionRepo.save(connection), requesterId);
   }
 
   async accept(connectionId: string, userId: string) {
@@ -61,7 +61,7 @@ export class ConnectionsService {
     }
     connection.status = 'ACCEPTED';
     connection.acceptedAt = new Date();
-    return this.connectionRepo.save(connection);
+    return this.toDto(await this.connectionRepo.save(connection), userId);
   }
 
   async reject(connectionId: string, userId: string) {
@@ -70,7 +70,7 @@ export class ConnectionsService {
       throw new ViroException('NOT_FOUND', 'Connection not found.', HttpStatus.NOT_FOUND);
     }
     connection.status = 'REJECTED';
-    return this.connectionRepo.save(connection);
+    return this.toDto(await this.connectionRepo.save(connection), userId);
   }
 
   async revoke(connectionId: string, userId: string) {
@@ -82,6 +82,19 @@ export class ConnectionsService {
       throw new ViroException('FORBIDDEN', 'Not authorized.', HttpStatus.FORBIDDEN);
     }
     connection.status = 'REVOKED';
-    return this.connectionRepo.save(connection);
+    return this.toDto(await this.connectionRepo.save(connection), userId);
+  }
+
+  private toDto(
+    c: { id: string; requesterUserId: string; recipientUserId: string; status: string },
+    viewerUserId: string,
+  ) {
+    return {
+      id: c.id,
+      requesterUserId: c.requesterUserId,
+      recipientUserId: c.recipientUserId,
+      status: c.status,
+      direction: c.requesterUserId === viewerUserId ? 'OUTGOING' : 'INCOMING',
+    };
   }
 }

@@ -184,10 +184,40 @@ export class CallsService {
 
   /** Returns the recent call history for a user (as caller or callee). */
   async history(userId: string, limit = 50) {
-    return this.callRepo.find({
+    const rows = await this.callRepo.find({
       where: [{ callerUserId: userId }, { calleeUserId: userId }],
       order: { startedAt: 'DESC' },
       take: Math.min(Math.max(limit, 1), 200),
+    });
+    const peerIds = Array.from(
+      new Set(
+        rows.map((c) => (c.callerUserId === userId ? c.calleeUserId : c.callerUserId)),
+      ),
+    );
+    const profiles =
+      peerIds.length === 0
+        ? []
+        : await this.profileRepo
+            .createQueryBuilder('p')
+            .where('p.user_id IN (:...ids)', { ids: peerIds })
+            .getMany();
+    const nameByUser = new Map(profiles.map((p) => [p.userId, p.displayName]));
+    return rows.map((c) => {
+      const peerUserId = c.callerUserId === userId ? c.calleeUserId : c.callerUserId;
+      const direction = c.callerUserId === userId ? 'OUTGOING' : 'INCOMING';
+      return {
+        id: c.id,
+        callerUserId: c.callerUserId,
+        calleeUserId: c.calleeUserId,
+        peerUserId,
+        peerDisplayName: nameByUser.get(peerUserId) ?? null,
+        direction,
+        status: c.status,
+        routeType: c.routeType,
+        startedAt: c.startedAt,
+        answeredAt: c.answeredAt,
+        endedAt: c.endedAt,
+      };
     });
   }
 

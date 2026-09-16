@@ -125,6 +125,11 @@ export const ENDPOINTS = {
   me: {
     get: `${API_BASE}/me`,
     update: `${API_BASE}/me`,
+    export: `${API_BASE}/me/export`,
+    subscription: `${API_BASE}/me/subscription`,
+  },
+  plans: {
+    list: `${API_BASE}/plans`,
   },
   contacts: {
     discover: `${API_BASE}/contacts/discover`,
@@ -133,22 +138,31 @@ export const ENDPOINTS = {
     exact: (viroId: string) => `${API_BASE}/directory/exact/${encodeURIComponent(viroId)}`,
   },
   connections: {
+    list: `${API_BASE}/connections`,
     create: `${API_BASE}/connections`,
     accept: (id: string) => `${API_BASE}/connections/${id}/accept`,
     reject: (id: string) => `${API_BASE}/connections/${id}/reject`,
     delete: (id: string) => `${API_BASE}/connections/${id}`,
   },
+  devices: {
+    register: `${API_BASE}/devices/register`,
+    list: `${API_BASE}/devices`,
+    delete: (id: string) => `${API_BASE}/devices/${id}`,
+  },
   blocks: {
     create: `${API_BASE}/blocks`,
+    list: `${API_BASE}/blocks`,
     delete: (userId: string) => `${API_BASE}/blocks/${userId}`,
   },
   calls: {
     authorize: `${API_BASE}/calls/authorize`,
+    history: `${API_BASE}/calls/history`,
     events: (id: string) => `${API_BASE}/calls/${id}/events`,
     end: (id: string) => `${API_BASE}/calls/${id}/end`,
   },
   health: {
     live: '/health/live',
     ready: '/health/ready',
+    metrics: '/health/metrics',
   },
 } as const;

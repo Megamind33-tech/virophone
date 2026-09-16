@@ -27,6 +27,7 @@ import { ConferenceModule } from './conference/conference.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { MetricsInterceptor } from './metrics/metrics.interceptor';
 import { AdminModule } from './admin/admin.module';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 
 @Module({
   imports: [
@@ -66,6 +67,7 @@ import { AdminModule } from './admin/admin.module';
     ConferenceModule,
     MetricsModule,
     AdminModule,
+    SubscriptionsModule,
   ],
   providers: [
     // Global rate limiting (per-IP) and a consistent API error envelope.

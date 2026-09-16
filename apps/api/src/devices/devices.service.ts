@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { Device } from '../database/entities/device.entity';
 import { ViroException } from '../common/exceptions/viro.exception';
 import { HttpStatus } from '@nestjs/common';
@@ -18,8 +18,9 @@ export class DevicesService {
 
   async list(userId: string) {
     return this.deviceRepo.find({
-      where: { userId },
+      where: { userId, revokedAt: IsNull() },
       select: ['id', 'platform', 'appVersion', 'createdAt', 'lastSeenAt'],
+      order: { lastSeenAt: 'DESC' },
     });
   }
 
