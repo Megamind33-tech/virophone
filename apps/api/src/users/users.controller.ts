@@ -1,4 +1,17 @@
-import { Controller, Get, Patch, Delete, Body, UseGuards, Req } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Patch,
+  Delete,
+  Post,
+  Body,
+  UseGuards,
+  Req,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { IsString, IsOptional, IsIn } from 'class-validator';
@@ -45,5 +58,19 @@ export class UsersController {
   @Delete()
   async deleteMe(@Req() req: { user: { sub: string } }) {
     return this.usersService.deleteMe(req.user.sub);
+  }
+
+  @Post('avatar')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 2 * 1024 * 1024 },
+    }),
+  )
+  async uploadAvatar(
+    @Req() req: { user: { sub: string } },
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.usersService.uploadAvatar(req.user.sub, file);
   }
 }

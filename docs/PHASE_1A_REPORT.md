@@ -1,10 +1,10 @@
 # Phase 1A Final Report — Hardware & VPS Verification Gate
 
-**Date:** 2026-09-14  
+**Date:** 2026-09-15 (Gate 2 update)  
 **Branch:** `cursor/phase06-docs-c131`  
-**Commit under test:** Contabo VPS deploy of Phase 1A isolated stack  
+**Commit under test:** Gate 2 — auth completion + local signaling wiring  
 **Production domain:** `https://reach.viro3.online`  
-**APK:** **BLOCKED** on this PC (no JDK / Android SDK). Debug config now points at the VPS.
+**APK:** Rebuilt after Gate 2 (`0.1.0-phase1a`). Path: `apps/android/app/build/outputs/apk/debug/app-debug.apk`.
 
 ---
 
@@ -13,6 +13,43 @@
 **VPS SIDE: GO for hardware testing. PHASE 1B: NO-GO until physical Android devices.**
 
 The Phase 1A stack is deployed on Contabo (`vmi3566248`, `79.143.177.140`) at `/opt/viro-reach`, isolated from the other app (`/opt/viro3`). HTTPS, WSS, Postgres, Redis, migrations, fail-closed boot, backup/restore, and Docker restart recovery are proven. Two-device voice, Keystore, LAN, and Wi-Fi Direct remain **BLOCKED — PHYSICAL DEVICES REQUIRED**.
+
+---
+
+## HARDWARE GATE 2 — PHONE A EVIDENCE (2026-09-15)
+
+Real physical Android hardware (Phone A) produced the following **runtime** diagnostics (not simulated):
+
+| Probe | Source | Result |
+| ----- | ------ | ------ |
+| SERVER | REAL | CONNECTED HTTP 200 `reach.viro3.online` |
+| AUTH | REAL | NOT AUTHENTICATED |
+| OTP REQUEST | REAL | PASS — real challenge + expiry |
+| OTP VERIFY | REAL | NOT_STARTED (blocked on VPS OTP config) |
+| DEVICE REGISTER | REAL | NOT_STARTED |
+| SESSION | REAL | NOT AUTHENTICATED |
+| WEBSOCKET | REAL | DISCONNECTED |
+| WEBRTC ENGINE | REAL | READY |
+| LAN NSD | REAL | RUNNING |
+| WI-FI DIRECT | REAL | WIFI_DISABLED (precise — Wi-Fi off) |
+| OFFLINE TRUST | REAL | NOT SYNCED |
+| **LOCAL SIGNALING** | REAL | **NOT WIRED** — CallManager used WSS only |
+
+### Critical finding — local signaling (corrected)
+
+An earlier report implied `LocalSignalingServer` (port 8765) was production-ready. **That was incorrect.**
+
+| Layer | Status |
+| ----- | ------ |
+| `LocalSignalingServer` class / POC | EXISTS in codebase |
+| `CallManager` production integration | **WAS NOT IMPLEMENTED** (Gate 2 blocker) |
+| Gate 2 code change | `CallSignalingTransport` abstraction + `RemoteWssSignalingTransport` + `LocalLanSignalingTransport` wired into `CallManager` |
+
+**SAME-LAN NO-WAN CALLING = NOT IMPLEMENTED (hardware)** until two phones physically prove: offline trust → authenticated local signaling → WebRTC → two-way audio with VPS/WSS/TURN unreachable. **Implementation ≠ hardware PASS.**
+
+### Zero-WAN definition (unchanged)
+
+A call qualifies as zero-WAN only when mobile data is off, router WAN is disconnected, VPS/WSS/TURN are unreachable, **and** the call still completes via peer discovery, offline-trust authentication, local signaling, WebRTC, two-way audio, and hangup. Using WSS over the Internet during a “LAN” call does **not** qualify.
 
 `docker-compose.prod.yml` **config** validates, but was **not** used for `up`: host nginx already binds 80/443. Production run uses the existing isolated file `docker-compose.vps.yml` (same API/Postgres/Redis/coturn services; API on `127.0.0.1:13001`; TURN on **3479**). Full VPS reboot was **not** performed (shared host).
 
@@ -38,7 +75,7 @@ The Phase 1A stack is deployed on Contabo (`vmi3566248`, `79.143.177.140`) at `/
 | backup/restore | PASS | `pg_dump -Fc` 31634 bytes → restore DB `viro_reach_restore_test` (16 tables, both migration versions) → dropped |
 | restart recovery | PASS | `docker compose ... restart`; api/postgres/redis healthy, coturn up, HTTPS 200. Full VPS reboot skipped (other production app on same host) |
 | production log security | PASS | API logs: 0 JWT-like strings, 0 OTP codes, 0 `static-auth-secret=`, 0 `EPHEMERAL_SIGNING_SECRET=`. Console OTP provider no longer prints codes when `NODE_ENV=production` |
-| Android APK build | BLOCKED | `apps/android/gradlew` present; this PC has no `java` / `ANDROID_HOME`. Debug `API_BASE_URL`/`WSS_URL` set to the VPS |
+| Android APK build | PASS | JDK 17 + Android SDK 34 on this PC. `gradlew.bat clean assembleDebug` → `app-debug.apk` (52,256,088 bytes). Debug `API_BASE_URL`/`WSS_URL` set to the VPS |
 
 **Services after restart**
 
@@ -173,11 +210,13 @@ Prod compose design: PostgreSQL and Redis on `viro_internal` network only — no
 ## GATE 13 — APK BUILD
 
 ```
-cd apps/android && ./gradlew clean assembleDebug
-→ not run on this PC (no java / ANDROID_HOME)
+cd apps/android && gradlew.bat :app:assembleDebug
+→ BUILD SUCCESSFUL (2026-09-15, Gate 2)
+→ apps/android/app/build/outputs/apk/debug/app-debug.apk (52,407,762 bytes)
+→ BuildConfig.GIT_COMMIT = 9c1c836 (base; Gate 2 changes uncommitted)
 ```
 
-**Status: BLOCKED** — wrapper exists (`gradlew`); JDK and Android SDK are missing here. Do not reuse the old 52MB APK (it still targeted the emulator).
+**Status: PASS** — Temurin JDK 17, Android SDK 34, Gradle 8.5. Engineering UI includes ICE AUTO / Force UDP / Force TCP and Refresh ICE stats (see `docs/PHASE_1A_HARDWARE_TEST.md`).
 
 ---
 
@@ -186,7 +225,7 @@ cd apps/android && ./gradlew clean assembleDebug
 Current debug `API_BASE_URL`: `https://reach.viro3.online`  
 Current debug `WSS_URL`: `wss://reach.viro3.online/api/v1/signaling/ws`
 
-**Status: PASS** (config). Fresh `assembleDebug` on this PC: **BLOCKED** (no JDK/SDK).
+**Status: PASS** (config + build). Fresh `assembleDebug` on this PC: **PASS**.
 
 ---
 
@@ -231,7 +270,7 @@ Current debug `WSS_URL`: `wss://reach.viro3.online/api/v1/signaling/ws`
 | Offline trust preparation | **BLOCKED** |
 | Prove Internet off | **BLOCKED** |
 | Offline LAN discovery | **BLOCKED** |
-| LocalSignalingServer (8765) used on device | **BLOCKED** |
+| LocalSignalingServer (8765) wired via `LocalLanSignalingTransport` | **CODE READY** — hardware **BLOCKED** |
 | Offline call (no VPS/TURN/cellular) | **BLOCKED** |
 | Offline call history sync | **BLOCKED** |
 | Offline unknown user privacy | **BLOCKED** |
@@ -285,7 +324,7 @@ Hardware re-verification: **BLOCKED**
 | API unit | **34/34 PASS** |
 | API integration | **30/30 PASS** |
 | Android tests | **PASS** |
-| Android assembleDebug | **BLOCKED** on this PC (no JDK/SDK); prior cloud APK not reused |
+| Android assembleDebug | **PASS** on this PC (`app-debug.apk`, 52,256,088 bytes) |
 | API build | **PASS** (VPS image) |
 | Docker prod build | **PASS** (isolated `docker-compose.vps.yml` image `viro-reach-api`) |
 
@@ -303,7 +342,7 @@ Hardware re-verification: **BLOCKED**
 | HTTPS live | **PASS** | `https://reach.viro3.online/health/live` |
 | WSS production | **PASS** | 4001 / open / 4003 |
 | coturn operational | **PASS** | 3479 + REST time-limited credentials |
-| Engineering APK built | **BLOCKED** | No JDK/SDK here; URLs already set |
+| Engineering APK built | **PASS** | `app-debug.apk` built 2026-09-14; URLs point at VPS |
 | Internet P2P two-device voice | **BLOCKED** | PHYSICAL DEVICES REQUIRED |
 | Forced TURN voice | **BLOCKED** | No hardware |
 | Real NSD on device | **BLOCKED** | No hardware |
@@ -374,8 +413,7 @@ Hardware re-verification: **BLOCKED**
 
 ### What you need to do next
 
-1. On a machine with Android SDK: `cd apps/android` then `gradlew clean assembleDebug`
-2. Install the APK on two phones (third for privacy)
-3. Confirm `API_BASE_URL=https://reach.viro3.online` and `WSS_URL=wss://reach.viro3.online/api/v1/signaling/ws`
-4. Run the hardware checklist; record evidence here
-5. Same-WiFi/no-Internet remains the defining product test — do not skip
+1. Install `apps/android/app/build/outputs/apk/debug/app-debug.apk` on two phones (third for privacy)
+2. Confirm `API_BASE_URL=https://reach.viro3.online` and `WSS_URL=wss://reach.viro3.online/api/v1/signaling/ws`
+3. Run the hardware checklist in `docs/PHASE_1A_HARDWARE_TEST.md`; record evidence here
+4. Same-WiFi/no-Internet remains the defining product test — do not skip

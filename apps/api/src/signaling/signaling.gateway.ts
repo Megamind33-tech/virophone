@@ -3,12 +3,14 @@ import {
   WebSocketServer,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
   SubscribeMessage,
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { OnModuleInit } from '@nestjs/common';
 import { RealtimeRegistry } from '../realtime/realtime.registry';
+import { SignalingDeliveryService } from './signaling-delivery.service';
 import { Server } from 'ws';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -33,6 +35,7 @@ interface JwtPayload {
 }
 
 export type SignalingEventType =
+  | 'call.incoming'
   | 'call.invite'
   | 'call.incoming'
   | 'call.offer'
@@ -71,15 +74,17 @@ export class SignalingGateway
     private readonly metrics: MetricsService,
     @InjectRepository(Device) private readonly deviceRepo: Repository<Device>,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
+    private readonly signalingDelivery: SignalingDeliveryService,
   ) {}
 
   onModuleInit(): void {
-    // Let server-side producers (messages, etc.) deliver frames over the sockets
-    // this gateway owns.
     this.realtimeRegistry.registerSink({
       deliverToDevice: (deviceId, message) =>
         this.deliverToDevice(deviceId, message),
     });
+    this.signalingDelivery.registerDeliverer((deviceId, message) =>
+      this.deliverToDevice(deviceId, { ...message }) > 0,
+    );
   }
 
   async handleConnection(client: AuthenticatedSocket, ...args: unknown[]) {

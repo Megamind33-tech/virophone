@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import * as fs from 'fs';
 import { Profile } from '../database/entities/profile.entity';
 import { PhoneIdentity } from '../database/entities/phone-identity.entity';
 import { User } from '../database/entities/user.entity';
@@ -14,7 +15,12 @@ import { ConversationParticipant } from '../database/entities/conversation-parti
 import { Message } from '../database/entities/message.entity';
 import { normalizeViroId, formatViroId } from '../common/utils/viro-id.util';
 import { ViroException } from '../common/exceptions/viro.exception';
-import { HttpStatus } from '@nestjs/common';
+import {
+  avatarFilePath,
+  extensionForMime,
+  publicAvatarBaseUrl,
+  validateAvatarMime,
+} from './avatar.util';
 
 @Injectable()
 export class UsersService {
@@ -174,5 +180,31 @@ export class UsersService {
       .execute();
     await this.pushRepo.delete({ userId });
     return { deleted: true };
+  }
+
+  async uploadAvatar(userId: string, file: Express.Multer.File) {
+    if (!file?.buffer?.length) {
+      throw new ViroException('VALIDATION_ERROR', 'Avatar file is required.', HttpStatus.BAD_REQUEST);
+    }
+    try {
+      validateAvatarMime(file.mimetype);
+    } catch {
+      throw new ViroException(
+        'VALIDATION_ERROR',
+        'Avatar must be JPEG, PNG, or WebP.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const ext = extensionForMime(file.mimetype);
+    const targetPath = avatarFilePath(userId, ext);
+    for (const suffix of ['.jpg', '.png', '.webp']) {
+      const existing = avatarFilePath(userId, suffix);
+      if (existing !== targetPath && fs.existsSync(existing)) {
+        fs.unlinkSync(existing);
+      }
+    }
+    fs.writeFileSync(targetPath, file.buffer);
+    const avatarUrl = `${publicAvatarBaseUrl()}/${userId}${ext}`;
+    return this.updateMe(userId, { avatarUrl });
   }
 }

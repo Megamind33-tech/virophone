@@ -18,6 +18,7 @@ import { RedisModule } from './redis/redis.module';
 import { DiscoveryModule } from './discovery/discovery.module';
 import { PresenceModule } from './presence/presence.module';
 import { SignalingModule } from './signaling/signaling.module';
+import { SignalingDeliveryModule } from './signaling/signaling-delivery.module';
 import { TurnModule } from './turn/turn.module';
 import { OfflineTrustModule } from './offline-trust/offline-trust.module';
 import { PushModule } from './push/push.module';
@@ -27,6 +28,7 @@ import { ConferenceModule } from './conference/conference.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { MetricsInterceptor } from './metrics/metrics.interceptor';
 import { AdminModule } from './admin/admin.module';
+import { MediaModule } from './media/media.module';
 
 @Module({
   imports: [
@@ -52,6 +54,7 @@ import { AdminModule } from './admin/admin.module';
     DirectoryModule,
     ConnectionsModule,
     BlocksModule,
+    SignalingDeliveryModule,
     CallsModule,
     HealthModule,
     SecurityModule,
@@ -66,9 +69,9 @@ import { AdminModule } from './admin/admin.module';
     ConferenceModule,
     MetricsModule,
     AdminModule,
+    MediaModule,
   ],
   providers: [
-    // Global rate limiting (per-IP) and a consistent API error envelope.
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_FILTER, useClass: ApiExceptionFilter },
     { provide: APP_INTERCEPTOR, useClass: MetricsInterceptor },
