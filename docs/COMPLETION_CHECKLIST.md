@@ -40,8 +40,15 @@ functional once the corresponding secret/service is supplied.
 - [ ] E3. Subscriptions/billing service (if in scope)
 - [ ] E4. Admin/moderation APIs
 - [ ] E5. Android release signing + Play pipeline. ⚠️ needs keystore
-- [ ] E6. Remove dead stubs (voice/linphone, transport/*, empty feature modules) or integrate if useful
+- [~] E6. Removed dead forked Linphone engine (voice/linphone). transport/* kept (referenced by CallRouteEngine/tests); empty feature modules kept as placeholders for planned screens.
 - [ ] E7. Reconcile stale docs with implementation
+
+## Android client wiring status
+- [x] API client methods added for push tokens, call history/telemetry, messaging, conferences (`core/network/ViroApiService.kt`).
+- [ ] A6. FCM receiver + token registration on login. ⚠️ needs `google-services.json` + Firebase deps
+- [ ] B5. Messages inbox screen + Room persistence + receipts (API client ready)
+- [ ] D2. Group mesh client wiring in ConferenceManager/GroupCallScreen (signaling API ready)
+- [ ] E1. Settings screens, blocked-list UI, country picker
 
 ## External inputs required (please provide when ready)
 - SMS provider credentials (for A1): `OTP_PROVIDER`, `SMS_API_URL`/`SMS_API_KEY`/`SMS_FROM` (or Twilio SID/token/from).

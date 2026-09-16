@@ -56,6 +56,40 @@ interface ViroApiService {
 
     @GET("api/v1/offline-trust/call-tickets")
     suspend fun getOfflineCallTickets(): OfflineCallTicketsResponse
+
+    // --- Push notifications ---
+    @POST("api/v1/push/tokens")
+    suspend fun registerPushToken(@Body body: RegisterPushTokenBody)
+
+    @HTTP(method = "DELETE", path = "api/v1/push/tokens", hasBody = true)
+    suspend fun removePushToken(@Body body: RemovePushTokenBody)
+
+    // --- Call history / telemetry ---
+    @GET("api/v1/calls/history")
+    suspend fun getCallHistory(): List<CallHistoryEntry>
+
+    @POST("api/v1/calls/{callId}/events")
+    suspend fun postCallQuality(@Path("callId") callId: String, @Body body: CallQualityBody)
+
+    // --- Messaging ---
+    @POST("api/v1/messages")
+    suspend fun sendMessage(@Body body: SendMessageBody): SendMessageResponse
+
+    @GET("api/v1/messages/conversations")
+    suspend fun listConversations(): List<ConversationSummary>
+
+    @GET("api/v1/messages/conversations/{id}")
+    suspend fun conversationHistory(@Path("id") id: String): List<MessageDto>
+
+    @POST("api/v1/messages/conversations/{id}/read")
+    suspend fun markConversationRead(@Path("id") id: String)
+
+    // --- Conferences (group calls) ---
+    @POST("api/v1/conferences")
+    suspend fun createConference(@Body body: CreateConferenceBody): CreateConferenceResponse
+
+    @GET("api/v1/conferences/{id}/participants")
+    suspend fun conferenceParticipants(@Path("id") id: String): List<ConferenceParticipantDto>
 }
 
 data class OtpRequestBody(val phoneE164: String)
@@ -92,3 +126,63 @@ data class OfflineTrustEntry(
 )
 data class OfflineCallTicketsResponse(val tickets: List<OfflineCallTicket>, val syncedAt: String)
 data class OfflineCallTicket(val ticket: String, val peerUserId: String, val expiresAt: String)
+
+// Push
+data class RegisterPushTokenBody(val token: String, val provider: String = "fcm")
+data class RemovePushTokenBody(val token: String)
+
+// Call history / telemetry
+data class CallHistoryEntry(
+    val id: String,
+    val callerUserId: String,
+    val calleeUserId: String,
+    val status: String,
+    val routeType: String?,
+    val startedAt: String?,
+    val answeredAt: String?,
+    val endedAt: String?,
+)
+data class CallQualityBody(
+    val latency: Double? = null,
+    val jitter: Double? = null,
+    val packetLoss: Double? = null,
+    val bitrate: Double? = null,
+    val codec: String? = null,
+    val route: String? = null,
+    val relayed: Boolean? = null,
+)
+
+// Messaging
+data class SendMessageBody(
+    val toUserId: String? = null,
+    val conversationId: String? = null,
+    val body: String,
+    val clientMsgId: String? = null,
+)
+data class MessageDto(
+    val id: String,
+    val conversationId: String,
+    val senderUserId: String,
+    val body: String?,
+    val type: String,
+    val clientMsgId: String?,
+    val createdAt: String,
+)
+data class SendMessageResponse(val conversationId: String, val message: MessageDto)
+data class ConversationSummary(
+    val id: String,
+    val isGroup: Boolean,
+    val title: String?,
+    val participants: List<String>,
+    val lastMessage: MessageDto?,
+    val unread: Int,
+    val updatedAt: String,
+)
+
+// Conferences
+data class CreateConferenceBody(
+    val inviteeUserIds: List<String> = emptyList(),
+    val title: String? = null,
+)
+data class CreateConferenceResponse(val roomId: String, val allowed: List<String>)
+data class ConferenceParticipantDto(val userId: String, val deviceId: String)
