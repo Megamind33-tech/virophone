@@ -19,6 +19,8 @@ import { SignalingModule } from './signaling/signaling.module';
 import { TurnModule } from './turn/turn.module';
 import { OfflineTrustModule } from './offline-trust/offline-trust.module';
 import { PushModule } from './push/push.module';
+import { RealtimeModule } from './realtime/realtime.module';
+import { MessagesModule } from './messages/messages.module';
 
 @Module({
   imports: [
@@ -53,6 +55,8 @@ import { PushModule } from './push/push.module';
     TurnModule,
     OfflineTrustModule,
     PushModule,
+    RealtimeModule,
+    MessagesModule,
   ],
 })
 export class AppModule {}

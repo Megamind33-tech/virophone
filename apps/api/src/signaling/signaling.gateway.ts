@@ -7,6 +7,8 @@ import {
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
+import { OnModuleInit } from '@nestjs/common';
+import { RealtimeRegistry } from '../realtime/realtime.registry';
 import { Server } from 'ws';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -50,7 +52,9 @@ export interface SignalingEnvelope {
 }
 
 @WebSocketGateway({ path: '/api/v1/signaling/ws' })
-export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class SignalingGateway
+  implements OnGatewayConnection, OnGatewayDisconnect, OnModuleInit
+{
   @WebSocketServer()
   server!: Server;
 
@@ -60,9 +64,19 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     private readonly presenceService: PresenceService,
     private readonly callSessionService: CallSessionService,
     private readonly callsService: CallsService,
+    private readonly realtimeRegistry: RealtimeRegistry,
     @InjectRepository(Device) private readonly deviceRepo: Repository<Device>,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
   ) {}
+
+  onModuleInit(): void {
+    // Let server-side producers (messages, etc.) deliver frames over the sockets
+    // this gateway owns.
+    this.realtimeRegistry.registerSink({
+      deliverToDevice: (deviceId, message) =>
+        this.deliverToDevice(deviceId, message),
+    });
+  }
 
   async handleConnection(client: AuthenticatedSocket, ...args: unknown[]) {
     try {

@@ -14,10 +14,10 @@ functional once the corresponding secret/service is supplied.
 - [ ] A6. Android: FCM receiver → wake incoming-call UI; register push token on login
 
 ## Phase B — Messaging as a real subsystem
-- [ ] B1. Schema: `conversations`, `conversation_participants`, `messages`, `message_receipts`
-- [ ] B2. REST: send message, list conversations, message history, mark read
-- [ ] B3. Realtime delivery via signaling gateway + offline queue + push fanout
-- [ ] B4. Multi-device fanout for messages
+- [x] B1. Schema: `conversations`, `conversation_participants`, `messages`, `message_receipts`
+- [x] B2. REST: send message, list conversations, message history, mark read
+- [x] B3. Realtime delivery via realtime registry + push fallback when offline
+- [x] B4. Multi-device fanout for messages (via realtime registry / push)
 - [ ] B5. Android: Messages/Inbox tab + conversation list; persist chat in Room; receipts
 
 ## Phase C — Scale & reliability
