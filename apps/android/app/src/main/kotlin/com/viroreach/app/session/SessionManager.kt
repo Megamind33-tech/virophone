@@ -6,6 +6,7 @@ import com.viroreach.app.consumer.ContactsCoordinator
 import com.viroreach.app.consumer.data.CallHistoryStore
 import com.viroreach.app.consumer.data.ConferenceManager
 import com.viroreach.app.consumer.data.MessagesStore
+import com.viroreach.app.consumer.data.ServerMessagesRepository
 import com.viroreach.app.personalization.ProfileRepository
 import com.viroreach.app.personalization.ViroAppearanceManager
 import com.viroreach.core.model.CallStateMachineState
@@ -40,6 +41,7 @@ class SessionManager private constructor(context: Context) {
     val networkMonitor: NetworkMonitor = NetworkMonitor(appContext)
     val callHistoryStore: CallHistoryStore = CallHistoryStore(appContext)
     val messagesStore: MessagesStore = MessagesStore()
+    val serverMessagesRepository: ServerMessagesRepository = ServerMessagesRepository(api)
     val conferenceManager: ConferenceManager = ConferenceManager(this, appContext)
     val appearanceManager: ViroAppearanceManager = ViroAppearanceManager(appContext)
     val profileRepository: ProfileRepository = ProfileRepository(

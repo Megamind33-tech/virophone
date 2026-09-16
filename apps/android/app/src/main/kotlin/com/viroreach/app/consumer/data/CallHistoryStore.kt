@@ -163,6 +163,30 @@ class CallHistoryStore(context: Context) {
         scope.launch { persist() }
     }
 
+    /**
+     * Merges server call history into the local log. Server rows win on id
+     * collision; local-only entries (in-progress / never synced) are kept.
+     */
+    fun mergeServerHistory(serverEntries: List<CallLogEntry>) {
+        if (serverEntries.isEmpty()) return
+        val byId = LinkedHashMap<String, CallLogEntry>()
+        _entries.value.forEach { byId[it.id] = it }
+        serverEntries.forEach { remote ->
+            val local = byId[remote.id]
+            byId[remote.id] = if (local == null) {
+                remote
+            } else {
+                remote.copy(
+                    name = remote.name.ifBlank { local.name },
+                    phoneE164 = remote.phoneE164 ?: local.phoneE164,
+                    durationSeconds = maxOf(remote.durationSeconds, local.durationSeconds),
+                )
+            }
+        }
+        _entries.value = byId.values.sortedByDescending { it.timestampMs }
+        scope.launch { persist() }
+    }
+
     fun historyForPhone(phoneE164: String): List<CallLogEntry> {
         val normalized = phoneE164.trim()
         return _entries.value.filter { it.phoneE164 == normalized }

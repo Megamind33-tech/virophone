@@ -250,6 +250,7 @@ fun ViroErrorMessage(message: String, modifier: Modifier = Modifier) {
 enum class ViroConsumerTab {
     Home,
     Contacts,
+    Messages,
     Calls,
     You,
 }
@@ -271,6 +272,12 @@ fun ViroBottomNavigation(
             selected = selected == ViroConsumerTab.Contacts,
             onClick = { onSelect(ViroConsumerTab.Contacts) },
             label = { Text("Contacts") },
+            icon = {},
+        )
+        NavigationBarItem(
+            selected = selected == ViroConsumerTab.Messages,
+            onClick = { onSelect(ViroConsumerTab.Messages) },
+            label = { Text("Messages") },
             icon = {},
         )
         NavigationBarItem(

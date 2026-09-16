@@ -11,21 +11,21 @@ functional once the corresponding secret/service is supplied.
 - [x] A3. Push sender abstraction (FCM) + call-invite push on authorize when callee offline. ⚠️ needs FCM key
 - [x] A4. Call lifecycle persistence: RINGING/ACTIVE/answered_at from signaling
 - [x] A5. Call quality telemetry: `/calls/:id/events` persists to `call_quality`
-- [ ] A6. Android: FCM receiver → wake incoming-call UI; register push token on login
+- [ ] A6. Android: FCM receiver → wake incoming-call UI; register push token on login ⚠️
 
 ## Phase B — Messaging as a real subsystem
 - [x] B1. Schema: `conversations`, `conversation_participants`, `messages`, `message_receipts`
 - [x] B2. REST: send message, list conversations, message history, mark read
 - [x] B3. Realtime delivery via realtime registry + push fallback when offline
 - [x] B4. Multi-device fanout for messages (via realtime registry / push)
-- [x] B5. Android chat is server-backed (send/history/`message.new`). Dedicated inbox tab is optional; chat is reachable from contacts/calls.
+- [x] B5. Android chat is server-backed (send/history/`message.new`) **and** dedicated Messages inbox tab syncs conversations from the API
 
 ## Phase C — Scale & reliability
 - [x] C1. Redis pub/sub delivery bus → multi-instance signaling + messaging
 - [x] C2. Multi-device call ring-all: authorize stores every online callee device; invite/offer/ICE fan out until the first device answers; others receive `call.busy`
 - [x] C3. Apply global ThrottlerGuard; register ApiExceptionFilter
 - [x] C4. Offline-trust call ticket accepted as an alternative authorization in `authorize`
-- [x] C5. List endpoints: `GET /connections`, `GET /blocks`, `GET /calls/history`
+- [x] C5. List endpoints: `GET /connections`, `GET /blocks`, `GET /calls/history` (history enriched with peer display name + direction)
 - [x] C6. Observability: `GET /health/metrics` (HTTP/WS/TURN/call counters)
 
 ## Phase D — Group calling
@@ -35,24 +35,28 @@ functional once the corresponding secret/service is supplied.
 - [ ] D4. (If needed for large groups) SFU integration. ⚠️ needs SFU service
 
 ## Phase E — Product completeness & launch
-- [x] E1. Android Settings: blocked-contacts list, login country picker, Help. Notifications remain deferred until FCM (A6).
-- [x] E2. Account deletion (`DELETE /api/v1/me`) and GDPR export (`GET /api/v1/me/export`)
-- [ ] E3. Subscriptions/billing service (if in scope)
+- [x] E1. Android Settings: blocked-contacts list, login country picker, Help, devices, connections, calling privacy, account export share. Notifications remain deferred until FCM (A6).
+- [x] E2. Account deletion (`DELETE /api/v1/me`) and GDPR export (`GET /api/v1/me/export`) + Android “Download my data”
+- [x] E3. Subscriptions/billing **stub**: `GET /plans`, `GET|POST /me/subscription` (Free/Plus seed, no Stripe/Play yet) + Android Subscription screen
 - [x] E4. Admin/moderation APIs (`/api/v1/admin/*`) via `X-Admin-Key` or ADMIN/SECURITY_ADMIN role
 - [ ] E5. Android release signing + Play pipeline. ⚠️ needs keystore
 - [~] E6. Removed dead forked Linphone engine (voice/linphone). transport/* kept (referenced by CallRouteEngine/tests); empty feature modules kept as placeholders for planned screens.
-- [x] E7. Docs reconciled with current calling/messaging/conference/admin surface
+- [x] E7. Docs reconciled with current calling/messaging/conference/admin/subscription surface
 
 ## Android client wiring status
-- [x] API client methods added for push tokens, call history/telemetry, messaging, conferences, account export/delete (`core/network/ViroApiService.kt`).
+- [x] API client methods for push, call history/telemetry, messaging, conferences, account export/delete, devices, connections, plans/subscription
 - [ ] A6. FCM receiver + token registration on login. ⚠️ needs `google-services.json` + Firebase deps
-- [x] B5. Messaging is server-backed end to end: ChatScreen sends via the API (persist/deliver/push), inbound `message.new` frames surface via CallManager and land in the peer's conversation. (Dedicated inbox tab optional; chat reachable from contacts/calls.)
+- [x] B5. Messages inbox tab + ChatScreen history hydrate / server send
+- [x] Calls tab merges server `GET /calls/history` into local call log
 - [x] D2. Group mesh client wiring in ConferenceManager/GroupCallScreen
-- [x] E1. Help, blocked-list UI, country picker
+- [x] E1. Help, blocked-list, country picker, devices, connections, calling privacy, export
+- [x] E3. Subscription preview screen
 
 ## External inputs required (please provide when ready)
 - SMS provider credentials (for A1): `OTP_PROVIDER`, `SMS_API_URL`/`SMS_API_KEY`/`SMS_FROM` (or Twilio SID/token/from).
 - FCM credentials (for A3/A6): `FCM_SERVER_KEY` (or service account) + `google-services.json` for Android.
 - Object storage (for D3) and SFU (for D4) if large group calls are required.
+- Play Billing / Stripe (to replace E3 stub with real charges).
+- Android release keystore (for E5).
 - Two physical Android devices for final end-to-end media verification.
 - Optional `ADMIN_API_KEY` for the moderation API (or promote a user `admin_role` to `ADMIN`).

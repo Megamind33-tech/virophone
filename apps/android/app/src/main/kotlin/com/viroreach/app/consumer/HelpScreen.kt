@@ -48,13 +48,23 @@ fun HelpScreen(onBack: () -> Unit) {
                 )
                 HelpCard(
                     title = "Messages",
-                    body = "Open a contact and tap Message. Texts send through Viro’s servers so they arrive " +
-                        "even if the other person is offline, then sync when they reconnect.",
+                    body = "Open the Messages tab for your inbox, or message someone from Contacts or Calls. " +
+                        "Texts send through Viro’s servers so they arrive even if the other person is offline.",
+                )
+                HelpCard(
+                    title = "Connections & privacy",
+                    body = "You → Connections to accept or reject invites. You → Calling privacy chooses whether " +
+                        "only connections or anyone with your Viro ID can call you. You → Devices signs out other devices.",
                 )
                 HelpCard(
                     title = "Blocked contacts",
                     body = "You → Privacy → Blocked contacts. Unblock someone there. " +
                         "Blocked people cannot call or message you.",
+                )
+                HelpCard(
+                    title = "Download my data",
+                    body = "You → Download my data exports a JSON copy of your profile, calls, blocks, and messages " +
+                        "you can share or save.",
                 )
                 HelpCard(
                     title = "Sign in",

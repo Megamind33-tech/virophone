@@ -56,6 +56,10 @@ import com.viroreach.app.consumer.data.CallLogType
 
 import com.viroreach.app.consumer.messages.ChatScreen
 
+import com.viroreach.app.consumer.messages.MessagesInboxScreen
+
+import com.viroreach.app.consumer.data.syncFromServer
+
 import com.viroreach.app.developer.DeveloperHarnessScreen
 
 import com.viroreach.app.personalization.AppearanceScreen
@@ -101,6 +105,12 @@ enum class ConsumerOverlay {
     BlockedContacts,
 
     Help,
+
+    Devices,
+
+    Connections,
+
+    Subscription,
 
 }
 
@@ -489,6 +499,38 @@ fun ConsumerNav(
 
         }
 
+        ConsumerOverlay.Devices -> {
+
+            DevicesScreen(
+
+                session = session,
+
+                onBack = { overlay = ConsumerOverlay.None },
+
+                onLogout = onLogout,
+
+            )
+
+            return
+
+        }
+
+        ConsumerOverlay.Connections -> {
+
+            ConnectionsScreen(session = session, onBack = { overlay = ConsumerOverlay.None })
+
+            return
+
+        }
+
+        ConsumerOverlay.Subscription -> {
+
+            SubscriptionScreen(session = session, onBack = { overlay = ConsumerOverlay.None })
+
+            return
+
+        }
+
         ConsumerOverlay.ContactDetail -> {
 
             val contact = selectedContact
@@ -824,6 +866,20 @@ fun ConsumerNav(
 
                 )
 
+                ViroConsumerTab.Messages -> MessagesInboxScreen(
+
+                    session = session,
+
+                    onOpenChat = { route ->
+
+                        chatRoute = route
+
+                        overlay = ConsumerOverlay.Chat
+
+                    },
+
+                )
+
                 ViroConsumerTab.Calls -> CallsScreen(
 
                     session = session,
@@ -928,6 +984,12 @@ fun ConsumerNav(
                     onEditProfile = { overlay = ConsumerOverlay.EditProfile },
 
                     onBlockedContacts = { overlay = ConsumerOverlay.BlockedContacts },
+
+                    onConnections = { overlay = ConsumerOverlay.Connections },
+
+                    onDevices = { overlay = ConsumerOverlay.Devices },
+
+                    onSubscription = { overlay = ConsumerOverlay.Subscription },
 
                     onHelp = { overlay = ConsumerOverlay.Help },
 

@@ -1,5 +1,6 @@
 package com.viroreach.app.consumer
 
+import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -8,12 +9,19 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.FileProvider
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.designsystem.ViroColors
 import com.viroreach.core.designsystem.ViroSpacing
 import com.viroreach.core.designsystem.components.*
 import com.viroreach.feature.contacts.PhoneNumberFormatter
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
 
 @Composable
 fun YouScreen(
@@ -23,9 +31,13 @@ fun YouScreen(
     onAppearance: () -> Unit,
     onEditProfile: () -> Unit,
     onBlockedContacts: () -> Unit,
+    onConnections: () -> Unit,
+    onDevices: () -> Unit,
+    onSubscription: () -> Unit,
     onHelp: () -> Unit,
     onLogout: () -> Unit,
 ) {
+    val context = LocalContext.current
     val viewModel = remember(session, showDeveloperEntry) {
         YouViewModel(session, showDeveloperEntry)
     }
@@ -36,12 +48,19 @@ fun YouScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var deleteError by remember { mutableStateOf<String?>(null) }
     var deleting by remember { mutableStateOf(false) }
+    var exportStatus by remember { mutableStateOf<String?>(null) }
+    var exporting by remember { mutableStateOf(false) }
+    var callingPrivacyExpanded by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         viewModel.refresh()
         session.profileRepository.refreshFromServer()
     }
     val state = viewModel.uiState
     val displayName = profile.displayName.ifBlank { "You" }
+    val callingLabel = when (profile.allowCallsFromViroId) {
+        "EXACT_ID_ALLOWED" -> "Anyone with my Viro ID"
+        else -> "Connections only"
+    }
 
     ViroScreenBackground {
         ViroSafeScreen {
@@ -82,20 +101,95 @@ fun YouScreen(
                         label = "Phone",
                         value = state.phoneE164?.let { PhoneNumberFormatter.formatE164International(it) } ?: "—",
                     )
+                    SettingsNavRow("Subscription", onSubscription)
                 }
                 SettingsSection(title = "Preferences") {
                     SettingsNavRow("Appearance", onAppearance)
-                    SettingsRow(label = "Calling", value = "Default")
+                    SettingsNavRow("Calling privacy") { callingPrivacyExpanded = true }
+                    SettingsRow(label = "Calling", value = callingLabel)
                     SettingsRow(label = "Notifications", value = "Coming soon")
                 }
                 SettingsSection(title = "Privacy & Security") {
+                    SettingsNavRow("Connections", onConnections)
                     SettingsNavRow("Blocked contacts", onBlockedContacts)
+                    SettingsNavRow("Devices", onDevices)
                 }
                 SettingsSection(title = "Support") {
                     SettingsNavRow("Help", onHelp)
                     SettingsRow(label = "About Viro", value = state.versionName)
                 }
                 SettingsSection(title = "Account data") {
+                    SettingsNavRow("Download my data") {
+                        if (exporting) return@SettingsNavRow
+                        scope.launch {
+                            exporting = true
+                            exportStatus = null
+                            runCatching {
+                                val export = session.api.exportAccount()
+                                val json = JSONObject().apply {
+                                    put("userId", export.userId)
+                                    put("exportedAt", export.exportedAt)
+                                    put("profile", JSONObject().apply {
+                                        put("displayName", export.profile?.displayName)
+                                        put("phoneE164", export.profile?.phoneE164)
+                                        put("viroId", export.profile?.viroId)
+                                    })
+                                    put("calls", JSONArray(export.calls.map {
+                                        JSONObject().apply {
+                                            put("id", it.id)
+                                            put("status", it.status)
+                                            put("startedAt", it.startedAt)
+                                        }
+                                    }))
+                                    put("blocks", JSONArray(export.blocks.map {
+                                        JSONObject().apply { put("blockedUserId", it.blockedUserId) }
+                                    }))
+                                    put("devices", JSONArray(export.devices.map {
+                                        JSONObject().apply {
+                                            put("id", it.id)
+                                            put("platform", it.platform)
+                                        }
+                                    }))
+                                    put("messages", JSONArray(export.messages.map {
+                                        JSONObject().apply {
+                                            put("id", it.id)
+                                            put("body", it.body)
+                                        }
+                                    }))
+                                }.toString(2)
+                                val file = withContext(Dispatchers.IO) {
+                                    File(context.cacheDir, "viro-export-${System.currentTimeMillis()}.json").also {
+                                        it.writeText(json)
+                                    }
+                                }
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    file,
+                                )
+                                context.startActivity(
+                                    Intent.createChooser(
+                                        Intent(Intent.ACTION_SEND).apply {
+                                            type = "application/json"
+                                            putExtra(Intent.EXTRA_STREAM, uri)
+                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        },
+                                        "Share account export",
+                                    ),
+                                )
+                                exportStatus = "Export ready"
+                            }.onFailure {
+                                exportStatus = "Couldn't export account data"
+                            }
+                            exporting = false
+                        }
+                    }
+                    if (exporting) {
+                        Text("Preparing export…", color = ViroColors.textSecondary)
+                    }
+                    exportStatus?.let {
+                        Text(it, color = ViroColors.textSecondary, style = MaterialTheme.typography.bodySmall)
+                    }
                     SettingsNavRow("Delete account") { confirmDelete = true }
                     deleteError?.let {
                         Text(it, color = ViroColors.textSecondary, style = MaterialTheme.typography.bodySmall)
@@ -115,6 +209,32 @@ fun YouScreen(
                 )
             }
         }
+    }
+
+    if (callingPrivacyExpanded) {
+        AlertDialog(
+            onDismissRequest = { callingPrivacyExpanded = false },
+            title = { Text("Who can call you?") },
+            text = {
+                Column {
+                    TextButton(onClick = {
+                        scope.launch {
+                            session.profileRepository.setAllowCallsFromViroId("CONNECTIONS_ONLY")
+                            callingPrivacyExpanded = false
+                        }
+                    }) { Text("Connections only") }
+                    TextButton(onClick = {
+                        scope.launch {
+                            session.profileRepository.setAllowCallsFromViroId("EXACT_ID_ALLOWED")
+                            callingPrivacyExpanded = false
+                        }
+                    }) { Text("Anyone with my Viro ID") }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { callingPrivacyExpanded = false }) { Text("Close") }
+            },
+        )
     }
 
     if (confirmDelete) {
@@ -196,4 +316,3 @@ private fun SettingsRow(label: String, value: String) {
         Text(value, style = MaterialTheme.typography.bodyMedium, color = ViroColors.textSecondary)
     }
 }
-

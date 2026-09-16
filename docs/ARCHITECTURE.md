@@ -139,6 +139,7 @@ NestJS modules in `apps/api/src/app.module.ts`:
 | `ConferenceModule` | `conference.controller.ts` | Mesh group-call rooms |
 | `PushModule` | `push.controller.ts` | Device push-token registration |
 | `AdminModule` | `admin.controller.ts` | User lookup/suspend, security events |
+| `SubscriptionsModule` | `subscriptions.controller.ts` | Plans list + stub Free/Plus selection |
 | `SecurityModule` | — | `SecurityService` — audit event logging |
 | `HealthModule` | `health.controller.ts` | Liveness, readiness, `/health/metrics` |
 | `MetricsModule` | — | In-process HTTP/WS/TURN counters |

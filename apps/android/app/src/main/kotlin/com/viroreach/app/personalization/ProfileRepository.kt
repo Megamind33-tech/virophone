@@ -21,6 +21,7 @@ data class UserProfile(
     val serverAvatarUrl: String? = null,
     val localPhotoUri: String? = null,
     val viroId: String? = null,
+    val allowCallsFromViroId: String = "CONNECTIONS_ONLY",
 ) {
     val effectivePhotoUrl: String? = serverAvatarUrl?.takeIf { it.isNotBlank() }
         ?: localPhotoUri?.takeIf { it.isNotBlank() }
@@ -42,6 +43,7 @@ class ProfileRepository(
             serverAvatarUrl = prefs[KEY_SERVER_AVATAR]?.ifBlank { null },
             localPhotoUri = prefs[KEY_LOCAL_PHOTO]?.ifBlank { null },
             viroId = prefs[KEY_VIRO_ID]?.ifBlank { null },
+            allowCallsFromViroId = prefs[KEY_ALLOW_CALLS] ?: "CONNECTIONS_ONLY",
         )
     }
 
@@ -71,6 +73,11 @@ class ProfileRepository(
         profile.first()
     }
 
+    suspend fun setAllowCallsFromViroId(value: String): Result<UserProfile> = runCatching {
+        applyMeResponse(api.updateMe(UpdateMeBody(allowCallsFromViroId = value)))
+        profile.first()
+    }
+
     private suspend fun applyMeResponse(me: com.viroreach.core.network.MeResponse) {
         store.edit { prefs ->
             prefs[KEY_USER_ID] = me.userId
@@ -78,6 +85,7 @@ class ProfileRepository(
             prefs[KEY_PHONE] = me.phoneE164
             prefs[KEY_SERVER_AVATAR] = me.avatarUrl.orEmpty()
             prefs[KEY_VIRO_ID] = me.viroId.orEmpty()
+            prefs[KEY_ALLOW_CALLS] = me.allowCallsFromViroId.ifBlank { "CONNECTIONS_ONLY" }
         }
     }
 
@@ -88,5 +96,6 @@ class ProfileRepository(
         private val KEY_SERVER_AVATAR = stringPreferencesKey("server_avatar")
         private val KEY_LOCAL_PHOTO = stringPreferencesKey("local_photo_uri")
         private val KEY_VIRO_ID = stringPreferencesKey("viro_id")
+        private val KEY_ALLOW_CALLS = stringPreferencesKey("allow_calls_from_viro_id")
     }
 }

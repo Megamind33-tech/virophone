@@ -39,6 +39,33 @@ interface ViroApiService {
     @POST("api/v1/connections")
     suspend fun inviteConnection(@Body body: ConnectionInviteBody): ConnectionInviteResponse
 
+    @GET("api/v1/connections")
+    suspend fun listConnections(): List<ConnectionDto>
+
+    @POST("api/v1/connections/{id}/accept")
+    suspend fun acceptConnection(@Path("id") id: String): ConnectionDto
+
+    @POST("api/v1/connections/{id}/reject")
+    suspend fun rejectConnection(@Path("id") id: String): ConnectionDto
+
+    @DELETE("api/v1/connections/{id}")
+    suspend fun revokeConnection(@Path("id") id: String)
+
+    @GET("api/v1/devices")
+    suspend fun listDevices(): List<DeviceSummary>
+
+    @DELETE("api/v1/devices/{id}")
+    suspend fun revokeDevice(@Path("id") id: String)
+
+    @GET("api/v1/plans")
+    suspend fun listPlans(): List<PlanDto>
+
+    @GET("api/v1/me/subscription")
+    suspend fun getMySubscription(): SubscriptionDto
+
+    @POST("api/v1/me/subscription")
+    suspend fun selectSubscription(@Body body: SelectPlanBody): SubscriptionDto
+
     @POST("api/v1/contacts/discover")
     suspend fun discoverContacts(@Body body: DiscoverBody): DiscoverResponse
 
@@ -116,15 +143,54 @@ data class AccountExport(
     val calls: List<CallHistoryEntry> = emptyList(),
     val connections: List<ConnectionInviteResponse> = emptyList(),
     val blocks: List<BlockedUser> = emptyList(),
+    val devices: List<DeviceSummary> = emptyList(),
+    val messages: List<ExportedMessage> = emptyList(),
+)
+data class ExportedMessage(
+    val id: String,
+    val conversationId: String,
+    val body: String?,
+    val createdAt: String?,
 )
 data class UpdateMeBody(
     val displayName: String? = null,
     val avatarUrl: String? = null,
+    val viroId: String? = null,
+    val allowCallsFromViroId: String? = null,
 )
 data class BlockUserBody(val blockedUserId: String)
 data class BlockedUser(val blockedUserId: String)
 data class ConnectionInviteBody(val targetUserId: String)
 data class ConnectionInviteResponse(val id: String, val status: String)
+data class ConnectionDto(
+    val id: String,
+    val requesterUserId: String,
+    val recipientUserId: String,
+    val status: String,
+    val direction: String,
+)
+data class DeviceSummary(
+    val id: String,
+    val platform: String,
+    val appVersion: String,
+    val createdAt: String,
+    val lastSeenAt: String,
+)
+data class PlanDto(
+    val id: String,
+    val name: String,
+    val description: String?,
+    val isActive: Boolean = true,
+)
+data class SubscriptionDto(
+    val planId: String?,
+    val planName: String,
+    val description: String?,
+    val status: String,
+    val expiresAt: String?,
+    val isDefault: Boolean = false,
+)
+data class SelectPlanBody(val planId: String)
 data class DiscoverBody(val phonesE164: List<String>, val defaultRegion: String? = "ZM")
 data class DiscoverResponse(val matches: List<ContactDiscoveryMatch>)
 data class AuthorizeCallBody(
@@ -164,6 +230,9 @@ data class CallHistoryEntry(
     val startedAt: String?,
     val answeredAt: String?,
     val endedAt: String?,
+    val peerUserId: String? = null,
+    val peerDisplayName: String? = null,
+    val direction: String? = null,
 )
 data class CallQualityBody(
     val latency: Double? = null,

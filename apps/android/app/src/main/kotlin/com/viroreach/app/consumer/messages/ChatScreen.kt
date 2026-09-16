@@ -25,6 +25,7 @@ import com.viroreach.core.designsystem.components.ViroBackButton
 import com.viroreach.core.designsystem.components.ViroSafeScreen
 import com.viroreach.core.designsystem.components.ViroScreenBackground
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 @Composable
 fun ChatScreen(
@@ -37,26 +38,52 @@ fun ChatScreen(
     onBack: () -> Unit,
 ) {
     val store = session.messagesStore
-    val messages by store.conversationMessages(conversationId).collectAsState()
+    var activeConversationId by remember(conversationId) { mutableStateOf(conversationId) }
+    val messages by store.conversationMessages(activeConversationId).collectAsState()
     val conversations by store.conversations.collectAsState()
     var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val currentUserId = session.tokenStore.getUserId()
 
     val conversationPhone = peerPhoneE164
-        ?: conversations.find { it.id == conversationId }?.phoneE164
-    var resolvedAvatarUrl by remember(conversationId, peerAvatarUrl, conversationPhone) {
+        ?: conversations.find { it.id == activeConversationId }?.phoneE164
+    var resolvedAvatarUrl by remember(activeConversationId, peerAvatarUrl, conversationPhone) {
         mutableStateOf(peerAvatarUrl)
     }
-    var resolvedName by remember(conversationId, peerName) { mutableStateOf(peerName) }
+    var resolvedName by remember(activeConversationId, peerName) { mutableStateOf(peerName) }
 
-    LaunchedEffect(conversationId, conversationPhone, peerAvatarUrl, peerName) {
+    LaunchedEffect(conversationId, peerUserId) {
+        val userId = currentUserId
+        // Prefer server conversation when we know the peer.
+        if (peerUserId != null) {
+            runCatching {
+                val remote = session.serverMessagesRepository.listConversations(userId)
+                val match = remote.find { it.peerUserId == peerUserId }
+                if (match != null) {
+                    store.upsertConversation(match)
+                    activeConversationId = match.id
+                }
+            }
+        }
+        runCatching {
+            val history = session.serverMessagesRepository.history(activeConversationId, userId)
+            if (history.isNotEmpty()) store.replaceMessages(activeConversationId, history)
+        }
+        runCatching {
+            session.serverMessagesRepository.markRead(activeConversationId)
+            store.clearUnread(activeConversationId)
+        }
+    }
+
+    LaunchedEffect(activeConversationId, conversationPhone, peerAvatarUrl, peerName) {
         if (!peerAvatarUrl.isNullOrBlank()) {
             resolvedAvatarUrl = peerAvatarUrl
             resolvedName = peerName
             return@LaunchedEffect
         }
         val contact = conversationPhone?.let { session.contactsRepository.findByPhone(it) }
+            ?: peerUserId?.let { session.contactsRepository.findByUserId(it) }
         resolvedAvatarUrl = contact?.resolveAvatarUrl()
         resolvedName = contact?.effectiveDisplayName ?: peerName
     }
@@ -127,28 +154,38 @@ fun ChatScreen(
                     FilledIconButton(
                         onClick = {
                             if (draft.isBlank()) return@FilledIconButton
-                            val outgoing = draft
-                            store.sendMessage(conversationId, outgoing)
-                            // Persist + deliver via the server (survives offline,
-                            // reaches other devices, pushes when peer is away).
-                            if (peerUserId != null) {
-                                scope.launch {
-                                    runCatching {
-                                        session.api.sendMessage(
-                                            com.viroreach.core.network.SendMessageBody(
-                                                toUserId = peerUserId,
-                                                body = outgoing,
-                                                clientMsgId = java.util.UUID.randomUUID().toString(),
-                                            ),
-                                        )
-                                    }
-                                }
-                            } else {
-                                // No resolved Viro user (e.g. off-network peer) — best-effort LAN/relay chat.
-                                session.callManager.sendChatMessage(conversationId, peerUserId, outgoing)
-                            }
+                            val outgoing = draft.trim()
                             draft = ""
+                            store.sendMessage(activeConversationId, outgoing)
                             scope.launch {
+                                if (peerUserId != null) {
+                                    runCatching {
+                                        val knownServerId = conversations
+                                            .find { it.id == activeConversationId }
+                                            ?.takeIf { peerUserId != null }
+                                            ?.id
+                                        val serverConvId = session.serverMessagesRepository.send(
+                                            toUserId = peerUserId,
+                                            conversationId = knownServerId,
+                                            body = outgoing,
+                                            clientMsgId = UUID.randomUUID().toString(),
+                                        )
+                                        if (serverConvId != activeConversationId) {
+                                            activeConversationId = serverConvId
+                                        }
+                                        val history = session.serverMessagesRepository.history(
+                                            serverConvId,
+                                            currentUserId,
+                                        )
+                                        store.replaceMessages(serverConvId, history)
+                                    }
+                                } else {
+                                    session.callManager.sendChatMessage(
+                                        activeConversationId,
+                                        peerUserId,
+                                        outgoing,
+                                    )
+                                }
                                 if (messages.isNotEmpty()) {
                                     listState.animateScrollToItem(messages.lastIndex)
                                 }

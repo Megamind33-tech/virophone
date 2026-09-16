@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.viroreach.app.consumer.data.CallLogEntry
 import com.viroreach.app.consumer.data.CallLogType
+import com.viroreach.app.consumer.data.syncFromServer
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.designsystem.ViroColors
 import com.viroreach.core.designsystem.ViroSpacing
@@ -35,6 +36,10 @@ fun CallsScreen(
     var menuExpanded by remember { mutableStateOf(false) }
     val entries by session.callHistoryStore.entries.collectAsState()
     val grouped = remember(entries) { session.callHistoryStore.groupedByDate() }
+
+    LaunchedEffect(Unit) {
+        session.callHistoryStore.syncFromServer(session.api, session.tokenStore.getUserId())
+    }
 
     val filtered = entries.filter { entry ->
         val matchesFilter = when (filter) {

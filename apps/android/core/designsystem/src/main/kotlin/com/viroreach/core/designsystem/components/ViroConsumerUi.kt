@@ -723,6 +723,7 @@ fun ViroConsumerBottomBar(
         val tabs = listOf(
             ViroConsumerTab.Home to (Icons.Default.Home to "Home"),
             ViroConsumerTab.Contacts to (Icons.Default.Contacts to "Contacts"),
+            ViroConsumerTab.Messages to (Icons.Default.Email to "Messages"),
             ViroConsumerTab.Calls to (Icons.Default.Phone to "Calls"),
             ViroConsumerTab.You to (Icons.Default.AccountCircle to "You"),
         )
