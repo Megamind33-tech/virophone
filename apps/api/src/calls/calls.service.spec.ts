@@ -6,6 +6,8 @@ import { RedisService } from '../redis/redis.service';
 describe('CallsService - Authorization', () => {
   let service: CallsService;
   const mockCallRepo = { create: jest.fn(), save: jest.fn() };
+  const mockCallQualityRepo = { findOne: jest.fn(), create: jest.fn(), save: jest.fn() };
+  const mockPush = { sendToUser: jest.fn().mockResolvedValue(undefined) } as any;
   const mockMatchRepo = { findOne: jest.fn() };
   const mockConnectionRepo = { findOne: jest.fn() };
   const mockProfileRepo = { findOne: jest.fn() };
@@ -27,6 +29,7 @@ describe('CallsService - Authorization', () => {
     mockDeviceRepo.find.mockResolvedValue([{ id: 'callee-device' }]);
     service = new CallsService(
       mockCallRepo as any,
+      mockCallQualityRepo as any,
       mockMatchRepo as any,
       mockConnectionRepo as any,
       mockProfileRepo as any,
@@ -34,6 +37,7 @@ describe('CallsService - Authorization', () => {
       mockBlocks,
       mockCallSession,
       mockRedis,
+      mockPush,
     );
   });
 

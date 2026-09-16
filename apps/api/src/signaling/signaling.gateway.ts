@@ -16,6 +16,7 @@ import { User } from '../database/entities/user.entity';
 import { RedisService } from '../redis/redis.service';
 import { PresenceService } from '../presence/presence.service';
 import { CallSessionService } from '../calls/call-session.service';
+import { CallsService } from '../calls/calls.service';
 
 interface AuthenticatedSocket extends WebSocket {
   userId?: string;
@@ -58,6 +59,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     private readonly redis: RedisService,
     private readonly presenceService: PresenceService,
     private readonly callSessionService: CallSessionService,
+    private readonly callsService: CallsService,
     @InjectRepository(Device) private readonly deviceRepo: Repository<Device>,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
   ) {}
@@ -180,6 +182,13 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const nextState = stateTransitions[type];
     if (nextState) {
       await this.callSessionService.updateState(callId, nextState as 'RINGING');
+    }
+
+    // Mirror key lifecycle transitions into the durable calls table.
+    if (type === 'call.ringing') {
+      await this.callsService.markRinging(callId).catch(() => undefined);
+    } else if (type === 'call.answer') {
+      await this.callsService.markActive(callId).catch(() => undefined);
     }
 
     const delivered = this.deliverToDevice(recipientDeviceId, {

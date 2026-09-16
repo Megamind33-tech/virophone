@@ -10,7 +10,7 @@ import { Profile } from '../database/entities/profile.entity';
 import { Device } from '../database/entities/device.entity';
 import { Session } from '../database/entities/session.entity';
 import { OtpChallenge } from '../database/entities/otp-challenge.entity';
-import { ConsoleOtpProvider } from './otp/console-otp.provider';
+import { createOtpProvider } from './otp/otp-provider.factory';
 import { ViroException } from '../common/exceptions/viro.exception';
 import { normalizeE164, isValidE164 } from '../common/utils/phone.util';
 import { hashPhoneForStorage, hashRefreshToken } from '../common/utils/hash.util';
@@ -19,7 +19,7 @@ import { HttpStatus } from '@nestjs/common';
 
 @Injectable()
 export class AuthService {
-  private readonly otpProvider = new ConsoleOtpProvider();
+  private readonly otpProvider = createOtpProvider();
   private readonly maxOtpAttempts = parseInt(process.env.OTP_MAX_ATTEMPTS || '5', 10);
   private readonly otpExpiresSeconds = parseInt(process.env.OTP_EXPIRES_SECONDS || '300', 10);
 

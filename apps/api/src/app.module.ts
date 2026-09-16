@@ -18,6 +18,7 @@ import { PresenceModule } from './presence/presence.module';
 import { SignalingModule } from './signaling/signaling.module';
 import { TurnModule } from './turn/turn.module';
 import { OfflineTrustModule } from './offline-trust/offline-trust.module';
+import { PushModule } from './push/push.module';
 
 @Module({
   imports: [
@@ -51,6 +52,7 @@ import { OfflineTrustModule } from './offline-trust/offline-trust.module';
     SignalingModule,
     TurnModule,
     OfflineTrustModule,
+    PushModule,
   ],
 })
 export class AppModule {}

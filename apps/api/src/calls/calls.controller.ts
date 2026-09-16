@@ -1,7 +1,7 @@
-import { Controller, Post, Param, Body, UseGuards, Req } from '@nestjs/common';
+import { Controller, Post, Get, Param, Body, UseGuards, Req } from '@nestjs/common';
 import { CallsService } from './calls.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { IsString, IsNotEmpty, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean } from 'class-validator';
 
 class AuthorizeCallDto {
   @IsString()
@@ -11,6 +11,36 @@ class AuthorizeCallDto {
   @IsString()
   @IsOptional()
   preferredRoute?: string;
+}
+
+class CallQualityDto {
+  @IsNumber()
+  @IsOptional()
+  latency?: number;
+
+  @IsNumber()
+  @IsOptional()
+  jitter?: number;
+
+  @IsNumber()
+  @IsOptional()
+  packetLoss?: number;
+
+  @IsNumber()
+  @IsOptional()
+  bitrate?: number;
+
+  @IsString()
+  @IsOptional()
+  codec?: string;
+
+  @IsString()
+  @IsOptional()
+  route?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  relayed?: boolean;
 }
 
 @Controller('api/v1/calls')
@@ -31,13 +61,19 @@ export class CallsController {
     );
   }
 
+  @Get('history')
+  async history(@Req() req: { user: { sub: string } }) {
+    return this.callsService.history(req.user.sub);
+  }
+
   @Post(':id/end')
   async end(@Req() req: { user: { sub: string } }, @Param('id') id: string) {
     return this.callsService.endCall(id, req.user.sub);
   }
 
   @Post(':id/events')
-  async events(@Param('id') _id: string) {
+  async events(@Param('id') id: string, @Body() body: CallQualityDto) {
+    await this.callsService.recordQuality(id, body);
     return { received: true };
   }
 }
