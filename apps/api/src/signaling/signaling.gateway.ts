@@ -29,9 +29,11 @@ interface JwtPayload {
 
 export type SignalingEventType =
   | 'call.invite'
+  | 'call.incoming'
   | 'call.offer'
   | 'call.answer'
   | 'call.ice'
+  | 'call.iceRestart'
   | 'call.ringing'
   | 'call.accept'
   | 'call.reject'
@@ -168,6 +170,9 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const stateTransitions: Partial<Record<SignalingEventType, string>> = {
       'call.ringing': 'RINGING',
       'call.accept': 'CONNECTING',
+      // The answer carries the callee's SDP: media negotiation is under way, so
+      // the session is considered connected from the server's point of view.
+      'call.answer': 'ACTIVE',
       'call.end': 'ENDED',
       'call.reject': 'ENDED',
       'call.busy': 'ENDED',
@@ -177,7 +182,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       await this.callSessionService.updateState(callId, nextState as 'RINGING');
     }
 
-    this.deliverToDevice(recipientDeviceId, {
+    const delivered = this.deliverToDevice(recipientDeviceId, {
       type,
       callId,
       fromUserId: client.userId,
@@ -185,18 +190,28 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       payload,
     });
 
-    return { delivered: true };
+    if (delivered === 0) {
+      // The peer's socket is gone (app closed / lost connection). Tell the
+      // sender explicitly instead of leaving the call hanging in "connecting".
+      return { delivered: false, reason: 'peer_unreachable', recipients: 0 };
+    }
+
+    return { delivered: true, recipients: delivered };
   }
 
+  /** Delivers a message to every live socket for a device; returns the count. */
   private deliverToDevice(
     deviceId: string,
     message: Record<string, unknown>,
-  ) {
+  ): number {
+    let count = 0;
     this.server.clients.forEach((ws) => {
       const sock = ws as unknown as AuthenticatedSocket;
       if (sock.deviceId === deviceId && sock.readyState === 1) {
         sock.send(JSON.stringify(message));
+        count++;
       }
     });
+    return count;
   }
 }
