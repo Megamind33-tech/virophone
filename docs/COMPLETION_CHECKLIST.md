@@ -31,7 +31,7 @@ functional once the corresponding secret/service is supplied.
 ## Phase D — Group calling
 - [x] D1. Group call signaling: conference create/join/leave + participant fanout (mesh, small N)
 - [x] D2. Android mesh client: `ConferenceManager` + `MeshVoiceEngine` (one PeerConnection per remote device), `conf.join`/`conf.invite`/`conf.offer`/`conf.answer`/`conf.ice`
-- [ ] D3. Media/avatar object storage (upload API). ⚠️ needs storage bucket
+- [ ] D3. Media/avatar object storage (upload API). ⚠️ full bucket storage still needed; local avatar serve via `GET /api/v1/media/avatars/:file` exists
 - [ ] D4. (If needed for large groups) SFU integration. ⚠️ needs SFU service
 
 ## Phase E — Product completeness & launch
