@@ -316,7 +316,7 @@ export class SignalingGateway
       await this.realtimeRegistry.deliverToDevice(client.deviceId, {
         type: 'conf.joined',
         roomId,
-        participants,
+        payload: { participants },
       });
       return { joined: true, participants };
     }

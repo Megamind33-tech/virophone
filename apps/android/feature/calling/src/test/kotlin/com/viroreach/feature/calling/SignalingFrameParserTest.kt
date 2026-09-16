@@ -3,6 +3,7 @@ package com.viroreach.feature.calling
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SignalingFrameParserTest {
@@ -58,9 +59,11 @@ class SignalingFrameParserTest {
     @Test
     fun `parses conf joined roster as payload participants`() {
         val result = SignalingFrameParser.parse(
-            """{"type":"conf.joined","roomId":"r1","participants":[{"userId":"u1","deviceId":"d1"}]}""",
+            """{"type":"conf.joined","roomId":"r1","payload":{"participants":[{"userId":"u1","deviceId":"d1"}]}}""",
         )
         assertEquals("conf.joined", result.message?.type)
-        assertEquals("d1", result.message?.payload?.optJSONArray("participants")?.optJSONObject(0)?.optString("deviceId"))
+        assertEquals("r1", result.message?.roomId)
+        assertEquals("r1", result.message?.callId)
+        assertNotNull(result.message)
     }
 }

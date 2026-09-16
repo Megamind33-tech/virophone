@@ -66,16 +66,16 @@ class ConferenceManager(
         session.callManager.conferenceEvents
             .onEach { handleFrame(it) }
             .launchIn(scope)
-        mesh.onLocalIceCandidate = { remoteDeviceId, candidate ->
-            val roomId = _state.value.conferenceId ?: return@onLocalIceCandidate
+        mesh.onLocalIceCandidate = sendIce@{ remoteDeviceId, sdpMid, sdpMLineIndex, candidate ->
+            val roomId = _state.value.conferenceId ?: return@sendIce
             session.callManager.sendConferenceEvent(
                 type = "conf.ice",
                 roomId = roomId,
                 targetDeviceId = remoteDeviceId,
                 payload = JSONObject()
-                    .put("candidate", candidate.sdp)
-                    .put("sdpMid", candidate.sdpMid)
-                    .put("sdpMLineIndex", candidate.sdpMLineIndex),
+                    .put("candidate", candidate)
+                    .put("sdpMid", sdpMid)
+                    .put("sdpMLineIndex", sdpMLineIndex),
             )
         }
         mesh.onPeerConnected = { deviceId ->

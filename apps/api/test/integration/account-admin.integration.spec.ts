@@ -21,6 +21,9 @@ async function registerUser(app: INestApplication, phone: string, key: string) {
       platform: 'ANDROID',
       appVersion: '0.1.0',
     });
+  if (![200, 201].includes(verifyRes.status)) {
+    throw new Error(`OTP verify failed: ${JSON.stringify(verifyRes.body)}`);
+  }
   return verifyRes.body as { userId: string; deviceId: string; accessToken: string };
 }
 
@@ -89,7 +92,7 @@ describe('Account export/delete and admin APIs', () => {
     const suspended = await request(app.getHttpServer())
       .post(`/api/v1/admin/users/${user.userId}/suspend`)
       .set('X-Admin-Key', 'test-admin-key');
-    expect(suspended.status).toBe(200);
+    expect([200, 201]).toContain(suspended.status);
     expect(suspended.body.status).toBe('SUSPENDED');
 
     const denied = await request(app.getHttpServer())

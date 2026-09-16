@@ -34,7 +34,12 @@ class MeshVoiceEngine(context: Context) {
     private var audioConfigured = false
     private var priorAudioMode = AudioManager.MODE_NORMAL
 
-    var onLocalIceCandidate: ((remoteDeviceId: String, IceCandidate) -> Unit)? = null
+    var onLocalIceCandidate: ((
+        remoteDeviceId: String,
+        sdpMid: String,
+        sdpMLineIndex: Int,
+        candidate: String,
+    ) -> Unit)? = null
     var onPeerConnected: ((remoteDeviceId: String) -> Unit)? = null
     var onPeerDisconnected: ((remoteDeviceId: String) -> Unit)? = null
 
@@ -100,7 +105,14 @@ class MeshVoiceEngine(context: Context) {
             override fun onIceConnectionReceivingChange(receiving: Boolean) {}
             override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {}
             override fun onIceCandidate(candidate: IceCandidate?) {
-                candidate?.let { onLocalIceCandidate?.invoke(remoteDeviceId, it) }
+                candidate?.let {
+                    onLocalIceCandidate?.invoke(
+                        remoteDeviceId,
+                        it.sdpMid ?: "",
+                        it.sdpMLineIndex,
+                        it.sdp,
+                    )
+                }
             }
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
             override fun onAddStream(stream: MediaStream?) {
