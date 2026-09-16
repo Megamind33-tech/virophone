@@ -108,7 +108,11 @@ data class ConnectionInviteBody(val targetUserId: String)
 data class ConnectionInviteResponse(val id: String, val status: String)
 data class DiscoverBody(val phonesE164: List<String>, val defaultRegion: String? = "ZM")
 data class DiscoverResponse(val matches: List<ContactDiscoveryMatch>)
-data class AuthorizeCallBody(val targetUserId: String, val preferredRoute: String? = null)
+data class AuthorizeCallBody(
+    val targetUserId: String,
+    val preferredRoute: String? = null,
+    val offlineTicket: String? = null,
+)
 data class AuthorizeCallResponse(val callId: String, val authorized: Boolean, val expiresAt: String, val routeType: String, val sessionMaterial: Map<String, String>?)
 data class RegisterEphemeralBody(val ephemeralId: String)
 data class RegisterEphemeralResponse(val expiresAt: String)

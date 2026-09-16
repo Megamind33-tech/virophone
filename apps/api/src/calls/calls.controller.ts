@@ -11,6 +11,10 @@ class AuthorizeCallDto {
   @IsString()
   @IsOptional()
   preferredRoute?: string;
+
+  @IsString()
+  @IsOptional()
+  offlineTicket?: string;
 }
 
 class CallQualityDto {
@@ -58,6 +62,7 @@ export class CallsController {
       req.user.deviceId,
       body.targetUserId,
       body.preferredRoute,
+      body.offlineTicket,
     );
   }
 

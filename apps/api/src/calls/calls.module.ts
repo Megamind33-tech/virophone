@@ -11,12 +11,14 @@ import { Profile } from '../database/entities/profile.entity';
 import { Device } from '../database/entities/device.entity';
 import { BlocksModule } from '../blocks/blocks.module';
 import { PushModule } from '../push/push.module';
+import { OfflineTrustModule } from '../offline-trust/offline-trust.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Call, CallQuality, ContactMatch, ViroConnection, Profile, Device]),
     BlocksModule,
     PushModule,
+    OfflineTrustModule,
   ],
   controllers: [CallsController],
   providers: [CallsService, CallSessionService],

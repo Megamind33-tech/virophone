@@ -19,6 +19,7 @@ describe('CallsService - Authorization', () => {
   const mockRedis = {
     getJson: jest.fn().mockResolvedValue({ deviceId: 'callee-device' }),
   } as unknown as RedisService;
+  const mockOfflineTrust = { verifyOfflineCallTicket: jest.fn().mockReturnValue(false) } as any;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -38,6 +39,7 @@ describe('CallsService - Authorization', () => {
       mockCallSession,
       mockRedis,
       mockPush,
+      mockOfflineTrust,
     );
   });
 
@@ -61,6 +63,33 @@ describe('CallsService - Authorization', () => {
   it('denies blocked relationship', async () => {
     (mockBlocks.isBlocked as jest.Mock).mockResolvedValue(true);
     await expect(service.authorize('caller', 'caller-device', 'target')).rejects.toThrow();
+  });
+
+  it('authorizes via a valid offline call ticket when no relationship exists', async () => {
+    mockMatchRepo.findOne.mockResolvedValue(null);
+    mockConnectionRepo.findOne.mockResolvedValue(null);
+    mockProfileRepo.findOne.mockResolvedValue({ allowCallsFromViroId: 'CONNECTIONS_ONLY' });
+    (mockOfflineTrust.verifyOfflineCallTicket as jest.Mock).mockReturnValue(true);
+
+    const result = await service.authorize('caller', 'caller-device', 'target', undefined, 'valid-ticket');
+    expect(result.authorized).toBe(true);
+    expect(mockOfflineTrust.verifyOfflineCallTicket).toHaveBeenCalledWith(
+      'valid-ticket',
+      'caller',
+      'caller-device',
+      'target',
+    );
+  });
+
+  it('denies when the offline ticket is invalid and no relationship exists', async () => {
+    mockMatchRepo.findOne.mockResolvedValue(null);
+    mockConnectionRepo.findOne.mockResolvedValue(null);
+    mockProfileRepo.findOne.mockResolvedValue({ allowCallsFromViroId: 'CONNECTIONS_ONLY' });
+    (mockOfflineTrust.verifyOfflineCallTicket as jest.Mock).mockReturnValue(false);
+
+    await expect(
+      service.authorize('caller', 'caller-device', 'target', undefined, 'bad-ticket'),
+    ).rejects.toThrow();
   });
 
   it('authorizes accepted connection', async () => {

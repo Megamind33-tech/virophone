@@ -24,7 +24,7 @@ functional once the corresponding secret/service is supplied.
 - [x] C1. Redis pub/sub delivery bus → multi-instance signaling + messaging
 - [~] C2. Multi-device fanout: messages fan out to all devices; call ring-all still 1 device
 - [x] C3. Apply global ThrottlerGuard; register ApiExceptionFilter
-- [ ] C4. Wire offline-trust ticket verification into call authorize
+- [x] C4. Offline-trust call ticket accepted as an alternative authorization in `authorize`
 - [x] C5. List endpoints: `GET /connections`, `GET /blocks`, `GET /calls/history`
 - [ ] C6. Observability: request/WS/TURN metrics endpoint
 
