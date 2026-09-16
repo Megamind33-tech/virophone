@@ -1,6 +1,7 @@
 package com.viroreach.voice.webrtc
 
 import android.content.Context
+import android.media.AudioManager
 import com.viroreach.core.model.CallStateMachineState
 import com.viroreach.voice.api.AudioRoute
 import com.viroreach.voice.api.CallStatistics
@@ -41,6 +42,10 @@ class WebRtcVoiceEngine(
 ) : VoiceEngine {
 
     private val appContext = context.applicationContext
+    private val audioManager =
+        appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private var priorAudioMode = AudioManager.MODE_NORMAL
+    private var audioConfiguredForCall = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _callState = MutableStateFlow(CallStateMachineState.IDLE)
     private val _callEvents = MutableSharedFlow<VoiceCallEvent>()
@@ -162,6 +167,34 @@ class WebRtcVoiceEngine(
     override fun setSpeaker(enabled: Boolean) {
         speaker = enabled
         audioRoute = if (enabled) AudioRoute.SPEAKER else AudioRoute.EARPIECE
+        if (audioConfiguredForCall) {
+            runCatching { audioManager.isSpeakerphoneOn = enabled }
+        }
+    }
+
+    /**
+     * Puts the device audio system into VoIP mode. Without
+     * MODE_IN_COMMUNICATION the received remote audio is treated as a media
+     * stream and is frequently silent or mis-routed — a common "connected but
+     * no talking" symptom on Android.
+     */
+    private fun configureAudioForCall() {
+        if (audioConfiguredForCall) return
+        priorAudioMode = audioManager.mode
+        runCatching {
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            audioManager.isSpeakerphoneOn = speaker
+        }
+        audioConfiguredForCall = true
+    }
+
+    private fun restoreAudioMode() {
+        if (!audioConfiguredForCall) return
+        runCatching {
+            audioManager.isSpeakerphoneOn = false
+            audioManager.mode = priorAudioMode
+        }
+        audioConfiguredForCall = false
     }
 
     override fun setAudioRoute(route: AudioRoute) {
@@ -340,14 +373,35 @@ class WebRtcVoiceEngine(
     }
 
     private fun parseIceServers(material: Map<String, String>): List<PeerConnection.IceServer> {
-        val urls = material["iceServers"]?.split(',')?.filter { it.isNotBlank() }
-            ?: listOf("stun:stun.l.google.com:19302")
+        val provided = material["iceServers"]
+            ?.split(',')
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() }
+            ?: emptyList()
+
+        // localhost entries are the device itself and only stall ICE gathering
+        // on real hardware — drop them.
+        val cleaned = provided.filterNot {
+            it.contains("localhost") || it.contains("127.0.0.1")
+        }
+
+        // Always guarantee a publicly reachable STUN server so reflexive
+        // candidates can be gathered even if the server list was empty/relay-only.
+        val urls = if (cleaned.none { it.startsWith("stun:") }) {
+            cleaned + PUBLIC_STUN
+        } else {
+            cleaned
+        }
+
         val username = material["iceUsername"]
         val credential = material["iceCredential"]
         return urls.map { raw ->
             val url = raw.trim()
             val builder = PeerConnection.IceServer.builder(url)
-            if (!username.isNullOrBlank() && !credential.isNullOrBlank() && url.startsWith("turn:")) {
+            if (!username.isNullOrBlank() &&
+                !credential.isNullOrBlank() &&
+                (url.startsWith("turn:") || url.startsWith("turns:"))
+            ) {
                 builder.setUsername(username).setPassword(credential)
             }
             builder.createIceServer()
@@ -369,6 +423,7 @@ class WebRtcVoiceEngine(
 
     private fun createPeerConnection(iceServers: List<PeerConnection.IceServer>) {
         val f = factory ?: throw IllegalStateException("WebRTC engine not initialized")
+        configureAudioForCall()
         lastIceServers = iceServers
         peerConnection?.close()
         peerConnection?.dispose()
@@ -411,11 +466,16 @@ class WebRtcVoiceEngine(
                 candidate?.let { onLocalIceCandidate?.invoke(it) }
             }
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
-            override fun onAddStream(stream: MediaStream?) {}
+            override fun onAddStream(stream: MediaStream?) {
+                stream?.audioTracks?.forEach { it.setEnabled(true) }
+            }
             override fun onRemoveStream(stream: MediaStream?) {}
             override fun onDataChannel(channel: DataChannel?) {}
             override fun onRenegotiationNeeded() {}
-            override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {}
+            override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
+                // Ensure the inbound remote audio track is playing.
+                (receiver?.track() as? AudioTrack)?.setEnabled(true)
+            }
         }
         peerConnection = f.createPeerConnection(rtcConfig, observer)
             ?: throw IllegalStateException("Failed to create PeerConnection")
@@ -462,11 +522,27 @@ class WebRtcVoiceEngine(
         activeCallId = null
         lastStats = null
         _liveStatistics.value = null
+        restoreAudioMode()
         _callState.value = CallStateMachineState.ENDED
         _callState.value = CallStateMachineState.IDLE
     }
 
-    private class SimpleSdpObserver(
+    /**
+     * Surfaces an SDP negotiation failure instead of silently stalling the call
+     * in "connecting". Marks the call MEDIA_FAILED so the UI can react.
+     */
+    private fun onSdpError(context: String, error: String?) {
+        val detail = error ?: "unknown"
+        _callState.value = CallStateMachineState.MEDIA_FAILED
+        activeCallId?.let { id ->
+            scope.launch {
+                _callEvents.emit(VoiceCallEvent(id, VoiceCallEventType.ERROR))
+            }
+        }
+        android.util.Log.e("ViroWebRtc", "SDP error [$context]: $detail")
+    }
+
+    private inner class SimpleSdpObserver(
         private val onSuccess: (SessionDescription) -> Unit = {},
         private val onSetComplete: () -> Unit = {},
     ) : org.webrtc.SdpObserver {
@@ -474,12 +550,13 @@ class WebRtcVoiceEngine(
             sdp?.let(onSuccess)
         }
         override fun onSetSuccess() = onSetComplete()
-        override fun onCreateFailure(error: String?) {}
-        override fun onSetFailure(error: String?) {}
+        override fun onCreateFailure(error: String?) = onSdpError("create", error)
+        override fun onSetFailure(error: String?) = onSdpError("set", error)
     }
 
     companion object {
         private const val MAX_ICE_RECOVERY_ATTEMPTS = 4
         private const val ICE_RECOVERY_DELAY_MS = 2_000L
+        private const val PUBLIC_STUN = "stun:stun.l.google.com:19302"
     }
 }

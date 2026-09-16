@@ -11,6 +11,13 @@ export class BlocksService {
     @InjectRepository(Block) private readonly blockRepo: Repository<Block>,
   ) {}
 
+  async list(blockerId: string) {
+    const rows = await this.blockRepo.find({
+      where: { blockerUserId: blockerId },
+    });
+    return rows.map((b) => ({ blockedUserId: b.blockedUserId }));
+  }
+
   async block(blockerId: string, blockedUserId: string) {
     if (blockerId === blockedUserId) {
       throw new ViroException('VALIDATION_ERROR', 'Cannot block yourself.', HttpStatus.BAD_REQUEST);

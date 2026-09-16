@@ -19,7 +19,13 @@ async function runMigrations() {
     `);
 
     const migrationsDir = join(__dirname, 'migrations');
-    const migrationFiles = ['001_initial_schema.sql', '002_offline_trust.sql'];
+    const migrationFiles = [
+      '001_initial_schema.sql',
+      '002_offline_trust.sql',
+      '003_push.sql',
+      '004_messaging.sql',
+      '005_email_identity.sql',
+    ];
 
     for (const file of migrationFiles) {
       const version = file.replace('.sql', '');

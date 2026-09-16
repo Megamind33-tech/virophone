@@ -11,6 +11,7 @@ import { Profile } from '../database/entities/profile.entity';
 import { Device } from '../database/entities/device.entity';
 import { Session } from '../database/entities/session.entity';
 import { OtpChallenge } from '../database/entities/otp-challenge.entity';
+import { EmailIdentity } from '../database/entities/email-identity.entity';
 import { SecurityModule } from '../security/security.module';
 
 @Module({
@@ -21,7 +22,7 @@ import { SecurityModule } from '../security/security.module';
       signOptions: { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '15m' },
     }),
     TypeOrmModule.forFeature([
-      User, PhoneIdentity, Profile, Device, Session, OtpChallenge,
+      User, PhoneIdentity, Profile, Device, Session, OtpChallenge, EmailIdentity,
     ]),
     SecurityModule,
   ],

@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD, APP_FILTER } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ApiExceptionFilter } from './common/filters/api-exception.filter';
 import { AuthModule } from './auth/auth.module';
 import { DevicesModule } from './devices/devices.module';
 import { UsersModule } from './users/users.module';
@@ -18,6 +20,10 @@ import { PresenceModule } from './presence/presence.module';
 import { SignalingModule } from './signaling/signaling.module';
 import { TurnModule } from './turn/turn.module';
 import { OfflineTrustModule } from './offline-trust/offline-trust.module';
+import { PushModule } from './push/push.module';
+import { RealtimeModule } from './realtime/realtime.module';
+import { MessagesModule } from './messages/messages.module';
+import { ConferenceModule } from './conference/conference.module';
 
 @Module({
   imports: [
@@ -51,6 +57,15 @@ import { OfflineTrustModule } from './offline-trust/offline-trust.module';
     SignalingModule,
     TurnModule,
     OfflineTrustModule,
+    PushModule,
+    RealtimeModule,
+    MessagesModule,
+    ConferenceModule,
+  ],
+  providers: [
+    // Global rate limiting (per-IP) and a consistent API error envelope.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_FILTER, useClass: ApiExceptionFilter },
   ],
 })
 export class AppModule {}

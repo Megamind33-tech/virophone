@@ -1,4 +1,7 @@
 process.env.NODE_ENV = 'test';
+// Keep global rate limiting effectively disabled for the high request volume of
+// the integration suite (production uses the real RATE_LIMIT_* values).
+process.env.RATE_LIMIT_MAX_REQUESTS = process.env.RATE_LIMIT_MAX_REQUESTS || '1000000';
 process.env.JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || 'test_access_secret';
 process.env.JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'test_refresh_secret';
 process.env.CONTACT_HASH_SALT = process.env.CONTACT_HASH_SALT || 'test_contact_salt';
