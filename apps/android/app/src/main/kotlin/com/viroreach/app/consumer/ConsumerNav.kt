@@ -100,6 +100,8 @@ enum class ConsumerOverlay {
 
     BlockedContacts,
 
+    Help,
+
 }
 
 
@@ -207,11 +209,11 @@ fun ConsumerNav(
         }
     }
 
-    LaunchedEffect(callState, conferenceActive.isActive, isCaller, userInitiatedCall, incomingCall) {
+    LaunchedEffect(callState, conferenceActive.isActive, conferenceActive.incomingInvite, isCaller, userInitiatedCall, incomingCall) {
 
         when {
 
-            conferenceActive.isActive -> overlay = ConsumerOverlay.GroupCall
+            conferenceActive.isActive || conferenceActive.incomingInvite != null -> overlay = ConsumerOverlay.GroupCall
 
             userInitiatedCall ||
 
@@ -474,6 +476,14 @@ fun ConsumerNav(
         ConsumerOverlay.BlockedContacts -> {
 
             BlockedContactsScreen(session = session, onBack = { overlay = ConsumerOverlay.None })
+
+            return
+
+        }
+
+        ConsumerOverlay.Help -> {
+
+            HelpScreen(onBack = { overlay = ConsumerOverlay.None })
 
             return
 
@@ -786,7 +796,7 @@ fun ConsumerNav(
 
                     onStartGroupCall = { contacts ->
 
-                        session.conferenceManager.startConference(contacts.map { it.displayName })
+                        session.conferenceManager.startConference(contacts)
 
                         session.callHistoryStore.add(
 
@@ -918,6 +928,8 @@ fun ConsumerNav(
                     onEditProfile = { overlay = ConsumerOverlay.EditProfile },
 
                     onBlockedContacts = { overlay = ConsumerOverlay.BlockedContacts },
+
+                    onHelp = { overlay = ConsumerOverlay.Help },
 
                     onLogout = onLogout,
 

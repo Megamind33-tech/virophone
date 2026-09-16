@@ -13,6 +13,7 @@ import com.viroreach.core.designsystem.ViroColors
 import com.viroreach.core.designsystem.ViroSpacing
 import com.viroreach.core.designsystem.components.*
 import com.viroreach.feature.contacts.PhoneNumberFormatter
+import kotlinx.coroutines.launch
 
 @Composable
 fun YouScreen(
@@ -22,6 +23,7 @@ fun YouScreen(
     onAppearance: () -> Unit,
     onEditProfile: () -> Unit,
     onBlockedContacts: () -> Unit,
+    onHelp: () -> Unit,
     onLogout: () -> Unit,
 ) {
     val viewModel = remember(session, showDeveloperEntry) {
@@ -30,6 +32,10 @@ fun YouScreen(
     val profile by session.profileRepository.profile.collectAsState(
         initial = com.viroreach.app.personalization.UserProfile(),
     )
+    val scope = rememberCoroutineScope()
+    var confirmDelete by remember { mutableStateOf(false) }
+    var deleteError by remember { mutableStateOf<String?>(null) }
+    var deleting by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         viewModel.refresh()
         session.profileRepository.refreshFromServer()
@@ -86,8 +92,14 @@ fun YouScreen(
                     SettingsNavRow("Blocked contacts", onBlockedContacts)
                 }
                 SettingsSection(title = "Support") {
-                    SettingsRow(label = "Help", value = "Coming soon")
+                    SettingsNavRow("Help", onHelp)
                     SettingsRow(label = "About Viro", value = state.versionName)
+                }
+                SettingsSection(title = "Account data") {
+                    SettingsNavRow("Delete account") { confirmDelete = true }
+                    deleteError?.let {
+                        Text(it, color = ViroColors.textSecondary, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
                 if (state.showDeveloperEntry) {
                     SettingsSection(title = "Internal") {
@@ -103,6 +115,44 @@ fun YouScreen(
                 )
             }
         }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { if (!deleting) confirmDelete = false },
+            title = { Text("Delete account?") },
+            text = {
+                Text(
+                    "This permanently closes your Viro identity, signs out every device, " +
+                        "and removes you from discovery. This cannot be undone.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !deleting,
+                    onClick = {
+                        scope.launch {
+                            deleting = true
+                            runCatching { session.api.deleteAccount() }
+                                .onSuccess {
+                                    viewModel.logout()
+                                    confirmDelete = false
+                                    onLogout()
+                                }
+                                .onFailure {
+                                    deleteError = "Couldn't delete the account. Try again."
+                                    deleting = false
+                                }
+                        }
+                    },
+                ) { Text(if (deleting) "Deleting…" else "Delete") }
+            },
+            dismissButton = {
+                TextButton(enabled = !deleting, onClick = { confirmDelete = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
     }
 }
 

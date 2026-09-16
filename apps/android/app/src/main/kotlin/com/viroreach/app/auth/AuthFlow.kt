@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import com.viroreach.app.session.SessionManager
+import com.viroreach.feature.contacts.CountryCatalog
 import com.viroreach.feature.contacts.PhoneNumberFormatter
 
 @Composable
@@ -20,24 +21,30 @@ fun AuthFlow(
     val initialDigits = remember(savedPhone) {
         savedPhone?.let { PhoneNumberFormatter.nationalDigitsFromE164(it) }.orEmpty()
     }
-    val viewModel = remember(returningInstall, initialDigits) {
-        AuthViewModel(repository, returningInstall, initialDigits)
+    val initialCountry = remember(savedPhone) {
+        savedPhone?.let { CountryCatalog.fromE164(it) } ?: CountryCatalog.default()
+    }
+    val viewModel = remember(returningInstall, initialDigits, initialCountry) {
+        AuthViewModel(repository, returningInstall, initialDigits, initialCountry)
     }
     val state = viewModel.uiState
 
     when (state.step) {
         AuthStep.Phone -> LoginScreen(
             phoneDigits = state.phoneDigits,
+            country = state.country,
             loading = state.loading,
             errorMessage = state.errorMessage,
             returningUser = returningInstall,
             onPhoneDigitsChange = viewModel::updatePhoneDigits,
+            onCountryChange = viewModel::selectCountry,
             onContinue = viewModel::requestOtp,
         )
         AuthStep.Otp -> {
             val phone = state.normalizedPhone
                 ?: PhoneNumberFormatter.formatE164International(
-                    PhoneNumberFormatter.canonicalE164(state.phoneDigits) ?: state.phoneDigits,
+                    PhoneNumberFormatter.canonicalE164(state.phoneDigits, state.country.iso2)
+                        ?: state.phoneDigits,
                 )
             OtpScreen(
                 phoneE164 = phone,

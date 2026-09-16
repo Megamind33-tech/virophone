@@ -5,25 +5,41 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.viroreach.core.designsystem.ViroSpacing
 import com.viroreach.core.designsystem.components.*
+import com.viroreach.feature.contacts.CountryOption
 import com.viroreach.feature.contacts.PhoneNumberFormatter
 
 @Composable
 fun LoginScreen(
     phoneDigits: String,
+    country: CountryOption,
     loading: Boolean,
     errorMessage: String?,
     returningUser: Boolean = false,
     onPhoneDigitsChange: (String) -> Unit,
+    onCountryChange: (CountryOption) -> Unit,
     onContinue: () -> Unit,
 ) {
-    val displayPhone = remember(phoneDigits) {
-        PhoneNumberFormatter.formatForDisplay(phoneDigits)
+    var pickingCountry by remember { mutableStateOf(false) }
+    if (pickingCountry) {
+        CountryPickerScreen(
+            selected = country,
+            onSelect = { onCountryChange(it); pickingCountry = false },
+            onBack = { pickingCountry = false },
+        )
+        return
+    }
+
+    val displayPhone = remember(phoneDigits, country.iso2) {
+        PhoneNumberFormatter.formatForDisplay(phoneDigits, country.iso2)
     }
 
     ViroScreenBackground {
@@ -58,9 +74,10 @@ fun LoginScreen(
                 )
                 Spacer(Modifier.height(ViroSpacing.lg))
                 ViroPhoneInputCard(
-                    countryCode = "+260",
+                    countryCode = country.dialCode,
                     phoneDigits = displayPhone,
-                    onCountryClick = {},
+                    flagEmoji = country.flagEmoji,
+                    onCountryClick = { pickingCountry = true },
                 )
                 Spacer(Modifier.height(12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {

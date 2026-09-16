@@ -187,6 +187,7 @@ fun ViroPhoneInputCard(
     phoneDigits: String,
     onCountryClick: () -> Unit,
     modifier: Modifier = Modifier,
+    flagEmoji: String = "🇿🇲",
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
@@ -208,7 +209,7 @@ fun ViroPhoneInputCard(
                 modifier = Modifier.clickable(onClick = onCountryClick),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("🇿🇲", fontSize = 20.sp)
+                Text(flagEmoji, fontSize = 20.sp)
                 Spacer(Modifier.width(8.dp))
                 Text(countryCode, color = Color.White, fontWeight = FontWeight.Medium)
                 Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = ViroColors.MutedBlue)
