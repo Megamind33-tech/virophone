@@ -8,7 +8,8 @@ Viro Reach persists data in **PostgreSQL 16**. The canonical schema is defined i
 apps/api/src/database/migrations/001_initial_schema.sql
 ```
 
-TypeORM entities mirror this schema under `apps/api/src/database/entities/`. Migrations are applied via:
+Later additive migrations (push, messaging, email identity, admin role) live alongside it
+(`002`–`006`). TypeORM entities mirror this schema under `apps/api/src/database/entities/`. Migrations are applied via:
 
 ```bash
 cd apps/api && npm run migration:run
@@ -51,6 +52,7 @@ Core account record. Phone number stored separately in `phone_identities`.
 |--------|------|-------------|-------------|
 | `id` | UUID | PRIMARY KEY | User identifier (client-supplied on first OTP verify) |
 | `status` | VARCHAR(20) | NOT NULL, DEFAULT `'ACTIVE'` | `ACTIVE`, `SUSPENDED`, `DELETED` |
+| `admin_role` | VARCHAR(20) | NOT NULL, DEFAULT `'USER'` | `USER`, `SUPPORT`, `ADMIN`, `SECURITY_ADMIN` (`006_admin_role.sql`) |
 | `created_at` | TIMESTAMPTZ | NOT NULL, DEFAULT NOW() | Account creation |
 | `updated_at` | TIMESTAMPTZ | NOT NULL, DEFAULT NOW() | Last update |
 

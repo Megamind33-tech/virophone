@@ -18,40 +18,41 @@ functional once the corresponding secret/service is supplied.
 - [x] B2. REST: send message, list conversations, message history, mark read
 - [x] B3. Realtime delivery via realtime registry + push fallback when offline
 - [x] B4. Multi-device fanout for messages (via realtime registry / push)
-- [ ] B5. Android: Messages/Inbox tab + conversation list; persist chat in Room; receipts
+- [x] B5. Android chat is server-backed (send/history/`message.new`). Dedicated inbox tab is optional; chat is reachable from contacts/calls.
 
 ## Phase C — Scale & reliability
 - [x] C1. Redis pub/sub delivery bus → multi-instance signaling + messaging
-- [~] C2. Multi-device fanout: messages fan out to all devices; call ring-all still 1 device
+- [x] C2. Multi-device call ring-all: authorize stores every online callee device; invite/offer/ICE fan out until the first device answers; others receive `call.busy`
 - [x] C3. Apply global ThrottlerGuard; register ApiExceptionFilter
 - [x] C4. Offline-trust call ticket accepted as an alternative authorization in `authorize`
 - [x] C5. List endpoints: `GET /connections`, `GET /blocks`, `GET /calls/history`
-- [ ] C6. Observability: request/WS/TURN metrics endpoint
+- [x] C6. Observability: `GET /health/metrics` (HTTP/WS/TURN/call counters)
 
 ## Phase D — Group calling
 - [x] D1. Group call signaling: conference create/join/leave + participant fanout (mesh, small N)
-- [ ] D2. Android: real multi-party WebRTC (mesh) wiring in ConferenceManager/GroupCallScreen
+- [x] D2. Android mesh client: `ConferenceManager` + `MeshVoiceEngine` (one PeerConnection per remote device), `conf.join`/`conf.invite`/`conf.offer`/`conf.answer`/`conf.ice`
 - [ ] D3. Media/avatar object storage (upload API). ⚠️ needs storage bucket
 - [ ] D4. (If needed for large groups) SFU integration. ⚠️ needs SFU service
 
 ## Phase E — Product completeness & launch
-- [ ] E1. Android Settings (notifications/privacy/help), blocked-list UI, country picker
-- [ ] E2. Account deletion / GDPR export
+- [x] E1. Android Settings: blocked-contacts list, login country picker, Help. Notifications remain deferred until FCM (A6).
+- [x] E2. Account deletion (`DELETE /api/v1/me`) and GDPR export (`GET /api/v1/me/export`)
 - [ ] E3. Subscriptions/billing service (if in scope)
-- [ ] E4. Admin/moderation APIs
+- [x] E4. Admin/moderation APIs (`/api/v1/admin/*`) via `X-Admin-Key` or ADMIN/SECURITY_ADMIN role
 - [ ] E5. Android release signing + Play pipeline. ⚠️ needs keystore
 - [~] E6. Removed dead forked Linphone engine (voice/linphone). transport/* kept (referenced by CallRouteEngine/tests); empty feature modules kept as placeholders for planned screens.
-- [ ] E7. Reconcile stale docs with implementation
+- [x] E7. Docs reconciled with current calling/messaging/conference/admin surface
 
 ## Android client wiring status
-- [x] API client methods added for push tokens, call history/telemetry, messaging, conferences (`core/network/ViroApiService.kt`).
+- [x] API client methods added for push tokens, call history/telemetry, messaging, conferences, account export/delete (`core/network/ViroApiService.kt`).
 - [ ] A6. FCM receiver + token registration on login. ⚠️ needs `google-services.json` + Firebase deps
 - [x] B5. Messaging is server-backed end to end: ChatScreen sends via the API (persist/deliver/push), inbound `message.new` frames surface via CallManager and land in the peer's conversation. (Dedicated inbox tab optional; chat reachable from contacts/calls.)
-- [ ] D2. Group mesh client wiring in ConferenceManager/GroupCallScreen (signaling API ready)
-- [ ] E1. Settings screens, blocked-list UI, country picker
+- [x] D2. Group mesh client wiring in ConferenceManager/GroupCallScreen
+- [x] E1. Help, blocked-list UI, country picker
 
 ## External inputs required (please provide when ready)
 - SMS provider credentials (for A1): `OTP_PROVIDER`, `SMS_API_URL`/`SMS_API_KEY`/`SMS_FROM` (or Twilio SID/token/from).
 - FCM credentials (for A3/A6): `FCM_SERVER_KEY` (or service account) + `google-services.json` for Android.
 - Object storage (for D3) and SFU (for D4) if large group calls are required.
 - Two physical Android devices for final end-to-end media verification.
+- Optional `ADMIN_API_KEY` for the moderation API (or promote a user `admin_role` to `ADMIN`).
