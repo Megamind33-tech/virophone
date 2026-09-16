@@ -23,6 +23,7 @@ import { OfflineTrustModule } from './offline-trust/offline-trust.module';
 import { PushModule } from './push/push.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { MessagesModule } from './messages/messages.module';
+import { ConferenceModule } from './conference/conference.module';
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { MessagesModule } from './messages/messages.module';
     PushModule,
     RealtimeModule,
     MessagesModule,
+    ConferenceModule,
   ],
   providers: [
     // Global rate limiting (per-IP) and a consistent API error envelope.

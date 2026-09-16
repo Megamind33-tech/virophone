@@ -19,6 +19,7 @@ import { RedisService } from '../redis/redis.service';
 import { PresenceService } from '../presence/presence.service';
 import { CallSessionService } from '../calls/call-session.service';
 import { CallsService } from '../calls/calls.service';
+import { ConferenceService } from '../conference/conference.service';
 
 interface AuthenticatedSocket extends WebSocket {
   userId?: string;
@@ -64,6 +65,7 @@ export class SignalingGateway
     private readonly presenceService: PresenceService,
     private readonly callSessionService: CallSessionService,
     private readonly callsService: CallsService,
+    private readonly conferenceService: ConferenceService,
     private readonly realtimeRegistry: RealtimeRegistry,
     @InjectRepository(Device) private readonly deviceRepo: Repository<Device>,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
@@ -228,6 +230,77 @@ export class SignalingGateway
     }
 
     return { delivered: true };
+  }
+
+  /**
+   * Mesh conference signaling. Members relay offer/answer/ICE peer-to-peer;
+   * the server tracks membership and fans join/leave to the room.
+   */
+  @SubscribeMessage('conference')
+  async handleConference(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() envelope: SignalingEnvelope & { roomId?: string },
+  ) {
+    if (!client.userId || !client.deviceId) return { error: 'unauthorized' };
+    const type = envelope.type as string;
+    const roomId = (envelope as { roomId?: string }).roomId;
+    const { targetDeviceId, payload } = envelope;
+    if (!roomId || !type) return { error: 'invalid_envelope' };
+
+    if (type === 'conf.join') {
+      if (!(await this.conferenceService.canJoin(roomId, client.userId))) {
+        return { error: 'not_allowed' };
+      }
+      const participants = await this.conferenceService.join(
+        roomId,
+        client.userId,
+        client.deviceId,
+      );
+      for (const p of participants) {
+        if (p.deviceId === client.deviceId) continue;
+        await this.realtimeRegistry.deliverToDevice(p.deviceId, {
+          type: 'conf.peer-joined',
+          roomId,
+          userId: client.userId,
+          deviceId: client.deviceId,
+        });
+      }
+      return { joined: true, participants };
+    }
+
+    if (!(await this.conferenceService.isMember(roomId, client.deviceId))) {
+      return { error: 'not_member' };
+    }
+
+    if (type === 'conf.leave') {
+      await this.conferenceService.leave(roomId, client.userId, client.deviceId);
+      const members = await this.conferenceService.members(roomId);
+      for (const p of members) {
+        await this.realtimeRegistry.deliverToDevice(p.deviceId, {
+          type: 'conf.peer-left',
+          roomId,
+          userId: client.userId,
+          deviceId: client.deviceId,
+        });
+      }
+      return { left: true };
+    }
+
+    // conf.offer / conf.answer / conf.ice — relay to a specific peer device.
+    if (!targetDeviceId) return { error: 'target_required' };
+    if (!(await this.conferenceService.isMember(roomId, targetDeviceId))) {
+      return { error: 'invalid_target' };
+    }
+    const delivered = await this.realtimeRegistry.deliverToDevice(targetDeviceId, {
+      type,
+      roomId,
+      fromUserId: client.userId,
+      fromDeviceId: client.deviceId,
+      payload,
+    });
+    return delivered
+      ? { delivered: true }
+      : { delivered: false, reason: 'peer_unreachable' };
   }
 
   /** Delivers a message to every live socket for a device; returns the count. */

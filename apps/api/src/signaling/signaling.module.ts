@@ -6,6 +6,7 @@ import { Device } from '../database/entities/device.entity';
 import { User } from '../database/entities/user.entity';
 import { PresenceModule } from '../presence/presence.module';
 import { CallsModule } from '../calls/calls.module';
+import { ConferenceModule } from '../conference/conference.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { CallsModule } from '../calls/calls.module';
     }),
     PresenceModule,
     CallsModule,
+    ConferenceModule,
   ],
   providers: [SignalingGateway],
 })

@@ -29,7 +29,7 @@ functional once the corresponding secret/service is supplied.
 - [ ] C6. Observability: request/WS/TURN metrics endpoint
 
 ## Phase D — Group calling
-- [ ] D1. Group call signaling: conference create/join/leave + participant fanout (mesh, small N)
+- [x] D1. Group call signaling: conference create/join/leave + participant fanout (mesh, small N)
 - [ ] D2. Android: real multi-party WebRTC (mesh) wiring in ConferenceManager/GroupCallScreen
 - [ ] D3. Media/avatar object storage (upload API). ⚠️ needs storage bucket
 - [ ] D4. (If needed for large groups) SFU integration. ⚠️ needs SFU service
