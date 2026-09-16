@@ -21,6 +21,9 @@ interface ViroApiService {
     @PATCH("api/v1/me")
     suspend fun updateMe(@Body body: UpdateMeBody): MeResponse
 
+    @GET("api/v1/blocks")
+    suspend fun listBlocks(): List<BlockedUser>
+
     @POST("api/v1/blocks")
     suspend fun blockUser(@Body body: BlockUserBody)
 
@@ -104,6 +107,7 @@ data class UpdateMeBody(
     val avatarUrl: String? = null,
 )
 data class BlockUserBody(val blockedUserId: String)
+data class BlockedUser(val blockedUserId: String)
 data class ConnectionInviteBody(val targetUserId: String)
 data class ConnectionInviteResponse(val id: String, val status: String)
 data class DiscoverBody(val phonesE164: List<String>, val defaultRegion: String? = "ZM")

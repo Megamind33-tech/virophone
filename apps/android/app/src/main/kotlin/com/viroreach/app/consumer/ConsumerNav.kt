@@ -98,6 +98,8 @@ enum class ConsumerOverlay {
 
     Chat,
 
+    BlockedContacts,
+
 }
 
 
@@ -464,6 +466,14 @@ fun ConsumerNav(
         ConsumerOverlay.EditProfile -> {
 
             EditProfileScreen(session = session, onBack = { overlay = ConsumerOverlay.None })
+
+            return
+
+        }
+
+        ConsumerOverlay.BlockedContacts -> {
+
+            BlockedContactsScreen(session = session, onBack = { overlay = ConsumerOverlay.None })
 
             return
 
@@ -906,6 +916,8 @@ fun ConsumerNav(
                     onAppearance = { overlay = ConsumerOverlay.Appearance },
 
                     onEditProfile = { overlay = ConsumerOverlay.EditProfile },
+
+                    onBlockedContacts = { overlay = ConsumerOverlay.BlockedContacts },
 
                     onLogout = onLogout,
 
