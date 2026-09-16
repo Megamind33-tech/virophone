@@ -48,36 +48,6 @@ class CallQualityDto {
   relayed?: boolean;
 }
 
-class CallQualityDto {
-  @IsNumber()
-  @IsOptional()
-  latency?: number;
-
-  @IsNumber()
-  @IsOptional()
-  jitter?: number;
-
-  @IsNumber()
-  @IsOptional()
-  packetLoss?: number;
-
-  @IsNumber()
-  @IsOptional()
-  bitrate?: number;
-
-  @IsString()
-  @IsOptional()
-  codec?: string;
-
-  @IsString()
-  @IsOptional()
-  route?: string;
-
-  @IsBoolean()
-  @IsOptional()
-  relayed?: boolean;
-}
-
 @Controller('api/v1/calls')
 @UseGuards(JwtAuthGuard)
 export class CallsController {
@@ -100,11 +70,6 @@ export class CallsController {
     );
     this.metrics.callsAuthorized += 1;
     return result;
-  }
-
-  @Get('history')
-  async history(@Req() req: { user: { sub: string } }) {
-    return this.callsService.history(req.user.sub);
   }
 
   @Get('history')

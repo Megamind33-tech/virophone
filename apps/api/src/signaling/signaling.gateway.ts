@@ -243,12 +243,6 @@ export class SignalingGateway
       return { delivered: false, reason: 'peer_unreachable' };
     }
 
-    if (!delivered) {
-      // The peer's socket is gone (app closed / lost connection). Tell the
-      // sender explicitly instead of leaving the call hanging in "connecting".
-      return { delivered: false, reason: 'peer_unreachable' };
-    }
-
     return { delivered: true };
   }
 
