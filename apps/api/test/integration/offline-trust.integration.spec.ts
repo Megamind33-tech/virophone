@@ -17,10 +17,14 @@ async function resetDatabase() {
   await client.query('CREATE SCHEMA public');
   await client.query('GRANT ALL ON SCHEMA public TO viro');
   await client.query('GRANT ALL ON SCHEMA public TO public');
-  const sql1 = readFileSync(join(__dirname, '../../src/database/migrations/001_initial_schema.sql'), 'utf-8');
-  const sql2 = readFileSync(join(__dirname, '../../src/database/migrations/002_offline_trust.sql'), 'utf-8');
-  await client.query(sql1);
-  await client.query(sql2);
+  const dir = join(__dirname, '../../src/database/migrations');
+  const files = require('fs')
+    .readdirSync(dir)
+    .filter((f: string) => f.endsWith('.sql'))
+    .sort();
+  for (const file of files) {
+    await client.query(readFileSync(join(dir, file), 'utf-8'));
+  }
   await client.end();
 }
 

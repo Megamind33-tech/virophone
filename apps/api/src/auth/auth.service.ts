@@ -10,7 +10,9 @@ import { Profile } from '../database/entities/profile.entity';
 import { Device } from '../database/entities/device.entity';
 import { Session } from '../database/entities/session.entity';
 import { OtpChallenge } from '../database/entities/otp-challenge.entity';
+import { EmailIdentity } from '../database/entities/email-identity.entity';
 import { createOtpProvider } from './otp/otp-provider.factory';
+import { createEmailOtpProvider } from './email/email-otp.factory';
 import { ViroException } from '../common/exceptions/viro.exception';
 import { normalizeE164, isValidE164 } from '../common/utils/phone.util';
 import { hashPhoneForStorage, hashRefreshToken } from '../common/utils/hash.util';
@@ -20,6 +22,7 @@ import { HttpStatus } from '@nestjs/common';
 @Injectable()
 export class AuthService {
   private readonly otpProvider = createOtpProvider();
+  private readonly emailProvider = createEmailOtpProvider();
   private readonly maxOtpAttempts = parseInt(process.env.OTP_MAX_ATTEMPTS || '5', 10);
   private readonly otpExpiresSeconds = parseInt(process.env.OTP_EXPIRES_SECONDS || '300', 10);
 
@@ -30,6 +33,7 @@ export class AuthService {
     @InjectRepository(Device) private readonly deviceRepo: Repository<Device>,
     @InjectRepository(Session) private readonly sessionRepo: Repository<Session>,
     @InjectRepository(OtpChallenge) private readonly otpRepo: Repository<OtpChallenge>,
+    @InjectRepository(EmailIdentity) private readonly emailRepo: Repository<EmailIdentity>,
     private readonly jwtService: JwtService,
     private readonly securityService: SecurityService,
   ) {}
@@ -58,6 +62,123 @@ export class AuthService {
     return { challengeId: challenge.id, expiresAt: expiresAt.toISOString() };
   }
 
+  async requestEmailOtp(
+    email: string,
+  ): Promise<{ challengeId: string; expiresAt: string }> {
+    const normalized = (email || '').trim().toLowerCase();
+    if (!this.isValidEmail(normalized)) {
+      throw new ViroException(
+        'VALIDATION_ERROR',
+        'Invalid email address.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const code =
+      process.env.OTP_PROVIDER === 'test' && process.env.TEST_OTP_CODE
+        ? process.env.TEST_OTP_CODE
+        : String(randomInt(100000, 999999));
+    const codeHash = this.hashOtp(code);
+    const expiresAt = new Date(Date.now() + this.otpExpiresSeconds * 1000);
+
+    const challenge = this.otpRepo.create({
+      email: normalized,
+      channel: 'email',
+      codeHash,
+      expiresAt,
+    });
+    await this.otpRepo.save(challenge);
+    await this.emailProvider.sendOtp(normalized, code);
+
+    return { challengeId: challenge.id, expiresAt: expiresAt.toISOString() };
+  }
+
+  async verifyEmailOtp(
+    challengeId: string,
+    code: string,
+    devicePublicKey: string,
+    platform: string,
+    appVersion: string,
+  ) {
+    const challenge = await this.otpRepo.findOne({ where: { id: challengeId } });
+    if (!challenge || challenge.channel !== 'email' || challenge.verifiedAt || !challenge.email) {
+      throw new ViroException('VALIDATION_ERROR', 'Invalid or expired challenge.', HttpStatus.BAD_REQUEST);
+    }
+    const emailAddress: string = challenge.email;
+    if (new Date() > challenge.expiresAt) {
+      throw new ViroException('VALIDATION_ERROR', 'OTP has expired.', HttpStatus.BAD_REQUEST);
+    }
+    if (challenge.attempts >= this.maxOtpAttempts) {
+      throw new ViroException('VALIDATION_ERROR', 'Too many attempts.', HttpStatus.BAD_REQUEST);
+    }
+
+    challenge.attempts += 1;
+    await this.otpRepo.save(challenge);
+
+    if (challenge.codeHash !== this.hashOtp(code)) {
+      await this.securityService.logEvent({
+        eventType: 'INVALID_OTP_ATTEMPT',
+        severity: 'LOW',
+        metadata: { challengeId, channel: 'email' },
+      });
+      throw new ViroException('VALIDATION_ERROR', 'Invalid OTP code.', HttpStatus.BAD_REQUEST);
+    }
+
+    challenge.verifiedAt = new Date();
+    await this.otpRepo.save(challenge);
+
+    let emailIdentity = await this.emailRepo.findOne({
+      where: { email: emailAddress },
+    });
+
+    let isNewUser = false;
+    let userId: string;
+
+    if (!emailIdentity) {
+      isNewUser = true;
+      userId = uuidv4();
+      const user = this.userRepo.create({ id: userId, status: 'ACTIVE' });
+      await this.userRepo.save(user);
+
+      emailIdentity = this.emailRepo.create({
+        userId,
+        email: emailAddress,
+        verifiedAt: new Date(),
+        status: 'VERIFIED',
+      });
+      await this.emailRepo.save(emailIdentity);
+
+      const profile = this.profileRepo.create({ userId, displayName: '' });
+      await this.profileRepo.save(profile);
+    } else {
+      userId = emailIdentity.userId;
+      emailIdentity.verifiedAt = new Date();
+      emailIdentity.status = 'VERIFIED';
+      await this.emailRepo.save(emailIdentity);
+    }
+
+    const device = this.deviceRepo.create({
+      userId,
+      publicKey: devicePublicKey,
+      platform,
+      appVersion,
+    });
+    await this.deviceRepo.save(device);
+
+    const tokens = await this.createSession(userId, device.id);
+
+    return {
+      ...tokens,
+      userId,
+      deviceId: device.id,
+      isNewUser,
+    };
+  }
+
+  private isValidEmail(email: string): boolean {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 255;
+  }
+
   async verifyOtp(
     challengeId: string,
     code: string,
@@ -66,9 +187,10 @@ export class AuthService {
     appVersion: string,
   ) {
     const challenge = await this.otpRepo.findOne({ where: { id: challengeId } });
-    if (!challenge || challenge.verifiedAt) {
+    if (!challenge || challenge.verifiedAt || !challenge.phoneE164) {
       throw new ViroException('VALIDATION_ERROR', 'Invalid or expired challenge.', HttpStatus.BAD_REQUEST);
     }
+    const phoneNumber: string = challenge.phoneE164;
     if (new Date() > challenge.expiresAt) {
       throw new ViroException('VALIDATION_ERROR', 'OTP has expired.', HttpStatus.BAD_REQUEST);
     }
@@ -92,7 +214,7 @@ export class AuthService {
     await this.otpRepo.save(challenge);
 
     let phoneIdentity = await this.phoneRepo.findOne({
-      where: { phoneE164: challenge.phoneE164 },
+      where: { phoneE164: phoneNumber },
     });
 
     let isNewUser = false;
@@ -107,8 +229,8 @@ export class AuthService {
 
       phoneIdentity = this.phoneRepo.create({
         userId,
-        phoneE164: challenge.phoneE164,
-        phoneHash: hashPhoneForStorage(challenge.phoneE164, salt),
+        phoneE164: phoneNumber,
+        phoneHash: hashPhoneForStorage(phoneNumber, salt),
         verifiedAt: new Date(),
         status: 'VERIFIED',
       });

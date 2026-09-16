@@ -24,6 +24,7 @@ async function runMigrations() {
       '002_offline_trust.sql',
       '003_push.sql',
       '004_messaging.sql',
+      '005_email_identity.sql',
     ];
 
     for (const file of migrationFiles) {

@@ -23,11 +23,14 @@ async function resetDatabase() {
   await client.query('CREATE SCHEMA public');
   await client.query('GRANT ALL ON SCHEMA public TO viro');
   await client.query('GRANT ALL ON SCHEMA public TO public');
-  const sql = readFileSync(
-    join(__dirname, '../../src/database/migrations/001_initial_schema.sql'),
-    'utf-8',
-  );
-  await client.query(sql);
+  const dir = join(__dirname, '../../src/database/migrations');
+  const files = require('fs')
+    .readdirSync(dir)
+    .filter((f: string) => f.endsWith('.sql'))
+    .sort();
+  for (const file of files) {
+    await client.query(readFileSync(join(dir, file), 'utf-8'));
+  }
   await client.end();
 }
 

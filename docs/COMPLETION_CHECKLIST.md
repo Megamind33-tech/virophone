@@ -6,7 +6,7 @@ repo. Items needing external credentials/infrastructure are marked ⚠️ and be
 functional once the corresponding secret/service is supplied.
 
 ## Phase A — Make 1:1 calling production-real
-- [x] A1. OTP provider abstraction + pluggable SMS provider (Twilio/HTTP), env-selected. ⚠️ needs SMS creds
+- [x] A1. OTP provider abstraction: SMS (Twilio/HTTP) AND email (SMTP) channels, env-selected. Email login path (`/api/v1/auth/email/otp/*`) implemented + tested. ⚠️ needs SMTP creds to send real email
 - [x] A2. Push tokens: registration API + storage (`push_tokens`)
 - [x] A3. Push sender abstraction (FCM) + call-invite push on authorize when callee offline. ⚠️ needs FCM key
 - [x] A4. Call lifecycle persistence: RINGING/ACTIVE/answered_at from signaling
