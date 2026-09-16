@@ -1,4 +1,4 @@
-import { Controller, Post, Delete, Param, Body, UseGuards, Req } from '@nestjs/common';
+import { Controller, Post, Get, Delete, Param, Body, UseGuards, Req } from '@nestjs/common';
 import { ConnectionsService } from './connections.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { IsString, IsNotEmpty } from 'class-validator';
@@ -13,6 +13,11 @@ class CreateConnectionDto {
 @UseGuards(JwtAuthGuard)
 export class ConnectionsController {
   constructor(private readonly connectionsService: ConnectionsService) {}
+
+  @Get()
+  async list(@Req() req: { user: { sub: string } }) {
+    return this.connectionsService.list(req.user.sub);
+  }
 
   @Post()
   async create(@Req() req: { user: { sub: string } }, @Body() body: CreateConnectionDto) {

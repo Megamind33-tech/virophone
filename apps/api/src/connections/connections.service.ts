@@ -13,6 +13,19 @@ export class ConnectionsService {
     @InjectRepository(Block) private readonly blockRepo: Repository<Block>,
   ) {}
 
+  async list(userId: string) {
+    const rows = await this.connectionRepo.find({
+      where: [{ requesterUserId: userId }, { recipientUserId: userId }],
+    });
+    return rows.map((c) => ({
+      id: c.id,
+      requesterUserId: c.requesterUserId,
+      recipientUserId: c.recipientUserId,
+      status: c.status,
+      direction: c.requesterUserId === userId ? 'OUTGOING' : 'INCOMING',
+    }));
+  }
+
   async create(requesterId: string, targetUserId: string) {
     if (requesterId === targetUserId) {
       throw new ViroException('VALIDATION_ERROR', 'Cannot connect to yourself.', HttpStatus.BAD_REQUEST);

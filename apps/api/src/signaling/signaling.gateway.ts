@@ -117,6 +117,9 @@ export class SignalingGateway
         { deviceId: payload.deviceId, connectedAt: Date.now() },
         3600,
       );
+      // Track every connected device so realtime delivery can fan out to all
+      // of a user's devices (multi-device).
+      await this.redis.sAdd(`ws:userdevices:${payload.sub}`, payload.deviceId, 3600);
       await this.presenceService.setPresence(payload.sub, 'ONLINE');
     } catch {
       client.close(4001, 'Unauthorized');
@@ -126,6 +129,9 @@ export class SignalingGateway
   async handleDisconnect(client: AuthenticatedSocket) {
     if (client.deviceId) {
       await this.redis.del(`ws:device:${client.deviceId}`);
+      if (client.userId) {
+        await this.redis.sRem(`ws:userdevices:${client.userId}`, client.deviceId);
+      }
     }
     if (client.userId) {
       await this.redis.del(`ws:user:${client.userId}`);
@@ -205,7 +211,9 @@ export class SignalingGateway
       await this.callsService.markActive(callId).catch(() => undefined);
     }
 
-    const delivered = this.deliverToDevice(recipientDeviceId, {
+    // Deliver across instances via the realtime bus (works whether the peer's
+    // socket is on this replica or another).
+    const delivered = await this.realtimeRegistry.deliverToDevice(recipientDeviceId, {
       type,
       callId,
       fromUserId: client.userId,
@@ -213,13 +221,13 @@ export class SignalingGateway
       payload,
     });
 
-    if (delivered === 0) {
+    if (!delivered) {
       // The peer's socket is gone (app closed / lost connection). Tell the
       // sender explicitly instead of leaving the call hanging in "connecting".
-      return { delivered: false, reason: 'peer_unreachable', recipients: 0 };
+      return { delivered: false, reason: 'peer_unreachable' };
     }
 
-    return { delivered: true, recipients: delivered };
+    return { delivered: true };
   }
 
   /** Delivers a message to every live socket for a device; returns the count. */

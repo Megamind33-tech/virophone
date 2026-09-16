@@ -21,11 +21,11 @@ functional once the corresponding secret/service is supplied.
 - [ ] B5. Android: Messages/Inbox tab + conversation list; persist chat in Room; receipts
 
 ## Phase C — Scale & reliability
-- [ ] C1. Redis pub/sub in signaling gateway → multi-instance delivery
-- [ ] C2. Multi-device call fanout (ring-all) via device registry
-- [ ] C3. Apply global ThrottlerGuard; register ApiExceptionFilter
+- [x] C1. Redis pub/sub delivery bus → multi-instance signaling + messaging
+- [~] C2. Multi-device fanout: messages fan out to all devices; call ring-all still 1 device
+- [x] C3. Apply global ThrottlerGuard; register ApiExceptionFilter
 - [ ] C4. Wire offline-trust ticket verification into call authorize
-- [ ] C5. List endpoints: `GET /connections`, `GET /blocks`, `GET /calls`
+- [x] C5. List endpoints: `GET /connections`, `GET /blocks`, `GET /calls/history`
 - [ ] C6. Observability: request/WS/TURN metrics endpoint
 
 ## Phase D — Group calling

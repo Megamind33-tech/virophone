@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD, APP_FILTER } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ApiExceptionFilter } from './common/filters/api-exception.filter';
 import { AuthModule } from './auth/auth.module';
 import { DevicesModule } from './devices/devices.module';
 import { UsersModule } from './users/users.module';
@@ -57,6 +59,11 @@ import { MessagesModule } from './messages/messages.module';
     PushModule,
     RealtimeModule,
     MessagesModule,
+  ],
+  providers: [
+    // Global rate limiting (per-IP) and a consistent API error envelope.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_FILTER, useClass: ApiExceptionFilter },
   ],
 })
 export class AppModule {}

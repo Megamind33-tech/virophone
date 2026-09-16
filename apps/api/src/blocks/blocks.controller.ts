@@ -1,4 +1,4 @@
-import { Controller, Post, Delete, Param, Body, UseGuards, Req } from '@nestjs/common';
+import { Controller, Post, Get, Delete, Param, Body, UseGuards, Req } from '@nestjs/common';
 import { BlocksService } from './blocks.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { IsString, IsNotEmpty } from 'class-validator';
@@ -13,6 +13,11 @@ class CreateBlockDto {
 @UseGuards(JwtAuthGuard)
 export class BlocksController {
   constructor(private readonly blocksService: BlocksService) {}
+
+  @Get()
+  async list(@Req() req: { user: { sub: string } }) {
+    return this.blocksService.list(req.user.sub);
+  }
 
   @Post()
   async block(@Req() req: { user: { sub: string } }, @Body() body: CreateBlockDto) {

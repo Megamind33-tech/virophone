@@ -200,7 +200,7 @@ export class MessagesService {
     };
     for (const uid of recipientIds) {
       const delivered = await this.realtime.deliverToUser(uid, frame);
-      if (delivered > 0) {
+      if (delivered) {
         await this.receiptRepo.update(
           { messageId: message.id, userId: uid },
           { deliveredAt: new Date() },

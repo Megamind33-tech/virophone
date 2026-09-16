@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { RedisService } from '../redis/redis.service';
 
 /** A sink that can deliver a JSON message to all live sockets of a device. */
@@ -6,36 +6,68 @@ export interface SocketSink {
   deliverToDevice(deviceId: string, message: Record<string, unknown>): number;
 }
 
+const BUS_CHANNEL = 'realtime:deliver';
+
+interface BusFrame {
+  deviceId: string;
+  message: Record<string, unknown>;
+}
+
 /**
- * Decouples message/event producers (e.g. MessagesService) from the WebSocket
- * gateway that owns the sockets. The gateway registers itself as the sink.
+ * Decouples event producers (messages, call signaling) from the WebSocket
+ * gateway that owns the sockets, and makes delivery work across API replicas.
  *
- * Today delivery is in-process; Phase C swaps the sink for a Redis pub/sub
- * fan-out so any API replica can deliver to a socket held by another replica.
+ * Delivery is fanned out over a Redis pub/sub channel: every instance receives
+ * each frame and delivers it only if it holds the target socket locally. A
+ * device is "reachable" when its `ws:device:{id}` presence key exists in Redis
+ * (set by the gateway on connect), which lets producers decide whether to fall
+ * back to push — correctly across instances.
  */
 @Injectable()
-export class RealtimeRegistry {
+export class RealtimeRegistry implements OnModuleInit {
   private sink: SocketSink | null = null;
 
   constructor(private readonly redis: RedisService) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.redis.subscribe(BUS_CHANNEL, (raw) => {
+      const frame = raw as BusFrame;
+      if (frame?.deviceId && frame.message) {
+        this.sink?.deliverToDevice(frame.deviceId, frame.message);
+      }
+    });
+  }
 
   registerSink(sink: SocketSink): void {
     this.sink = sink;
   }
 
-  deliverToDevice(deviceId: string, message: Record<string, unknown>): number {
-    return this.sink?.deliverToDevice(deviceId, message) ?? 0;
+  /**
+   * Delivers to a device if it is connected to any instance. Returns whether
+   * the device was reachable (connected), not whether the socket write flushed.
+   */
+  async deliverToDevice(
+    deviceId: string,
+    message: Record<string, unknown>,
+  ): Promise<boolean> {
+    const online = await this.redis.exists(`ws:device:${deviceId}`);
+    if (!online) return false;
+    await this.redis.publish(BUS_CHANNEL, { deviceId, message } as BusFrame);
+    return true;
   }
 
-  /** Resolves the user's currently connected device and delivers to it. */
+  /** Fans out to every connected device of a user. Returns true if any reachable. */
   async deliverToUser(
     userId: string,
     message: Record<string, unknown>,
-  ): Promise<number> {
-    const conn = await this.redis.getJson<{ deviceId: string }>(
-      `ws:user:${userId}`,
-    );
-    if (!conn?.deviceId) return 0;
-    return this.deliverToDevice(conn.deviceId, message);
+  ): Promise<boolean> {
+    const devices = await this.redis.sMembers(`ws:userdevices:${userId}`);
+    if (devices.length === 0) return false;
+    let anyReachable = false;
+    for (const deviceId of devices) {
+      const reachable = await this.deliverToDevice(deviceId, message);
+      anyReachable = anyReachable || reachable;
+    }
+    return anyReachable;
   }
 }
