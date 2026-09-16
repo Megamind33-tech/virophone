@@ -22,4 +22,9 @@ if [ -f "$ROOT/.env" ]; then
   ( cd apps/api && set -a && . "$ROOT/.env" && set +a && npm run migration:run ) || true
 fi
 
-echo "=== start complete ==="
+echo "=== Starting Viro Reach API on port 3001 ==="
+# On Cloud Agent boot this script is launched detached, so it is fine for the
+# API server to run attached in the foreground here (its logs are captured).
+cd "$ROOT/apps/api"
+set -a && . "$ROOT/.env" && set +a
+exec npm run start:dev
