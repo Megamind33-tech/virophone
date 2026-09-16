@@ -119,7 +119,7 @@ The `CallTransport` interface lives in `apps/android/transport/lan/src/main/kotl
 | Module | Purpose |
 |--------|---------|
 | `:voice:api` | `VoiceEngine.kt` — SDK-agnostic VoIP interface |
-| `:voice:linphone` | `LiblinphoneVoiceEngine.kt` — Phase 0 stub adapter |
+| `:voice:webrtc` | `WebRtcVoiceEngine.kt` (1:1) and `MeshVoiceEngine.kt` (group mesh) |
 
 ## Backend module structure
 
@@ -129,14 +129,19 @@ NestJS modules in `apps/api/src/app.module.ts`:
 |--------|------------|-------------------------|
 | `AuthModule` | `auth.controller.ts` | OTP request/verify, JWT sessions, refresh rotation |
 | `DevicesModule` | `devices.controller.ts` | Device registration, listing, revocation |
-| `UsersModule` | `users.controller.ts` | `/me` profile read/update, Viro ID |
+| `UsersModule` | `users.controller.ts` | `/me` profile, GDPR export, account deletion |
 | `ContactsModule` | `contacts.controller.ts` | Hashed phone discovery |
 | `DirectoryModule` | `directory.controller.ts` | Exact Viro ID lookup |
 | `ConnectionsModule` | `connections.controller.ts` | Connection request/accept/reject/revoke |
 | `BlocksModule` | `blocks.controller.ts` | Block/unblock users |
-| `CallsModule` | `calls.controller.ts` | Server-side call authorization |
+| `CallsModule` | `calls.controller.ts` | Call authorization (ring-all), history, quality |
+| `MessagesModule` | `messages.controller.ts` | Conversations, send, history, read receipts |
+| `ConferenceModule` | `conference.controller.ts` | Mesh group-call rooms |
+| `PushModule` | `push.controller.ts` | Device push-token registration |
+| `AdminModule` | `admin.controller.ts` | User lookup/suspend, security events |
 | `SecurityModule` | — | `SecurityService` — audit event logging |
-| `HealthModule` | `health.controller.ts` | Liveness and readiness probes |
+| `HealthModule` | `health.controller.ts` | Liveness, readiness, `/health/metrics` |
+| `MetricsModule` | — | In-process HTTP/WS/TURN counters |
 
 Cross-cutting:
 

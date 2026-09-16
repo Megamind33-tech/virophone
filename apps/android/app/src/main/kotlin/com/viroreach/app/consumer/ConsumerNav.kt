@@ -98,6 +98,10 @@ enum class ConsumerOverlay {
 
     Chat,
 
+    BlockedContacts,
+
+    Help,
+
 }
 
 
@@ -205,11 +209,11 @@ fun ConsumerNav(
         }
     }
 
-    LaunchedEffect(callState, conferenceActive.isActive, isCaller, userInitiatedCall, incomingCall) {
+    LaunchedEffect(callState, conferenceActive.isActive, conferenceActive.incomingInvite, isCaller, userInitiatedCall, incomingCall) {
 
         when {
 
-            conferenceActive.isActive -> overlay = ConsumerOverlay.GroupCall
+            conferenceActive.isActive || conferenceActive.incomingInvite != null -> overlay = ConsumerOverlay.GroupCall
 
             userInitiatedCall ||
 
@@ -245,7 +249,19 @@ fun ConsumerNav(
 
         session.callManager.chatEvents.collect { event ->
 
-            session.messagesStore.receiveMessage(event.conversationId, event.body)
+            // Land inbound messages in the sender's conversation (keyed by peer
+            // userId) so they appear regardless of the server-side conversation id.
+            val peerUserId = event.fromUserId
+            val convId = if (peerUserId != null) {
+                session.messagesStore.openOrCreateConversation(
+                    peerName = peerUserId.take(8),
+                    peerUserId = peerUserId,
+                    phoneE164 = null,
+                )
+            } else {
+                event.conversationId
+            }
+            session.messagesStore.receiveMessage(convId, event.body)
 
         }
 
@@ -452,6 +468,22 @@ fun ConsumerNav(
         ConsumerOverlay.EditProfile -> {
 
             EditProfileScreen(session = session, onBack = { overlay = ConsumerOverlay.None })
+
+            return
+
+        }
+
+        ConsumerOverlay.BlockedContacts -> {
+
+            BlockedContactsScreen(session = session, onBack = { overlay = ConsumerOverlay.None })
+
+            return
+
+        }
+
+        ConsumerOverlay.Help -> {
+
+            HelpScreen(onBack = { overlay = ConsumerOverlay.None })
 
             return
 
@@ -764,7 +796,7 @@ fun ConsumerNav(
 
                     onStartGroupCall = { contacts ->
 
-                        session.conferenceManager.startConference(contacts.map { it.displayName })
+                        session.conferenceManager.startConference(contacts)
 
                         session.callHistoryStore.add(
 
@@ -894,6 +926,10 @@ fun ConsumerNav(
                     onAppearance = { overlay = ConsumerOverlay.Appearance },
 
                     onEditProfile = { overlay = ConsumerOverlay.EditProfile },
+
+                    onBlockedContacts = { overlay = ConsumerOverlay.BlockedContacts },
+
+                    onHelp = { overlay = ConsumerOverlay.Help },
 
                     onLogout = onLogout,
 

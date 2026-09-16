@@ -164,6 +164,8 @@ describe('Conference (mesh) signaling end-to-end', () => {
     await delay(200);
 
     sendConf(a.ws, 'conf.join', roomId);
+    const aJoined = await waitFor(a, (m) => m.type === 'conf.joined');
+    expect(aJoined).toBeTruthy();
     await delay(150);
     sendConf(b.ws, 'conf.join', roomId);
     // Alice is told Bob joined.
@@ -196,6 +198,26 @@ describe('Conference (mesh) signaling end-to-end', () => {
     sendConf(c.ws, 'conf.leave', roomId);
     await waitFor(a, (m) => m.type === 'conf.peer-left' && (m as any).deviceId === carol.deviceId);
     await waitFor(b, (m) => m.type === 'conf.peer-left' && (m as any).deviceId === carol.deviceId);
+  });
+
+  it('fans conf.invite to invited users who are online', async () => {
+    if (skip()) return;
+    const alice = await registerUser(app, '+260977000021', 'ia');
+    const bob = await registerUser(app, '+260977000022', 'ib');
+    const created = await request(app.getHttpServer())
+      .post('/api/v1/conferences')
+      .set('Authorization', `Bearer ${alice.accessToken}`)
+      .send({ inviteeUserIds: [bob.userId] });
+    const roomId = created.body.roomId;
+    const a = open(port, alice.accessToken);
+    const b = open(port, bob.accessToken);
+    await Promise.all([waitOpen(a.ws), waitOpen(b.ws)]);
+    await delay(200);
+    sendConf(a.ws, 'conf.join', roomId);
+    await delay(100);
+    sendConf(a.ws, 'conf.invite', roomId);
+    const invite = await waitFor(b, (m) => m.type === 'conf.invite');
+    expect((invite as any).roomId).toBe(roomId);
   });
 
   it('denies joining a room you were not invited to', async () => {

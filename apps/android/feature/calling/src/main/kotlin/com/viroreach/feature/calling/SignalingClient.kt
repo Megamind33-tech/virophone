@@ -165,6 +165,27 @@ class SignalingClient {
         )
     }
 
+    fun sendConference(
+        type: String,
+        roomId: String,
+        targetDeviceId: String? = null,
+        payload: JSONObject? = null,
+    ) {
+        val gen = _connectionGeneration.value
+        logEngineering("WSS_GEN_${gen}_SEND_CONF type=$type room=${roomId.take(8)}")
+        val envelope = JSONObject()
+            .put("type", type)
+            .put("roomId", roomId)
+        if (targetDeviceId != null) envelope.put("targetDeviceId", targetDeviceId)
+        if (payload != null) envelope.put("payload", payload)
+        webSocket?.send(
+            JSONObject()
+                .put("event", "conference")
+                .put("data", envelope)
+                .toString(),
+        )
+    }
+
     fun disconnect() = disconnectInternal(userInitiated = true)
 
     private fun disconnectInternal(userInitiated: Boolean) {

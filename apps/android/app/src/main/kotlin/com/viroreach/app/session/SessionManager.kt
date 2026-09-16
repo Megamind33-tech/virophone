@@ -40,7 +40,7 @@ class SessionManager private constructor(context: Context) {
     val networkMonitor: NetworkMonitor = NetworkMonitor(appContext)
     val callHistoryStore: CallHistoryStore = CallHistoryStore(appContext)
     val messagesStore: MessagesStore = MessagesStore()
-    val conferenceManager: ConferenceManager = ConferenceManager(this)
+    val conferenceManager: ConferenceManager = ConferenceManager(this, appContext)
     val appearanceManager: ViroAppearanceManager = ViroAppearanceManager(appContext)
     val profileRepository: ProfileRepository = ProfileRepository(
         appContext,

@@ -101,6 +101,9 @@ class CallManager(
     private val _chatEvents = MutableSharedFlow<ChatSignalingEvent>(extraBufferCapacity = 32)
     val chatEvents: SharedFlow<ChatSignalingEvent> = _chatEvents.asSharedFlow()
 
+    private val _conferenceEvents = MutableSharedFlow<SignalingMessage>(extraBufferCapacity = 32)
+    val conferenceEvents: SharedFlow<SignalingMessage> = _conferenceEvents.asSharedFlow()
+
     private var activeCallId: String? = null
     private var calleeDeviceId: String? = null
     private var remotePeerDeviceId: String? = null
@@ -564,6 +567,15 @@ class CallManager(
         activeTransport.send(type, callId, targetDeviceId, payload)
     }
 
+    fun sendConferenceEvent(
+        type: String,
+        roomId: String,
+        targetDeviceId: String? = null,
+        payload: JSONObject? = null,
+    ) {
+        wssTransport.sendConference(type, roomId, targetDeviceId, payload)
+    }
+
     fun sendChatMessage(conversationId: String, targetUserId: String?, body: String) {
         sendSignalingEvent(
             type = "chat.message",
@@ -637,6 +649,10 @@ class CallManager(
     }
 
     private fun handleSignalingMessage(msg: SignalingMessage, viaRoute: SignalingRoute) {
+        if (msg.type.startsWith("conf.")) {
+            scope.launch { _conferenceEvents.emit(msg) }
+            return
+        }
         when (msg.type) {
             "call.incoming", "call.invite" -> onIncomingCall(msg, viaRoute)
             "call.ringing" -> {
@@ -703,7 +719,7 @@ class CallManager(
                 voiceEngine.addIceCandidate(candidate)
             }
             "call.iceRestart" -> handleIceRestart(msg)
-            "call.end", "call.reject" -> {
+            "call.end", "call.reject", "call.busy" -> {
                 _state.value = CallStateMachineState.ENDED
             }
             "call.error" -> {
@@ -725,8 +741,23 @@ class CallManager(
                     )
                 }
             }
-            "conference.invite", "conference.join", "conference.leave" -> {
-                // Conference frames are handled by ConferenceManager via chatEvents extension if needed.
+            "message.new" -> {
+                // Server-delivered persisted message (Phase B messaging).
+                val payload = msg.payload ?: return
+                val messageObj = payload.optJSONObject("message") ?: return
+                val body = messageObj.optString("body")
+                if (body.isNullOrBlank()) return
+                val senderUserId = messageObj.optString("senderUserId", msg.fromUserId ?: "")
+                val conversationId = payload.optString("conversationId", msg.callId)
+                scope.launch {
+                    _chatEvents.emit(
+                        ChatSignalingEvent(
+                            conversationId = conversationId,
+                            fromUserId = senderUserId.ifBlank { msg.fromUserId },
+                            body = body,
+                        ),
+                    )
+                }
             }
         }
     }

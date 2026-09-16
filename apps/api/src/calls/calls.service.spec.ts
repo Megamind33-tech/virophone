@@ -18,7 +18,9 @@ describe('CallsService - Authorization', () => {
   } as unknown as CallSessionService;
   const mockRedis = {
     getJson: jest.fn().mockResolvedValue({ deviceId: 'callee-device' }),
+    sMembers: jest.fn().mockResolvedValue(['callee-device']),
   } as unknown as RedisService;
+  const mockOfflineTrust = { verifyOfflineCallTicket: jest.fn().mockReturnValue(false) } as any;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -38,6 +40,7 @@ describe('CallsService - Authorization', () => {
       mockCallSession,
       mockRedis,
       mockPush,
+      mockOfflineTrust,
     );
   });
 
@@ -63,6 +66,33 @@ describe('CallsService - Authorization', () => {
     await expect(service.authorize('caller', 'caller-device', 'target')).rejects.toThrow();
   });
 
+  it('authorizes via a valid offline call ticket when no relationship exists', async () => {
+    mockMatchRepo.findOne.mockResolvedValue(null);
+    mockConnectionRepo.findOne.mockResolvedValue(null);
+    mockProfileRepo.findOne.mockResolvedValue({ allowCallsFromViroId: 'CONNECTIONS_ONLY' });
+    (mockOfflineTrust.verifyOfflineCallTicket as jest.Mock).mockReturnValue(true);
+
+    const result = await service.authorize('caller', 'caller-device', 'target', undefined, 'valid-ticket');
+    expect(result.authorized).toBe(true);
+    expect(mockOfflineTrust.verifyOfflineCallTicket).toHaveBeenCalledWith(
+      'valid-ticket',
+      'caller',
+      'caller-device',
+      'target',
+    );
+  });
+
+  it('denies when the offline ticket is invalid and no relationship exists', async () => {
+    mockMatchRepo.findOne.mockResolvedValue(null);
+    mockConnectionRepo.findOne.mockResolvedValue(null);
+    mockProfileRepo.findOne.mockResolvedValue({ allowCallsFromViroId: 'CONNECTIONS_ONLY' });
+    (mockOfflineTrust.verifyOfflineCallTicket as jest.Mock).mockReturnValue(false);
+
+    await expect(
+      service.authorize('caller', 'caller-device', 'target', undefined, 'bad-ticket'),
+    ).rejects.toThrow();
+  });
+
   it('authorizes accepted connection', async () => {
     mockMatchRepo.findOne.mockResolvedValue(null);
     mockConnectionRepo.findOne.mockResolvedValue({
@@ -73,5 +103,22 @@ describe('CallsService - Authorization', () => {
 
     const result = await service.authorize('caller', 'caller-device', 'target');
     expect(result.authorized).toBe(true);
+  });
+
+  it('rings every online callee device', async () => {
+    mockMatchRepo.findOne.mockResolvedValue({ userId: 'caller', matchedUserId: 'target' });
+    (mockRedis.sMembers as jest.Mock).mockResolvedValue(['dev-a', 'dev-b']);
+    mockDeviceRepo.findOne.mockImplementation(({ where }: { where: { id: string } }) =>
+      Promise.resolve({ id: where.id, userId: 'target' }),
+    );
+
+    const result = await service.authorize('caller', 'caller-device', 'target');
+    expect(result.sessionMaterial?.calleeDeviceIds).toBe('dev-a,dev-b');
+    expect(mockCallSession.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        calleeDeviceIds: ['dev-a', 'dev-b'],
+        calleeDeviceId: 'dev-a',
+      }),
+    );
   });
 });

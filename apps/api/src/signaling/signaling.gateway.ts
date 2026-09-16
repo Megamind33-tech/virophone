@@ -20,6 +20,7 @@ import { PresenceService } from '../presence/presence.service';
 import { CallSessionService } from '../calls/call-session.service';
 import { CallsService } from '../calls/calls.service';
 import { ConferenceService } from '../conference/conference.service';
+import { MetricsService } from '../metrics/metrics.module';
 
 interface AuthenticatedSocket extends WebSocket {
   userId?: string;
@@ -67,6 +68,7 @@ export class SignalingGateway
     private readonly callsService: CallsService,
     private readonly conferenceService: ConferenceService,
     private readonly realtimeRegistry: RealtimeRegistry,
+    private readonly metrics: MetricsService,
     @InjectRepository(Device) private readonly deviceRepo: Repository<Device>,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
   ) {}
@@ -108,6 +110,7 @@ export class SignalingGateway
 
       client.userId = payload.sub;
       client.deviceId = payload.deviceId;
+      this.metrics.wsConnections += 1;
 
       await this.redis.setJson(
         `ws:device:${payload.deviceId}`,
@@ -149,6 +152,7 @@ export class SignalingGateway
     if (!client.userId || !client.deviceId) {
       return { error: 'unauthorized' };
     }
+    this.metrics.wsMessages += 1;
 
     const { type, callId, targetDeviceId, payload } = envelope;
     if (!callId || !type) {
@@ -169,25 +173,19 @@ export class SignalingGateway
       return { error: 'not_participant' };
     }
 
-    let recipientDeviceId = targetDeviceId;
-    if (!recipientDeviceId) {
-      recipientDeviceId =
-        client.deviceId === session.callerDeviceId
-          ? session.calleeDeviceId
-          : session.callerDeviceId;
-    }
+    const calleeDevices = this.callSessionService.calleeDevicesOf(session);
 
-    const allowedRecipient =
-      recipientDeviceId === session.callerDeviceId ||
-      recipientDeviceId === session.calleeDeviceId;
-    if (!allowedRecipient) {
+    const allowedRecipient = (deviceId: string) =>
+      deviceId === session.callerDeviceId || calleeDevices.includes(deviceId);
+
+    if (targetDeviceId && !allowedRecipient(targetDeviceId)) {
       return { error: 'invalid_target' };
     }
 
     if (type === 'call.invite' && client.deviceId !== session.callerDeviceId) {
       return { error: 'only_caller_may_invite' };
     }
-    if (type === 'call.answer' && client.deviceId !== session.calleeDeviceId) {
+    if (type === 'call.answer' && !calleeDevices.includes(client.deviceId)) {
       return { error: 'only_callee_may_answer' };
     }
 
@@ -213,15 +211,37 @@ export class SignalingGateway
       await this.callsService.markActive(callId).catch(() => undefined);
     }
 
-    // Deliver across instances via the realtime bus (works whether the peer's
-    // socket is on this replica or another).
-    const delivered = await this.realtimeRegistry.deliverToDevice(recipientDeviceId, {
-      type,
-      callId,
-      fromUserId: client.userId,
-      fromDeviceId: client.deviceId,
-      payload,
-    });
+    // First callee device to accept/answer wins; others are told the call is busy.
+    if (type === 'call.accept' || type === 'call.answer') {
+      const others = await this.callSessionService.markAnswered(callId, client.deviceId);
+      for (const other of others) {
+        await this.realtimeRegistry.deliverToDevice(other, {
+          type: 'call.busy',
+          callId,
+          fromUserId: client.userId,
+          fromDeviceId: client.deviceId,
+        });
+      }
+    }
+
+    const recipients = this.ringAllRecipients(session, client.deviceId, type, targetDeviceId);
+    let delivered = false;
+    for (const recipientDeviceId of recipients) {
+      const ok = await this.realtimeRegistry.deliverToDevice(recipientDeviceId, {
+        type,
+        callId,
+        fromUserId: client.userId,
+        fromDeviceId: client.deviceId,
+        payload,
+      });
+      if (ok) delivered = true;
+    }
+
+    if (!delivered) {
+      // The peer's socket is gone (app closed / lost connection). Tell the
+      // sender explicitly instead of leaving the call hanging in "connecting".
+      return { delivered: false, reason: 'peer_unreachable' };
+    }
 
     if (!delivered) {
       // The peer's socket is gone (app closed / lost connection). Tell the
@@ -230,6 +250,38 @@ export class SignalingGateway
     }
 
     return { delivered: true };
+  }
+
+  /**
+   * Ring-all: until a callee device answers, caller invite/offer/ICE fans out
+   * to every callee device. After answer, media goes only to that device.
+   */
+  private ringAllRecipients(
+    session: {
+      callerDeviceId: string;
+      calleeDeviceId: string;
+      calleeDeviceIds?: string[];
+      answeredDeviceId?: string;
+    },
+    senderDeviceId: string,
+    type: string,
+    targetDeviceId?: string,
+  ): string[] {
+    const calleeDevices = this.callSessionService.calleeDevicesOf(session as any);
+    if (session.answeredDeviceId) {
+      if (targetDeviceId) return [targetDeviceId];
+      return senderDeviceId === session.callerDeviceId
+        ? [session.answeredDeviceId]
+        : [session.callerDeviceId];
+    }
+    const ringingFanout = type === 'call.invite' || type === 'call.offer' || type === 'call.ice';
+    if (senderDeviceId === session.callerDeviceId && ringingFanout) {
+      return calleeDevices;
+    }
+    if (targetDeviceId) return [targetDeviceId];
+    return senderDeviceId === session.callerDeviceId
+      ? [session.calleeDeviceId]
+      : [session.callerDeviceId];
   }
 
   /**
@@ -242,6 +294,7 @@ export class SignalingGateway
     @MessageBody() envelope: SignalingEnvelope & { roomId?: string },
   ) {
     if (!client.userId || !client.deviceId) return { error: 'unauthorized' };
+    this.metrics.wsMessages += 1;
     const type = envelope.type as string;
     const roomId = (envelope as { roomId?: string }).roomId;
     const { targetDeviceId, payload } = envelope;
@@ -265,7 +318,35 @@ export class SignalingGateway
           deviceId: client.deviceId,
         });
       }
+      // Snapshot so the joiner can mesh with people already in the room.
+      await this.realtimeRegistry.deliverToDevice(client.deviceId, {
+        type: 'conf.joined',
+        roomId,
+        payload: { participants },
+      });
       return { joined: true, participants };
+    }
+
+    if (type === 'conf.invite') {
+      if (!(await this.conferenceService.canJoin(roomId, client.userId))) {
+        return { error: 'not_allowed' };
+      }
+      const meta = await this.conferenceService.getMeta(roomId);
+      if (!meta) return { error: 'not_found' };
+      for (const userId of meta.allowed) {
+        if (userId === client.userId) continue;
+        const devices = await this.redis.sMembers(`ws:userdevices:${userId}`);
+        for (const deviceId of devices) {
+          await this.realtimeRegistry.deliverToDevice(deviceId, {
+            type: 'conf.invite',
+            roomId,
+            fromUserId: client.userId,
+            fromDeviceId: client.deviceId,
+            payload: { title: meta.title || 'Group Call' },
+          });
+        }
+      }
+      return { invited: true };
     }
 
     if (!(await this.conferenceService.isMember(roomId, client.deviceId))) {

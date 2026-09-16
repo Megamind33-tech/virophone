@@ -193,10 +193,16 @@ export class MessagesService {
     await this.convRepo.update({ id: conversation.id }, { updatedAt: new Date() });
 
     // Deliver in realtime; fall back to push when the recipient is offline.
+    // `payload` carries the data for the Android signaling parser; the
+    // top-level fields are kept for tooling/tests.
+    const dto = this.toDto(message);
     const frame = {
       type: 'message.new',
+      callId: conversation.id,
+      fromUserId: senderId,
       conversationId: conversation.id,
-      message: this.toDto(message),
+      message: dto,
+      payload: { conversationId: conversation.id, message: dto },
     };
     for (const uid of recipientIds) {
       const delivered = await this.realtime.deliverToUser(uid, frame);

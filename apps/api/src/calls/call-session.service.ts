@@ -15,6 +15,8 @@ export interface CallSession {
   calleeUserId: string;
   callerDeviceId: string;
   calleeDeviceId: string;
+  calleeDeviceIds: string[];
+  answeredDeviceId?: string;
   state: CallSessionState;
   expiresAt: number;
   createdAt: number;
@@ -33,9 +35,14 @@ export class CallSessionService {
     calleeUserId: string;
     callerDeviceId: string;
     calleeDeviceId: string;
+    calleeDeviceIds?: string[];
   }): Promise<CallSession> {
+    const calleeDeviceIds = Array.from(
+      new Set(params.calleeDeviceIds?.length ? params.calleeDeviceIds : [params.calleeDeviceId]),
+    );
     const session: CallSession = {
       ...params,
+      calleeDeviceIds,
       state: 'INITIATED',
       createdAt: Date.now(),
       expiresAt: Date.now() + TTL_SECONDS * 1000,
@@ -58,9 +65,26 @@ export class CallSessionService {
   async isParticipant(callId: string, userId: string, deviceId: string): Promise<boolean> {
     const session = await this.getSession(callId);
     if (!session || session.expiresAt < Date.now()) return false;
+    const calleeDevices = session.calleeDeviceIds?.length
+      ? session.calleeDeviceIds
+      : [session.calleeDeviceId];
     const caller = session.callerUserId === userId && session.callerDeviceId === deviceId;
-    const callee = session.calleeUserId === userId && session.calleeDeviceId === deviceId;
+    const callee = session.calleeUserId === userId && calleeDevices.includes(deviceId);
     return caller || callee;
+  }
+
+  calleeDevicesOf(session: CallSession): string[] {
+    return session.calleeDeviceIds?.length
+      ? session.calleeDeviceIds
+      : [session.calleeDeviceId];
+  }
+
+  async markAnswered(callId: string, deviceId: string): Promise<string[]> {
+    const session = await this.getSession(callId);
+    if (!session) return [];
+    session.answeredDeviceId = deviceId;
+    await this.redis.setJson(`${PREFIX}${callId}`, session, TTL_SECONDS);
+    return this.calleeDevicesOf(session).filter((id) => id !== deviceId);
   }
 
   async endSession(callId: string): Promise<void> {

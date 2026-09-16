@@ -20,6 +20,7 @@ const MIGRATIONS = [
   '003_push.sql',
   '004_messaging.sql',
   '005_email_identity.sql',
+  '006_admin_role.sql',
 ];
 
 async function resetDatabase() {

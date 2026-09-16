@@ -20,6 +20,9 @@ export class User {
   @Column({ type: 'varchar', length: 20, default: 'ACTIVE' })
   status!: string;
 
+  @Column({ name: 'admin_role', type: 'varchar', length: 20, default: 'USER' })
+  adminRole!: string;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

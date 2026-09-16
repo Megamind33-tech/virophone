@@ -71,5 +71,14 @@ class RemoteWssSignalingTransport(
         client.send(type, callId, targetDeviceId, payload)
     }
 
+    override fun sendConference(
+        type: String,
+        roomId: String,
+        targetDeviceId: String?,
+        payload: JSONObject?,
+    ) {
+        client.sendConference(type, roomId, targetDeviceId, payload)
+    }
+
     override fun disconnect() = client.disconnect()
 }

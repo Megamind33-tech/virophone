@@ -1,6 +1,7 @@
 import { createEmailOtpProvider } from './email-otp.factory';
 import { ConsoleEmailProvider } from './console-email.provider';
 import { SmtpEmailProvider } from './smtp-email.provider';
+import { MailtrapEmailProvider } from './mailtrap-email.provider';
 
 describe('createEmailOtpProvider', () => {
   const ORIGINAL = process.env.EMAIL_TRANSPORT;
@@ -16,5 +17,10 @@ describe('createEmailOtpProvider', () => {
   it('selects the SMTP provider when configured', () => {
     process.env.EMAIL_TRANSPORT = 'smtp';
     expect(createEmailOtpProvider()).toBeInstanceOf(SmtpEmailProvider);
+  });
+
+  it('selects the Mailtrap provider when configured', () => {
+    process.env.EMAIL_TRANSPORT = 'mailtrap';
+    expect(createEmailOtpProvider()).toBeInstanceOf(MailtrapEmailProvider);
   });
 });

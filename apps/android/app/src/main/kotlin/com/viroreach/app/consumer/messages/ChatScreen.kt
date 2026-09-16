@@ -127,8 +127,26 @@ fun ChatScreen(
                     FilledIconButton(
                         onClick = {
                             if (draft.isBlank()) return@FilledIconButton
-                            store.sendMessage(conversationId, draft)
-                            session.callManager.sendChatMessage(conversationId, peerUserId, draft)
+                            val outgoing = draft
+                            store.sendMessage(conversationId, outgoing)
+                            // Persist + deliver via the server (survives offline,
+                            // reaches other devices, pushes when peer is away).
+                            if (peerUserId != null) {
+                                scope.launch {
+                                    runCatching {
+                                        session.api.sendMessage(
+                                            com.viroreach.core.network.SendMessageBody(
+                                                toUserId = peerUserId,
+                                                body = outgoing,
+                                                clientMsgId = java.util.UUID.randomUUID().toString(),
+                                            ),
+                                        )
+                                    }
+                                }
+                            } else {
+                                // No resolved Viro user (e.g. off-network peer) — best-effort LAN/relay chat.
+                                session.callManager.sendChatMessage(conversationId, peerUserId, outgoing)
+                            }
                             draft = ""
                             scope.launch {
                                 if (messages.isNotEmpty()) {

@@ -14,6 +14,7 @@ import type { CallAuthorizeResponse } from '@viro-reach/shared-types';
 import { CallSessionService } from './call-session.service';
 import { RedisService } from '../redis/redis.service';
 import { PushService } from '../push/push.service';
+import { OfflineTrustService } from '../offline-trust/offline-trust.service';
 
 export interface CallQualityInput {
   latency?: number;
@@ -38,6 +39,7 @@ export class CallsService {
     private readonly callSessionService: CallSessionService,
     private readonly redis: RedisService,
     private readonly pushService: PushService,
+    private readonly offlineTrustService: OfflineTrustService,
   ) {}
 
   async authorize(
@@ -45,6 +47,7 @@ export class CallsService {
     callerDeviceId: string,
     targetUserId: string,
     preferredRoute?: string,
+    offlineTicket?: string,
   ): Promise<CallAuthorizeResponse> {
     if (callerId === targetUserId) {
       throw new ViroException('CALL_NOT_AUTHORIZED', 'Cannot call yourself.', HttpStatus.FORBIDDEN);
@@ -60,21 +63,34 @@ export class CallsService {
 
     const allowed = await this.isCallAllowed(callerId, targetUserId);
     if (!allowed) {
-      throw new ViroException(
-        'CALL_NOT_AUTHORIZED',
-        'You are not authorized to call this person.',
-        HttpStatus.FORBIDDEN,
-      );
+      // Fall back to a signed offline call ticket, which proves a relationship
+      // that was authorized previously (e.g. established offline / on LAN).
+      const ticketOk =
+        !!offlineTicket &&
+        this.offlineTrustService.verifyOfflineCallTicket(
+          offlineTicket,
+          callerId,
+          callerDeviceId,
+          targetUserId,
+        );
+      if (!ticketOk) {
+        throw new ViroException(
+          'CALL_NOT_AUTHORIZED',
+          'You are not authorized to call this person.',
+          HttpStatus.FORBIDDEN,
+        );
+      }
     }
 
-    const calleeDeviceId = await this.resolveCalleeDeviceId(targetUserId);
-    if (!calleeDeviceId) {
+    const calleeDeviceIds = await this.resolveCalleeDeviceIds(targetUserId);
+    if (!calleeDeviceIds.length) {
       throw new ViroException(
         'CALL_TARGET_UNAVAILABLE',
         'This person is currently unavailable.',
         HttpStatus.NOT_FOUND,
       );
     }
+    const calleeDeviceId = calleeDeviceIds[0];
 
     const routeType = preferredRoute || 'INTERNET_P2P';
     const call = this.callRepo.create({
@@ -91,6 +107,7 @@ export class CallsService {
       calleeUserId: targetUserId,
       callerDeviceId,
       calleeDeviceId,
+      calleeDeviceIds,
     });
 
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
@@ -126,6 +143,7 @@ export class CallsService {
         signalingUrl,
         calleeDeviceId,
         callerDeviceId,
+        calleeDeviceIds: calleeDeviceIds.join(','),
         routeType,
       },
     };
@@ -193,21 +211,23 @@ export class CallsService {
     return this.callRepo.save(call);
   }
 
-  private async resolveCalleeDeviceId(userId: string): Promise<string | null> {
-    const wsConn = await this.redis.getJson<{ deviceId: string }>(`ws:user:${userId}`);
-    if (wsConn?.deviceId) {
+  private async resolveCalleeDeviceIds(userId: string): Promise<string[]> {
+    const online = await this.redis.sMembers(`ws:userdevices:${userId}`);
+    const valid: string[] = [];
+    for (const id of online) {
       const device = await this.deviceRepo.findOne({
-        where: { id: wsConn.deviceId, userId, revokedAt: IsNull() },
+        where: { id, userId, revokedAt: IsNull() },
       });
-      if (device) return device.id;
+      if (device) valid.push(device.id);
     }
+    if (valid.length) return Array.from(new Set(valid));
 
     const devices = await this.deviceRepo.find({
       where: { userId, revokedAt: IsNull() },
       order: { lastSeenAt: 'DESC' },
-      take: 1,
+      take: 8,
     });
-    return devices[0]?.id ?? null;
+    return devices.map((d) => d.id);
   }
 
   private async isCallAllowed(callerId: string, targetUserId: string): Promise<boolean> {

@@ -24,12 +24,19 @@ object SignalingFrameParser {
             SignalingParseResult(
                 message = SignalingMessage(
                     type = json.get("type").asString,
-                    callId = json.get("callId")?.asString ?: "",
-                    fromUserId = json.get("fromUserId")?.asString,
-                    fromDeviceId = json.get("fromDeviceId")?.asString,
+                    callId = json.get("callId")?.asString
+                        ?: json.get("roomId")?.asString
+                        ?: "",
+                    fromUserId = json.get("fromUserId")?.asString
+                        ?: json.get("userId")?.asString,
+                    fromDeviceId = json.get("fromDeviceId")?.asString
+                        ?: json.get("deviceId")?.asString,
                     payload = json.get("payload")?.takeIf { it.isJsonObject }?.let {
                         JSONObject(it.toString())
+                    } ?: json.get("participants")?.takeIf { it.isJsonArray }?.let {
+                        JSONObject().put("participants", org.json.JSONArray(it.toString()))
                     },
+                    roomId = json.get("roomId")?.asString,
                 ),
             )
         } catch (e: Exception) {

@@ -606,11 +606,35 @@ export const ENDPOINTS = {
 };
 ```
 
+## Current product surface (beyond Phase 0)
+
+These endpoints exist in the running API and Android Retrofit client:
+
+| Method | Path | Auth | Notes |
+|--------|------|------|-------|
+| GET | `/health/metrics` | none | HTTP/WS/TURN/call counters |
+| POST | `/api/v1/auth/email/otp/request` | none | Email OTP |
+| POST | `/api/v1/auth/email/otp/verify` | none | Email OTP verify |
+| GET | `/api/v1/me/export` | JWT | GDPR dump |
+| DELETE | `/api/v1/me` | JWT | Close account |
+| GET | `/api/v1/blocks` | JWT | Blocked user ids |
+| GET | `/api/v1/calls/history` | JWT | Call history |
+| POST | `/api/v1/messages` | JWT | Send |
+| GET | `/api/v1/messages/conversations` | JWT | Inbox summaries |
+| POST | `/api/v1/conferences` | JWT | Create mesh room |
+| GET | `/api/v1/conferences/:id/participants` | JWT | Room members |
+| GET | `/api/v1/admin/users` | admin | `X-Admin-Key` or ADMIN role |
+| POST | `/api/v1/admin/users/:id/suspend` | admin | Revokes devices |
+| GET | `/api/v1/admin/security-events` | admin | Recent audit rows |
+
+Signaling WebSocket `/api/v1/signaling/ws`:
+
+- `event: signaling` — 1:1 call frames; invite/offer/ICE fan out to every online callee device until one answers
+- `event: conference` — `conf.join`, `conf.invite`, `conf.offer`, `conf.answer`, `conf.ice`, `conf.leave`
+
 ## Android client mapping
 
 Retrofit interface: `apps/android/core/network/ViroApiService.kt`
-
-Implemented methods in Phase 0: OTP, refresh, me, discover, directory exact lookup, call authorize.
 
 ## Related documents
 
@@ -618,3 +642,4 @@ Implemented methods in Phase 0: OTP, refresh, me, discover, directory exact look
 - [DISCOVERY_PRIVACY.md](DISCOVERY_PRIVACY.md)
 - [CALL_ROUTING.md](CALL_ROUTING.md)
 - [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)
+- [COMPLETION_CHECKLIST.md](COMPLETION_CHECKLIST.md)

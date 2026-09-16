@@ -21,6 +21,15 @@ interface ViroApiService {
     @PATCH("api/v1/me")
     suspend fun updateMe(@Body body: UpdateMeBody): MeResponse
 
+    @GET("api/v1/me/export")
+    suspend fun exportAccount(): AccountExport
+
+    @DELETE("api/v1/me")
+    suspend fun deleteAccount(): DeleteAccountResponse
+
+    @GET("api/v1/blocks")
+    suspend fun listBlocks(): List<BlockedUser>
+
     @POST("api/v1/blocks")
     suspend fun blockUser(@Body body: BlockUserBody)
 
@@ -99,16 +108,30 @@ data class OtpVerifyResponse(val accessToken: String, val refreshToken: String, 
 data class RefreshBody(val refreshToken: String)
 data class RefreshResponse(val accessToken: String, val refreshToken: String, val expiresIn: Int)
 data class MeResponse(val userId: String, val phoneE164: String, val displayName: String, val avatarUrl: String?, val viroId: String?, val allowCallsFromViroId: String)
+data class DeleteAccountResponse(val deleted: Boolean)
+data class AccountExport(
+    val userId: String,
+    val exportedAt: String,
+    val profile: MeResponse? = null,
+    val calls: List<CallHistoryEntry> = emptyList(),
+    val connections: List<ConnectionInviteResponse> = emptyList(),
+    val blocks: List<BlockedUser> = emptyList(),
+)
 data class UpdateMeBody(
     val displayName: String? = null,
     val avatarUrl: String? = null,
 )
 data class BlockUserBody(val blockedUserId: String)
+data class BlockedUser(val blockedUserId: String)
 data class ConnectionInviteBody(val targetUserId: String)
 data class ConnectionInviteResponse(val id: String, val status: String)
 data class DiscoverBody(val phonesE164: List<String>, val defaultRegion: String? = "ZM")
 data class DiscoverResponse(val matches: List<ContactDiscoveryMatch>)
-data class AuthorizeCallBody(val targetUserId: String, val preferredRoute: String? = null)
+data class AuthorizeCallBody(
+    val targetUserId: String,
+    val preferredRoute: String? = null,
+    val offlineTicket: String? = null,
+)
 data class AuthorizeCallResponse(val callId: String, val authorized: Boolean, val expiresAt: String, val routeType: String, val sessionMaterial: Map<String, String>?)
 data class RegisterEphemeralBody(val ephemeralId: String)
 data class RegisterEphemeralResponse(val expiresAt: String)

@@ -6,6 +6,8 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.viroreach.app.BuildConfig
+import com.viroreach.feature.contacts.CountryCatalog
+import com.viroreach.feature.contacts.CountryOption
 import com.viroreach.feature.contacts.PhoneNumberFormatter
 import kotlinx.coroutines.launch
 
@@ -15,6 +17,7 @@ data class AuthUiState(
     val step: AuthStep = AuthStep.Phone,
     /** Raw digits only — display formatting is derived in UI. */
     val phoneDigits: String = "",
+    val country: CountryOption = CountryCatalog.default(),
     val otpInput: String = "",
     val challengeId: String? = null,
     val normalizedPhone: String? = null,
@@ -27,10 +30,12 @@ class AuthViewModel(
     private val repository: AuthRepository,
     returningInstall: Boolean = false,
     initialPhoneDigits: String = "",
+    initialCountry: CountryOption = CountryCatalog.default(),
 ) : ViewModel() {
     var uiState by mutableStateOf(
         AuthUiState(
             phoneDigits = initialPhoneDigits,
+            country = initialCountry,
             returningInstall = returningInstall,
         ),
     )
@@ -45,6 +50,10 @@ class AuthViewModel(
         )
     }
 
+    fun selectCountry(country: CountryOption) {
+        uiState = uiState.copy(country = country, errorMessage = null)
+    }
+
     fun updateOtp(value: String) {
         uiState = uiState.copy(otpInput = value, errorMessage = null)
     }
@@ -52,7 +61,7 @@ class AuthViewModel(
     fun requestOtp() {
         viewModelScope.launch {
             uiState = uiState.copy(loading = true, errorMessage = null)
-            repository.requestOtp(uiState.phoneDigits)
+            repository.requestOtp(uiState.phoneDigits, uiState.country.iso2)
                 .onSuccess { challenge ->
                     uiState = uiState.copy(
                         loading = false,
