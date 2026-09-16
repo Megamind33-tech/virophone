@@ -4,16 +4,15 @@ import { ConsoleOtpProvider } from './console-otp.provider';
 import { TestOtpProvider } from './test-otp.provider';
 import { HttpSmsOtpProvider } from './http-sms-otp.provider';
 import { TwilioOtpProvider } from './twilio-otp.provider';
+import { HardwareTestOtpProvider } from './hardware-test-otp.provider';
 
 /**
  * Selects the OTP delivery provider from the OTP_PROVIDER env var:
- *   test    - fixed-code provider for automated tests
- *   twilio  - Twilio Programmable Messaging
- *   http    - generic HTTP JSON SMS gateway
- *   console - (default) logs the code; development only
- *
- * This is the single seam for plugging in a real SMS provider: set
- * OTP_PROVIDER and the provider-specific credentials, no code change needed.
+ *   test           - fixed-code provider for automated tests
+ *   hardware-test  - fixed code for allowlisted field-test phones
+ *   twilio         - Twilio Programmable Messaging
+ *   http           - generic HTTP JSON SMS gateway
+ *   console        - (default) logs the code; development only
  */
 export function createOtpProvider(): OtpProvider {
   const kind = (process.env.OTP_PROVIDER || 'console').toLowerCase();
@@ -21,6 +20,9 @@ export function createOtpProvider(): OtpProvider {
   switch (kind) {
     case 'test':
       return new TestOtpProvider();
+    case 'hardware-test':
+      logger.log('Using hardware-test OTP provider');
+      return new HardwareTestOtpProvider();
     case 'twilio':
       logger.log('Using Twilio OTP provider');
       return new TwilioOtpProvider();

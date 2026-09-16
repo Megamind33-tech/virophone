@@ -11,6 +11,7 @@ describe('CallsService - Authorization', () => {
   const mockMatchRepo = { findOne: jest.fn() };
   const mockConnectionRepo = { findOne: jest.fn() };
   const mockProfileRepo = { findOne: jest.fn() };
+  const mockPhoneRepo = { findOne: jest.fn() };
   const mockDeviceRepo = { findOne: jest.fn(), find: jest.fn() };
   const mockBlocks = { isBlocked: jest.fn().mockResolvedValue(false) } as unknown as BlocksService;
   const mockCallSession = {
@@ -35,6 +36,7 @@ describe('CallsService - Authorization', () => {
       mockMatchRepo as any,
       mockConnectionRepo as any,
       mockProfileRepo as any,
+      mockPhoneRepo as any,
       mockDeviceRepo as any,
       mockBlocks,
       mockCallSession,
@@ -42,6 +44,14 @@ describe('CallsService - Authorization', () => {
       mockPush,
       mockOfflineTrust,
     );
+  });
+
+  it('rejects phone number where UUID is expected', async () => {
+    await expect(
+      service.authorize('11111111-1111-4111-8111-111111111111', 'dev-1', '+260977426940'),
+    ).rejects.toMatchObject({
+      response: { code: 'INVALID_TARGET' },
+    });
   });
 
   it('denies unknown caller relationship', async () => {

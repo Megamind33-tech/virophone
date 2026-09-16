@@ -13,6 +13,12 @@ import { OtpChallenge } from '../database/entities/otp-challenge.entity';
 import { EmailIdentity } from '../database/entities/email-identity.entity';
 import { createOtpProvider } from './otp/otp-provider.factory';
 import { createEmailOtpProvider } from './email/email-otp.factory';
+import {
+  getHardwareTestOtpCode,
+  isHardwareTestMode,
+  isPhoneHardwareTestAllowed,
+  maskPhoneForSecurityLog,
+} from './otp/hardware-test.config';
 import { ViroException } from '../common/exceptions/viro.exception';
 import { normalizeE164, isValidE164 } from '../common/utils/phone.util';
 import { hashPhoneForStorage, hashRefreshToken } from '../common/utils/hash.util';
@@ -44,10 +50,20 @@ export class AuthService {
       throw new ViroException('INVALID_E164', 'Invalid phone number format.', HttpStatus.BAD_REQUEST);
     }
 
-    const code =
-      process.env.OTP_PROVIDER === 'test' && process.env.TEST_OTP_CODE
-        ? process.env.TEST_OTP_CODE
-        : String(randomInt(100000, 999999));
+    if (isHardwareTestMode() && !isPhoneHardwareTestAllowed(normalized)) {
+      await this.securityService.logEvent({
+        eventType: 'HARDWARE_TEST_AUTH_FAILURE',
+        severity: 'MEDIUM',
+        metadata: { reason: 'phone_not_allowlisted', phone: maskPhoneForSecurityLog(normalized) },
+      });
+      throw new ViroException(
+        'FORBIDDEN',
+        'Phone not authorized for hardware test OTP.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
+    const code = this.resolveOtpCode(normalized);
     const codeHash = this.hashOtp(code);
     const expiresAt = new Date(Date.now() + this.otpExpiresSeconds * 1000);
 
@@ -202,10 +218,17 @@ export class AuthService {
     await this.otpRepo.save(challenge);
 
     if (challenge.codeHash !== this.hashOtp(code)) {
+      const failureEvent = isPhoneHardwareTestAllowed(challenge.phoneE164)
+        ? 'HARDWARE_TEST_AUTH_FAILURE'
+        : 'INVALID_OTP_ATTEMPT';
       await this.securityService.logEvent({
-        eventType: 'INVALID_OTP_ATTEMPT',
-        severity: 'LOW',
-        metadata: { challengeId },
+        eventType: failureEvent,
+        severity: failureEvent === 'HARDWARE_TEST_AUTH_FAILURE' ? 'MEDIUM' : 'LOW',
+        metadata: {
+          challengeId,
+          reason: 'invalid_credential',
+          phone: maskPhoneForSecurityLog(challenge.phoneE164),
+        },
       });
       throw new ViroException('VALIDATION_ERROR', 'Invalid OTP code.', HttpStatus.BAD_REQUEST);
     }
@@ -254,6 +277,16 @@ export class AuthService {
     await this.deviceRepo.save(device);
 
     const tokens = await this.createSession(userId, device.id);
+
+    if (isPhoneHardwareTestAllowed(challenge.phoneE164)) {
+      await this.securityService.logEvent({
+        userId,
+        deviceId: device.id,
+        eventType: 'HARDWARE_TEST_AUTH_SUCCESS',
+        severity: 'LOW',
+        metadata: { phone: maskPhoneForSecurityLog(challenge.phoneE164) },
+      });
+    }
 
     return {
       ...tokens,
@@ -349,5 +382,16 @@ export class AuthService {
     return createHmac('sha256', process.env.JWT_ACCESS_SECRET || 'dev')
       .update(code)
       .digest('hex');
+  }
+
+  private resolveOtpCode(normalizedPhone: string): string {
+    const provider = process.env.OTP_PROVIDER || 'console';
+    if (provider === 'test' && process.env.TEST_OTP_CODE) {
+      return process.env.TEST_OTP_CODE;
+    }
+    if (provider === 'hardware-test') {
+      return getHardwareTestOtpCode();
+    }
+    return String(randomInt(100000, 999999));
   }
 }

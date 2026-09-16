@@ -1,4 +1,5 @@
 import { Controller, Post, Body, UseGuards, Req } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { IsString, IsNotEmpty, Length, IsEmail } from 'class-validator';
@@ -42,7 +43,7 @@ class OtpVerifyDto {
   challengeId!: string;
 
   @IsString()
-  @Length(6, 6)
+  @Length(6, 32)
   code!: string;
 
   @IsString()
@@ -69,11 +70,13 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('otp/request')
+  @Throttle({ default: { limit: 5, ttl: 300000 } })
   async requestOtp(@Body() body: OtpRequestDto) {
     return this.authService.requestOtp(body.phoneE164);
   }
 
   @Post('otp/verify')
+  @Throttle({ default: { limit: 10, ttl: 300000 } })
   async verifyOtp(@Body() body: OtpVerifyDto) {
     return this.authService.verifyOtp(
       body.challengeId,

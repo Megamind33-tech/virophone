@@ -6,6 +6,7 @@ import { CallQuality } from '../database/entities/call-quality.entity';
 import { ContactMatch } from '../database/entities/contact-match.entity';
 import { ViroConnection } from '../database/entities/viro-connection.entity';
 import { Profile } from '../database/entities/profile.entity';
+import { PhoneIdentity } from '../database/entities/phone-identity.entity';
 import { Device } from '../database/entities/device.entity';
 import { BlocksService } from '../blocks/blocks.service';
 import { ViroException } from '../common/exceptions/viro.exception';
@@ -15,6 +16,7 @@ import { CallSessionService } from './call-session.service';
 import { RedisService } from '../redis/redis.service';
 import { PushService } from '../push/push.service';
 import { OfflineTrustService } from '../offline-trust/offline-trust.service';
+import { isUserUuid } from './call-target.util';
 
 export interface CallQualityInput {
   latency?: number;
@@ -34,6 +36,7 @@ export class CallsService {
     @InjectRepository(ContactMatch) private readonly matchRepo: Repository<ContactMatch>,
     @InjectRepository(ViroConnection) private readonly connectionRepo: Repository<ViroConnection>,
     @InjectRepository(Profile) private readonly profileRepo: Repository<Profile>,
+    @InjectRepository(PhoneIdentity) private readonly phoneRepo: Repository<PhoneIdentity>,
     @InjectRepository(Device) private readonly deviceRepo: Repository<Device>,
     private readonly blocksService: BlocksService,
     private readonly callSessionService: CallSessionService,
@@ -49,6 +52,14 @@ export class CallsService {
     preferredRoute?: string,
     offlineTicket?: string,
   ): Promise<CallAuthorizeResponse> {
+    if (!isUserUuid(targetUserId)) {
+      throw new ViroException(
+        'INVALID_TARGET',
+        'targetUserId must be a valid user UUID. Resolve phone numbers via contact discovery first.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
     if (callerId === targetUserId) {
       throw new ViroException('CALL_NOT_AUTHORIZED', 'Cannot call yourself.', HttpStatus.FORBIDDEN);
     }
@@ -221,10 +232,24 @@ export class CallsService {
     });
   }
 
+  async getCallerPresentation(userId: string): Promise<{
+    callerPhoneE164?: string;
+    callerDisplayName?: string;
+  }> {
+    const [profile, phoneIdentity] = await Promise.all([
+      this.profileRepo.findOne({ where: { userId } }),
+      this.phoneRepo.findOne({ where: { userId, status: 'VERIFIED' } }),
+    ]);
+    const displayName = profile?.displayName?.trim();
+    return {
+      callerPhoneE164: phoneIdentity?.phoneE164,
+      callerDisplayName: displayName && displayName.length > 0 ? displayName : undefined,
+    };
+  }
+
   private async callerDisplayName(userId: string): Promise<string | null> {
-    const profile = await this.profileRepo.findOne({ where: { userId } });
-    const name = profile?.displayName?.trim();
-    return name ? name : null;
+    const presentation = await this.getCallerPresentation(userId);
+    return presentation.callerDisplayName ?? null;
   }
 
   async endCall(callId: string, userId: string) {

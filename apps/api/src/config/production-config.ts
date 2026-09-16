@@ -1,3 +1,5 @@
+import { validateHardwareTestProductionConfig } from '../auth/otp/hardware-test.config';
+
 /**
  * Production fail-closed configuration validation.
  * Application MUST NOT start in production without required secrets.
@@ -55,5 +57,25 @@ export function validateProductionConfig(): void {
 
   if ((process.env.JWT_ACCESS_SECRET || '').length < 32) {
     throw new Error('Production startup refused: JWT_ACCESS_SECRET too short (min 32 chars).');
+  }
+
+  if (process.env.OTP_PROVIDER === 'test') {
+    throw new Error(
+      'Production startup refused: OTP_PROVIDER=test is forbidden in production.',
+    );
+  }
+
+  if (process.env.OTP_PROVIDER === 'email') {
+    const required = ['SMTP_HOST', 'OTP_EMAIL_FROM', 'OTP_DELIVERY_EMAIL'];
+    const missingEmail = required.filter((k) => !(process.env[k] || '').trim());
+    if (missingEmail.length > 0) {
+      throw new Error(
+        `Production startup refused: OTP_PROVIDER=email requires ${missingEmail.join(', ')}.`,
+      );
+    }
+  }
+
+  if (process.env.OTP_PROVIDER === 'hardware-test') {
+    validateHardwareTestProductionConfig(process.env);
   }
 }

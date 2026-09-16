@@ -17,6 +17,10 @@ describe('PhoneUtil (libphonenumber-js)', () => {
     expect(normalizeE164('+260961582985')).toBe('+260961582985');
   });
 
+  it('normalizes Phone B hardware test identity +260977426940', () => {
+    expect(normalizeE164('+260977426940', 'ZM')).toBe('+260977426940');
+  });
+
   it('does not blindly prepend +260 to invalid short numbers', () => {
     expect(normalizeE164('123', 'ZM')).toBeNull();
   });

@@ -1,5 +1,6 @@
 import { Controller, Post, Get, Param, Body, UseGuards, Req } from '@nestjs/common';
 import { CallsService } from './calls.service';
+import { SignalingDeliveryService } from '../signaling/signaling-delivery.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean } from 'class-validator';
 import { MetricsService } from '../metrics/metrics.module';
@@ -54,6 +55,7 @@ export class CallsController {
   constructor(
     private readonly callsService: CallsService,
     private readonly metrics: MetricsService,
+    private readonly signalingDelivery: SignalingDeliveryService,
   ) {}
 
   @Post('authorize')
@@ -69,6 +71,17 @@ export class CallsController {
       body.offlineTicket,
     );
     this.metrics.callsAuthorized += 1;
+    if (result.authorized && result.sessionMaterial?.calleeDeviceId) {
+      const caller = await this.callsService.getCallerPresentation(req.user.sub);
+      this.signalingDelivery.notifyIncomingCall({
+        calleeDeviceId: result.sessionMaterial.calleeDeviceId,
+        callId: result.callId,
+        callerUserId: req.user.sub,
+        callerDeviceId: req.user.deviceId,
+        callerPhoneE164: caller.callerPhoneE164,
+        callerDisplayName: caller.callerDisplayName,
+      });
+    }
     return result;
   }
 

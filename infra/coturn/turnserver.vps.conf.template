@@ -1,6 +1,5 @@
 # Rendered by scripts/vps-render-config.sh — do not edit turnserver.vps.conf directly
 listening-port=3479
-tls-listening-port=0
 listening-ip=0.0.0.0
 relay-ip=0.0.0.0
 external-ip=__EXTERNAL_IP__
