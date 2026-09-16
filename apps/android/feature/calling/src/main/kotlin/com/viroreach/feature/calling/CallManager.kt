@@ -653,6 +653,10 @@ class CallManager(
             "call.offer" -> {
                 val sdp = msg.payload?.getString("sdp") ?: return
                 if (!isCaller) {
+                    // Ignore duplicate/late offers once the call is already up —
+                    // the caller sends the SDP via both call.invite and
+                    // call.offer, and re-applying it would disrupt live media.
+                    if (_state.value == CallStateMachineState.ACTIVE) return
                     bufferRemoteOffer(sdp)
                     when (_state.value) {
                         CallStateMachineState.RINGING -> return
