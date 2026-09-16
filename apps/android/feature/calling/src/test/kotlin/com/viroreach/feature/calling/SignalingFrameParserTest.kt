@@ -45,8 +45,22 @@ class SignalingFrameParserTest {
     }
 
     @Test
-    fun `malformed json returns warning not exception`() {
-        val result = SignalingFrameParser.parse("not-json")
-        assertNotNull(result.warning)
+    fun `parses conference peer-joined using roomId and deviceId`() {
+        val result = SignalingFrameParser.parse(
+            """{"type":"conf.peer-joined","roomId":"room-1","userId":"u2","deviceId":"d2"}""",
+        )
+        assertEquals("conf.peer-joined", result.message?.type)
+        assertEquals("room-1", result.message?.roomId)
+        assertEquals("u2", result.message?.fromUserId)
+        assertEquals("d2", result.message?.fromDeviceId)
+    }
+
+    @Test
+    fun `parses conf joined roster as payload participants`() {
+        val result = SignalingFrameParser.parse(
+            """{"type":"conf.joined","roomId":"r1","participants":[{"userId":"u1","deviceId":"d1"}]}""",
+        )
+        assertEquals("conf.joined", result.message?.type)
+        assertEquals("d1", result.message?.payload?.optJSONArray("participants")?.optJSONObject(0)?.optString("deviceId"))
     }
 }

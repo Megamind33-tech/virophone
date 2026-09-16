@@ -25,6 +25,7 @@ async function runMigrations() {
       '003_push.sql',
       '004_messaging.sql',
       '005_email_identity.sql',
+      '006_admin_role.sql',
     ];
 
     for (const file of migrationFiles) {

@@ -2,12 +2,14 @@ import { Controller, Get } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { RedisService } from '../redis/redis.service';
+import { MetricsService } from '../metrics/metrics.module';
 
 @Controller('health')
 export class HealthController {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly redis: RedisService,
+    private readonly metrics: MetricsService,
   ) {}
 
   @Get('live')
@@ -29,5 +31,10 @@ export class HealthController {
     } catch {
       return { status: 'not_ready', database: 'disconnected', timestamp: new Date().toISOString() };
     }
+  }
+
+  @Get('metrics')
+  metricsSnapshot() {
+    return this.metrics.snapshot();
   }
 }

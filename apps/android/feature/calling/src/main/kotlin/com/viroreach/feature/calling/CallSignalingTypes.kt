@@ -9,6 +9,7 @@ data class SignalingMessage(
     val fromUserId: String? = null,
     val fromDeviceId: String? = null,
     val payload: JSONObject? = null,
+    val roomId: String? = null,
 )
 
 enum class SignalingRoute {
@@ -36,6 +37,14 @@ interface CallSignalingTransport {
     val incoming: kotlinx.coroutines.flow.Flow<SignalingMessage>
     fun connect(config: SignalingConnectConfig = SignalingConnectConfig())
     fun send(type: String, callId: String, targetDeviceId: String? = null, payload: JSONObject? = null)
+    fun sendConference(
+        type: String,
+        roomId: String,
+        targetDeviceId: String? = null,
+        payload: JSONObject? = null,
+    ) {
+        // LAN transport does not carry mesh rooms.
+    }
     fun disconnect()
 }
 

@@ -4,9 +4,32 @@ import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
 import { Profile } from '../database/entities/profile.entity';
 import { PhoneIdentity } from '../database/entities/phone-identity.entity';
+import { User } from '../database/entities/user.entity';
+import { Device } from '../database/entities/device.entity';
+import { Session } from '../database/entities/session.entity';
+import { Call } from '../database/entities/call.entity';
+import { Block } from '../database/entities/block.entity';
+import { ViroConnection } from '../database/entities/viro-connection.entity';
+import { PushToken } from '../database/entities/push-token.entity';
+import { ConversationParticipant } from '../database/entities/conversation-participant.entity';
+import { Message } from '../database/entities/message.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Profile, PhoneIdentity])],
+  imports: [
+    TypeOrmModule.forFeature([
+      Profile,
+      PhoneIdentity,
+      User,
+      Device,
+      Session,
+      Call,
+      Block,
+      ViroConnection,
+      PushToken,
+      ConversationParticipant,
+      Message,
+    ]),
+  ],
   controllers: [UsersController],
   providers: [UsersService],
   exports: [UsersService],

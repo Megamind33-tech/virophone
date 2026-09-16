@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Body, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Patch, Delete, Body, UseGuards, Req } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { IsString, IsOptional, IsIn } from 'class-validator';
@@ -32,8 +32,18 @@ export class UsersController {
     return this.usersService.getMe(req.user.sub);
   }
 
+  @Get('export')
+  async exportMe(@Req() req: { user: { sub: string } }) {
+    return this.usersService.exportMe(req.user.sub);
+  }
+
   @Patch()
   async updateMe(@Req() req: { user: { sub: string } }, @Body() body: UpdateMeDto) {
     return this.usersService.updateMe(req.user.sub, body);
+  }
+
+  @Delete()
+  async deleteMe(@Req() req: { user: { sub: string } }) {
+    return this.usersService.deleteMe(req.user.sub);
   }
 }

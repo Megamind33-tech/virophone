@@ -18,6 +18,7 @@ describe('CallsService - Authorization', () => {
   } as unknown as CallSessionService;
   const mockRedis = {
     getJson: jest.fn().mockResolvedValue({ deviceId: 'callee-device' }),
+    sMembers: jest.fn().mockResolvedValue(['callee-device']),
   } as unknown as RedisService;
   const mockOfflineTrust = { verifyOfflineCallTicket: jest.fn().mockReturnValue(false) } as any;
 
@@ -102,5 +103,22 @@ describe('CallsService - Authorization', () => {
 
     const result = await service.authorize('caller', 'caller-device', 'target');
     expect(result.authorized).toBe(true);
+  });
+
+  it('rings every online callee device', async () => {
+    mockMatchRepo.findOne.mockResolvedValue({ userId: 'caller', matchedUserId: 'target' });
+    (mockRedis.sMembers as jest.Mock).mockResolvedValue(['dev-a', 'dev-b']);
+    mockDeviceRepo.findOne.mockImplementation(({ where }: { where: { id: string } }) =>
+      Promise.resolve({ id: where.id, userId: 'target' }),
+    );
+
+    const result = await service.authorize('caller', 'caller-device', 'target');
+    expect(result.sessionMaterial?.calleeDeviceIds).toBe('dev-a,dev-b');
+    expect(mockCallSession.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        calleeDeviceIds: ['dev-a', 'dev-b'],
+        calleeDeviceId: 'dev-a',
+      }),
+    );
   });
 });

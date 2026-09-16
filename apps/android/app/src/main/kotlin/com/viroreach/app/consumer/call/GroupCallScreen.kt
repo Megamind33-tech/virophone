@@ -38,6 +38,18 @@ fun GroupCallScreen(
         }
     }
 
+    if (state.incomingInvite != null && !state.isActive) {
+        IncomingGroupCallPane(
+            title = state.incomingInvite?.title ?: "Group Call",
+            onAccept = { conference.acceptIncoming() },
+            onDecline = {
+                conference.declineIncoming()
+                onEndCall()
+            },
+        )
+        return
+    }
+
     val activeSpeaker = state.participants.firstOrNull { it.isActiveSpeaker }
         ?: state.participants.firstOrNull()
 
@@ -49,10 +61,13 @@ fun GroupCallScreen(
                 .padding(ViroSpacing.md),
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                ViroBackButton(onClick = onEndCall)
+                ViroBackButton(onClick = {
+                    conference.endConference()
+                    onEndCall()
+                })
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
                     Text("Viro Call", color = Color.White, fontWeight = FontWeight.Bold)
-                    Text("Group Call", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(state.title, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(8.dp).background(ViroColors.GreenAvailable, CircleShape))
                         Spacer(Modifier.width(6.dp))
@@ -65,6 +80,10 @@ fun GroupCallScreen(
                 }
             }
             Spacer(Modifier.height(16.dp))
+            state.error?.let {
+                Text(it, color = ViroColors.textSecondary)
+                Spacer(Modifier.height(8.dp))
+            }
             activeSpeaker?.let { speaker ->
                 ActiveSpeakerCard(speaker)
             }
@@ -79,18 +98,15 @@ fun GroupCallScreen(
             Spacer(Modifier.weight(1f))
             ViroCallControlGrid(
                 controls = listOf(
-                    ViroCallControl("mute", "Mute", Icons.Default.Mic, Icons.Default.MicOff),
-                    ViroCallControl("video", "Video", Icons.Default.Videocam),
-                    ViroCallControl("speaker", "Speaker", Icons.Default.VolumeUp, Icons.Default.VolumeOff),
-                    ViroCallControl("add", "Add people", Icons.Default.PersonAdd),
+                    ViroCallControl("mute", if (state.localMuted) "Unmute" else "Mute", Icons.Default.Mic, Icons.Default.MicOff),
+                    ViroCallControl("speaker", if (state.speakerOn) "Speaker" else "Earpiece", Icons.Default.VolumeUp, Icons.Default.VolumeOff),
                     ViroCallControl("chat", "Chat", Icons.Default.Chat),
-                    ViroCallControl("more", "More", Icons.Default.MoreVert),
                 ),
                 onControl = { id ->
                     when (id) {
                         "mute" -> conference.toggleMute("local")
+                        "speaker" -> conference.toggleSpeaker()
                         "chat" -> onOpenChat()
-                        else -> Unit
                     }
                 },
             )
@@ -104,6 +120,34 @@ fun GroupCallScreen(
                 )
             }
         }
+        }
+    }
+}
+
+@Composable
+private fun IncomingGroupCallPane(
+    title: String,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    ViroScreenBackground {
+        ViroSafeScreen {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(ViroSpacing.lg),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text("Incoming group call", color = ViroColors.textSecondary)
+                Spacer(Modifier.height(8.dp))
+                Text(title, color = Color.White, style = MaterialTheme.typography.headlineMedium)
+                Spacer(Modifier.height(32.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    OutlinedButton(onClick = onDecline) { Text("Decline") }
+                    Button(onClick = onAccept) { Text("Join") }
+                }
+            }
         }
     }
 }
@@ -126,7 +170,12 @@ private fun ActiveSpeakerCard(participant: ConferenceParticipant) {
             ViroAvatar(modifier = Modifier.size(80.dp), size = ViroAvatarSize.Large)
             Text(participant.name, color = Color.White, fontWeight = FontWeight.Bold)
             Text(
-                if (participant.speaking) "Speaking…" else "Listening…",
+                when {
+                    participant.muted -> "Muted"
+                    participant.speaking -> "Speaking…"
+                    participant.connected -> "Connected"
+                    else -> "Connecting…"
+                },
                 color = ViroColors.ElectricBlue,
             )
             AudioVisualizerBars()
@@ -149,11 +198,15 @@ private fun ParticipantTile(participant: ConferenceParticipant, onClick: () -> U
             ) {
                 ViroAvatar(modifier = Modifier.size(48.dp), size = ViroAvatarSize.Medium)
                 Text(participant.name, color = Color.White, style = MaterialTheme.typography.labelMedium)
-                Text("Listening…", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                Text(
+                    if (participant.connected) "In call" else "Joining…",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall,
+                )
             }
             if (participant.muted) {
                 Icon(
-                    Icons.Default.Settings,
+                    Icons.Default.MicOff,
                     contentDescription = null,
                     tint = ViroColors.RedEndCall,
                     modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
