@@ -1,35 +1,42 @@
 package com.viroreach.core.network
 
+import kotlinx.coroutines.runBlocking
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
 class ViroApiClient(
-    private val tokenStore: TokenStore,
+    private val sessionTokenManager: SessionTokenManager,
     baseUrl: String = BuildConfig.API_BASE_URL,
 ) {
     private val authInterceptor = Interceptor { chain ->
-        val token = tokenStore.getAccessToken()
-        val request = if (token != null) {
+        val token = runBlocking { sessionTokenManager.getAccessTokenForRequest() }
+        var request = if (token != null) {
             chain.request().newBuilder()
-                .addHeader("Authorization", "Bearer $token")
+                .header("Authorization", "Bearer $token")
                 .build()
         } else {
             chain.request()
         }
-        chain.proceed(request)
-    }
-
-    private val logging = HttpLoggingInterceptor().apply {
-        level = HttpLoggingInterceptor.Level.BASIC
+        var response = chain.proceed(request)
+        if (response.code == 401 && token != null) {
+            response.close()
+            val newToken = runBlocking { sessionTokenManager.refreshAfter401() }
+            if (newToken != null) {
+                request = chain.request().newBuilder()
+                    .header("Authorization", "Bearer $newToken")
+                    .build()
+                response = chain.proceed(request)
+            }
+        }
+        response
     }
 
     private val httpClient = OkHttpClient.Builder()
         .addInterceptor(authInterceptor)
-        .addInterceptor(logging)
+        .addInterceptor(SanitizedLoggingInterceptor())
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()

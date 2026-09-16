@@ -27,6 +27,7 @@ enum class CallStateMachineState {
     RESOLVING_CONTACT,
     SELECTING_ROUTE,
     AUTHORIZING,
+    INVITING,
     SIGNALING,
     CONNECTING,
     RINGING,

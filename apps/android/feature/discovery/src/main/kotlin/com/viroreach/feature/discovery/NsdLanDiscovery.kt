@@ -21,12 +21,19 @@ class NsdLanDiscovery(
     private val context: Context,
     private val ephemeralIdGenerator: EphemeralIdGenerator,
     private val bindingTagProvider: (() -> String?)? = null,
-    private val onPeerDiscovered: suspend (ephemeralId: String, transport: CallRouteType, bindingTag: String?) -> Unit,
+    private val onPeerDiscovered: suspend (
+        ephemeralId: String,
+        transport: CallRouteType,
+        bindingTag: String?,
+        hostAddress: String,
+        signalingPort: Int,
+    ) -> Unit,
 ) {
     companion object {
         private const val TAG = "NsdLanDiscovery"
         const val SERVICE_TYPE = "_viroreach._tcp."
         const val SERVICE_VERSION = "1"
+        const val SIGNALING_PORT = 8765
     }
 
     private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
@@ -39,6 +46,8 @@ class NsdLanDiscovery(
     private val discoveredEphemeralIds = mutableSetOf<String>()
     private var isRunning = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    fun isRunning(): Boolean = isRunning
 
     fun start() {
         if (isRunning) return
@@ -59,7 +68,7 @@ class NsdLanDiscovery(
         val serviceInfo = NsdServiceInfo().apply {
             serviceName = "viro-${ephemeralIdGenerator.getCurrentId().takeLast(8)}"
             serviceType = SERVICE_TYPE
-            port = 9 // Discard port; media uses WebRTC on dynamic ports
+            port = SIGNALING_PORT
             setAttribute("protocol", "viro-reach")
             setAttribute("version", SERVICE_VERSION)
             setAttribute("eid", ephemeralIdGenerator.getCurrentId())
@@ -93,11 +102,13 @@ class NsdLanDiscovery(
                     override fun onServiceResolved(info: NsdServiceInfo) {
                         val eid = info.attributes?.get("eid")?.let { String(it) } ?: return
                         val btag = info.attributes?.get("btag")?.let { String(it) }
+                        val host = info.host?.hostAddress ?: return
+                        val port = info.port.takeIf { it > 0 } ?: SIGNALING_PORT
                         if (eid == ephemeralIdGenerator.getCurrentId()) return
                         if (discoveredEphemeralIds.add(eid)) {
                             _anonymousPeerCount.value = discoveredEphemeralIds.size
                             scope.launch {
-                                onPeerDiscovered(eid, CallRouteType.LAN, btag)
+                                onPeerDiscovered(eid, CallRouteType.LAN, btag, host, port)
                             }
                         }
                     }

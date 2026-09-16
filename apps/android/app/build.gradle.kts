@@ -3,6 +3,11 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
+val gitCommitAbbrev: String = providers.exec {
+    commandLine("git", "rev-parse", "--short", "HEAD")
+    isIgnoreExitValue = true
+}.standardOutput.asText.get().trim().ifBlank { "unknown" }
+
 android {
     namespace = "com.viroreach.app"
     compileSdk = 34
@@ -12,10 +17,11 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "0.1.0-phase1a"
+        versionName = "0.3.8-network-bind"
         buildConfigField("String", "API_BASE_URL", "\"https://reach.viro3.online\"")
         buildConfigField("String", "WSS_URL", "\"wss://reach.viro3.online/api/v1/signaling/ws\"")
         buildConfigField("boolean", "FORCE_TURN_RELAY", "false")
+        buildConfigField("String", "GIT_COMMIT", "\"$gitCommitAbbrev\"")
     }
 
     buildTypes {
@@ -53,6 +59,7 @@ dependencies {
     implementation(project(":feature:contacts"))
     implementation(project(":feature:discovery"))
     implementation(project(":feature:calling"))
+    implementation(project(":feature:contacts"))
     implementation(project(":feature:history"))
     implementation(project(":feature:subscription"))
     implementation(project(":feature:settings"))
@@ -64,15 +71,25 @@ dependencies {
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:${libs.versions.lifecycle.get()}")
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.navigation.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation("androidx.compose.material:material-icons-core")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.datastore)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
 
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(project(":feature:calling"))
     androidTestImplementation(libs.androidx.junit)
     debugImplementation(libs.androidx.ui.tooling)
 }

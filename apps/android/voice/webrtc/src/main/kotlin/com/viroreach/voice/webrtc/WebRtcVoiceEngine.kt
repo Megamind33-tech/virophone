@@ -10,12 +10,15 @@ import com.viroreach.voice.api.VoiceCallEventType
 import com.viroreach.voice.api.VoiceEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
@@ -26,11 +29,12 @@ import org.webrtc.MediaStream
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpReceiver
+import org.webrtc.RtpSender
 import org.webrtc.SessionDescription
 
 /**
- * WebRTC voice-only engine (Phase 0.6 POC).
- * Signaling SDP/ICE exchange is delegated to the app signaling layer.
+ * WebRTC voice-only engine with Phase 1B resilience:
+ * adaptive Opus, ICE restart, continuous gathering, and RTCStats metrics.
  */
 class WebRtcVoiceEngine(
     context: Context,
@@ -40,17 +44,34 @@ class WebRtcVoiceEngine(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _callState = MutableStateFlow(CallStateMachineState.IDLE)
     private val _callEvents = MutableSharedFlow<VoiceCallEvent>()
+    private val _liveStatistics = MutableStateFlow<CallStatistics?>(null)
+    val liveStatistics: Flow<CallStatistics?> = _liveStatistics.asStateFlow()
+
     private var factory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
     private var localAudioTrack: AudioTrack? = null
     private var audioSource: AudioSource? = null
+    private var audioSender: RtpSender? = null
     private var activeCallId: String? = null
     private var muted = false
     private var speaker = false
     private var audioRoute = AudioRoute.EARPIECE
     private var lastStats: CallStatistics? = null
+    private var pendingRemoteSdp: SessionDescription? = null
+    private var pendingRemoteSetComplete: (() -> Unit)? = null
+    private val pendingIceCandidates = mutableListOf<IceCandidate>()
+    private var remoteDescriptionApplied = false
+    private var statsJob: Job? = null
+    private var iceRecoveryJob: Job? = null
+    private var iceRecoveryAttempts = 0
+    private var lastIceServers: List<PeerConnection.IceServer> = emptyList()
+
+    var onLocalIceCandidate: ((IceCandidate) -> Unit)? = null
+    var onIceRestartOffer: ((SessionDescription) -> Unit)? = null
+    var iceTransportPolicyRelay: Boolean = false
 
     override suspend fun initialize(): Result<Unit> {
+        if (factory != null) return Result.success(Unit)
         PeerConnectionFactory.initialize(
             PeerConnectionFactory.InitializationOptions.builder(appContext)
                 .createInitializationOptions(),
@@ -59,9 +80,10 @@ class WebRtcVoiceEngine(
         return Result.success(Unit)
     }
 
-    override suspend fun register(sipUri: String, credentials: SipCredentials): Result<Unit> {
-        return Result.success(Unit)
-    }
+    suspend fun ensureInitialized(): Result<Unit> = initialize()
+
+    override suspend fun register(sipUri: String, credentials: SipCredentials): Result<Unit> =
+        Result.success(Unit)
 
     override suspend fun unregister(): Result<Unit> {
         _callState.value = CallStateMachineState.IDLE
@@ -71,6 +93,7 @@ class WebRtcVoiceEngine(
     override suspend fun startCall(targetUri: String, sessionMaterial: Map<String, String>): Result<String> {
         val callId = sessionMaterial["callId"] ?: return Result.failure(IllegalArgumentException("callId required"))
         activeCallId = callId
+        iceRecoveryAttempts = 0
         _callState.value = CallStateMachineState.CONNECTING
         val iceServers = parseIceServers(sessionMaterial)
         createPeerConnection(iceServers)
@@ -80,8 +103,42 @@ class WebRtcVoiceEngine(
 
     override suspend fun acceptCall(callId: String): Result<Unit> {
         activeCallId = callId
+        iceRecoveryAttempts = 0
         _callState.value = CallStateMachineState.CONNECTING
         return Result.success(Unit)
+    }
+
+    fun applySessionMaterial(sessionMaterial: Map<String, String>) {
+        val iceServers = parseIceServers(sessionMaterial)
+        lastIceServers = iceServers
+        if (peerConnection == null) {
+            createPeerConnection(iceServers)
+        } else {
+            updateIceServers(iceServers)
+        }
+        pendingRemoteSdp?.let { sdp ->
+            val cb = pendingRemoteSetComplete ?: {}
+            pendingRemoteSdp = null
+            pendingRemoteSetComplete = null
+            remoteDescriptionApplied = false
+            peerConnection?.setRemoteDescription(
+                SimpleSdpObserver(onSetComplete = {
+                    remoteDescriptionApplied = true
+                    flushPendingIceCandidates()
+                    cb()
+                }),
+                sdp,
+            )
+        }
+    }
+
+    fun updateIceServers(sessionMaterial: Map<String, String>) {
+        updateIceServers(parseIceServers(sessionMaterial))
+    }
+
+    private fun updateIceServers(iceServers: List<PeerConnection.IceServer>) {
+        lastIceServers = iceServers
+        peerConnection?.setConfiguration(buildRtcConfiguration(iceServers))
     }
 
     override suspend fun rejectCall(callId: String): Result<Unit> {
@@ -116,6 +173,70 @@ class WebRtcVoiceEngine(
 
     override fun getStatistics(callId: String): CallStatistics? = lastStats
 
+    fun startStatisticsPolling(intervalMs: Long = 2_000L) {
+        statsJob?.cancel()
+        statsJob = scope.launch {
+            while (isActive) {
+                collectStatistics()
+                delay(intervalMs)
+            }
+        }
+    }
+
+    fun stopStatisticsPolling() {
+        statsJob?.cancel()
+        statsJob = null
+    }
+
+    fun collectIceSummary(onResult: (String) -> Unit) {
+        val pc = peerConnection
+        if (pc == null) {
+            onResult("NO PEERCONNECTION")
+            return
+        }
+        pc.getStats { report ->
+            val stats = report.statsMap.values
+            val pair = stats.firstOrNull { s ->
+                s.type == "candidate-pair" &&
+                    (s.members["nominated"] == true || s.members["state"]?.toString() == "succeeded")
+            }
+            if (pair == null) {
+                onResult("NO NOMINATED PAIR")
+                return@getStats
+            }
+            val localId = pair.members["localCandidateId"]?.toString()
+            val remoteId = pair.members["remoteCandidateId"]?.toString()
+            val local = stats.firstOrNull { it.id == localId }
+            val remote = stats.firstOrNull { it.id == remoteId }
+            val localType = local?.members?.get("candidateType") ?: local?.members?.get("type") ?: "?"
+            val remoteType = remote?.members?.get("candidateType") ?: remote?.members?.get("type") ?: "?"
+            val proto = local?.members?.get("protocol") ?: "?"
+            onResult("local=$localType remote=$remoteType proto=$proto")
+        }
+    }
+
+    /**
+     * ICE restart for network transitions or transient disconnects.
+     * Emits a new local offer via [onIceRestartOffer] when created.
+     */
+    fun triggerIceRestart(onOfferCreated: (SessionDescription) -> Unit) {
+        val pc = peerConnection ?: return
+        pc.restartIce()
+        val constraints = MediaConstraints().apply {
+            mandatory.add(MediaConstraints.KeyValuePair("IceRestart", "true"))
+        }
+        pc.createOffer(
+            SimpleSdpObserver(onSuccess = { rawSdp ->
+                val tuned = WebRtcSdpUtils.tuneForAdaptiveVoice(rawSdp)
+                pc.setLocalDescription(
+                    SimpleSdpObserver(onSetComplete = { onOfferCreated(tuned) }),
+                    tuned,
+                )
+            }),
+            constraints,
+        )
+    }
+
     override suspend fun shutdown() {
         cleanup()
         factory?.dispose()
@@ -123,52 +244,172 @@ class WebRtcVoiceEngine(
     }
 
     fun setRemoteDescription(sdp: SessionDescription, onComplete: () -> Unit = {}) {
-        peerConnection?.setRemoteDescription(SimpleSdpObserver(onSetComplete = onComplete), sdp)
+        if (peerConnection == null) {
+            pendingRemoteSdp = sdp
+            pendingRemoteSetComplete = onComplete
+            remoteDescriptionApplied = false
+            return
+        }
+        remoteDescriptionApplied = false
+        peerConnection?.setRemoteDescription(
+            SimpleSdpObserver(onSetComplete = {
+                remoteDescriptionApplied = true
+                flushPendingIceCandidates()
+                onComplete()
+            }),
+            sdp,
+        )
     }
 
     fun createAnswer(onCreated: (SessionDescription) -> Unit) {
-        peerConnection?.createAnswer(SimpleSdpObserver(onSuccess = onCreated), MediaConstraints())
+        val pc = peerConnection ?: return
+        pc.createAnswer(
+            SimpleSdpObserver(onSuccess = { rawSdp ->
+                val tuned = WebRtcSdpUtils.tuneForAdaptiveVoice(rawSdp)
+                pc.setLocalDescription(
+                    SimpleSdpObserver(onSetComplete = { onCreated(tuned) }),
+                    tuned,
+                )
+            }),
+            MediaConstraints(),
+        )
     }
 
     fun createOffer(onCreated: (SessionDescription) -> Unit) {
-        peerConnection?.createOffer(SimpleSdpObserver(onSuccess = onCreated), MediaConstraints())
+        val pc = peerConnection ?: return
+        pc.createOffer(
+            SimpleSdpObserver(onSuccess = { rawSdp ->
+                val tuned = WebRtcSdpUtils.tuneForAdaptiveVoice(rawSdp)
+                pc.setLocalDescription(
+                    SimpleSdpObserver(onSetComplete = { onCreated(tuned) }),
+                    tuned,
+                )
+            }),
+            MediaConstraints(),
+        )
     }
 
     fun addIceCandidate(candidate: IceCandidate) {
-        peerConnection?.addIceCandidate(candidate)
+        val pc = peerConnection
+        if (pc == null || !remoteDescriptionApplied) {
+            pendingIceCandidates.add(candidate)
+            return
+        }
+        pc.addIceCandidate(candidate)
+    }
+
+    private fun flushPendingIceCandidates() {
+        val pc = peerConnection ?: return
+        pendingIceCandidates.forEach { pc.addIceCandidate(it) }
+        pendingIceCandidates.clear()
+    }
+
+    private fun collectStatistics() {
+        val pc = peerConnection ?: return
+        pc.getStats { report ->
+            val parsed = WebRtcStatsCollector.parse(report.statsMap.values)
+            if (parsed != null) {
+                lastStats = parsed
+                _liveStatistics.value = parsed
+                activeCallId?.let { id ->
+                    scope.launch {
+                        _callEvents.emit(VoiceCallEvent(id, VoiceCallEventType.QUALITY_UPDATE))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun scheduleIceRecovery() {
+        if (iceRecoveryAttempts >= MAX_ICE_RECOVERY_ATTEMPTS) {
+            _callState.value = CallStateMachineState.FAILED
+            return
+        }
+        iceRecoveryJob?.cancel()
+        iceRecoveryJob = scope.launch {
+            delay(ICE_RECOVERY_DELAY_MS)
+            iceRecoveryAttempts++
+            _callState.value = CallStateMachineState.RECONNECTING
+            val handler = onIceRestartOffer
+            if (handler != null) {
+                triggerIceRestart(handler)
+            } else {
+                peerConnection?.restartIce()
+            }
+        }
     }
 
     private fun parseIceServers(material: Map<String, String>): List<PeerConnection.IceServer> {
         val urls = material["iceServers"]?.split(',')?.filter { it.isNotBlank() }
             ?: listOf("stun:stun.l.google.com:19302")
-        return urls.map { PeerConnection.IceServer.builder(it.trim()).createIceServer() }
+        val username = material["iceUsername"]
+        val credential = material["iceCredential"]
+        return urls.map { raw ->
+            val url = raw.trim()
+            val builder = PeerConnection.IceServer.builder(url)
+            if (!username.isNullOrBlank() && !credential.isNullOrBlank() && url.startsWith("turn:")) {
+                builder.setUsername(username).setPassword(credential)
+            }
+            builder.createIceServer()
+        }
+    }
+
+    private fun buildRtcConfiguration(iceServers: List<PeerConnection.IceServer>): PeerConnection.RTCConfiguration {
+        return PeerConnection.RTCConfiguration(iceServers).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+            iceCandidatePoolSize = 2
+            bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
+            rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
+            if (iceTransportPolicyRelay) {
+                iceTransportsType = PeerConnection.IceTransportsType.RELAY
+            }
+        }
     }
 
     private fun createPeerConnection(iceServers: List<PeerConnection.IceServer>) {
-        val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
-            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-        }
+        val f = factory ?: throw IllegalStateException("WebRTC engine not initialized")
+        lastIceServers = iceServers
+        peerConnection?.close()
+        peerConnection?.dispose()
+        peerConnection = null
+        audioSender = null
+        remoteDescriptionApplied = false
+        pendingIceCandidates.clear()
+        val rtcConfig = buildRtcConfiguration(iceServers)
         val observer = object : PeerConnection.Observer {
             override fun onSignalingChange(state: PeerConnection.SignalingState?) {}
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
                 when (state) {
                     PeerConnection.IceConnectionState.CONNECTED,
                     PeerConnection.IceConnectionState.COMPLETED -> {
+                        iceRecoveryAttempts = 0
+                        iceRecoveryJob?.cancel()
                         _callState.value = CallStateMachineState.ACTIVE
                         activeCallId?.let { id ->
                             scope.launch {
                                 _callEvents.emit(VoiceCallEvent(id, VoiceCallEventType.CONNECTED))
                             }
                         }
+                        startStatisticsPolling()
                     }
-                    PeerConnection.IceConnectionState.FAILED -> _callState.value = CallStateMachineState.FAILED
-                    PeerConnection.IceConnectionState.DISCONNECTED -> _callState.value = CallStateMachineState.RECONNECTING
+                    PeerConnection.IceConnectionState.FAILED -> scheduleIceRecovery()
+                    PeerConnection.IceConnectionState.DISCONNECTED -> {
+                        _callState.value = CallStateMachineState.RECONNECTING
+                        scheduleIceRecovery()
+                    }
                     else -> {}
                 }
             }
-            override fun onIceConnectionReceivingChange(receiving: Boolean) {}
+            override fun onIceConnectionReceivingChange(receiving: Boolean) {
+                if (!receiving && _callState.value == CallStateMachineState.ACTIVE) {
+                    _callState.value = CallStateMachineState.RECONNECTING
+                }
+            }
             override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {}
-            override fun onIceCandidate(candidate: IceCandidate?) {}
+            override fun onIceCandidate(candidate: IceCandidate?) {
+                candidate?.let { onLocalIceCandidate?.invoke(it) }
+            }
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
             override fun onAddStream(stream: MediaStream?) {}
             override fun onRemoveStream(stream: MediaStream?) {}
@@ -176,21 +417,51 @@ class WebRtcVoiceEngine(
             override fun onRenegotiationNeeded() {}
             override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {}
         }
-        peerConnection = factory?.createPeerConnection(rtcConfig, observer)
-        val audioConstraints = MediaConstraints()
-        audioSource = factory?.createAudioSource(audioConstraints)
-        localAudioTrack = factory?.createAudioTrack("viro_audio", audioSource)
+        peerConnection = f.createPeerConnection(rtcConfig, observer)
+            ?: throw IllegalStateException("Failed to create PeerConnection")
+        val audioConstraints = MediaConstraints().apply {
+            mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("googHighpassFilter", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
+        }
+        audioSource = f.createAudioSource(audioConstraints)
+        localAudioTrack = try {
+            f.createAudioTrack("viro_audio", audioSource)
+        } catch (e: Exception) {
+            throw IllegalStateException("Microphone unavailable — allow mic permission and try again", e)
+        } ?: throw IllegalStateException("Microphone unavailable — allow mic permission and try again")
         localAudioTrack?.setEnabled(!muted)
-        peerConnection?.addTrack(localAudioTrack)
+        audioSender = peerConnection?.addTrack(localAudioTrack)
+        configureAdaptiveOpusBitrate(audioSender)
+    }
+
+    private fun configureAdaptiveOpusBitrate(sender: RtpSender?) {
+        val parameters = sender?.parameters ?: return
+        parameters.encodings.forEach { encoding ->
+            encoding.maxBitrateBps = 64_000
+            encoding.minBitrateBps = 6_000
+        }
+        sender.parameters = parameters
     }
 
     private fun cleanup() {
+        stopStatisticsPolling()
+        iceRecoveryJob?.cancel()
+        iceRecoveryAttempts = 0
         localAudioTrack?.dispose()
         audioSource?.dispose()
         peerConnection?.close()
         peerConnection?.dispose()
         peerConnection = null
+        audioSender = null
+        pendingIceCandidates.clear()
+        remoteDescriptionApplied = false
+        pendingRemoteSdp = null
+        pendingRemoteSetComplete = null
         activeCallId = null
+        lastStats = null
+        _liveStatistics.value = null
         _callState.value = CallStateMachineState.ENDED
         _callState.value = CallStateMachineState.IDLE
     }
@@ -205,5 +476,10 @@ class WebRtcVoiceEngine(
         override fun onSetSuccess() = onSetComplete()
         override fun onCreateFailure(error: String?) {}
         override fun onSetFailure(error: String?) {}
+    }
+
+    companion object {
+        private const val MAX_ICE_RECOVERY_ATTEMPTS = 4
+        private const val ICE_RECOVERY_DELAY_MS = 2_000L
     }
 }

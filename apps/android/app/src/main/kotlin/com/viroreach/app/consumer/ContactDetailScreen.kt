@@ -1,0 +1,424 @@
+package com.viroreach.app.consumer
+
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.viroreach.app.personalization.ProfilePhotoCapture
+import com.viroreach.app.session.SessionManager
+import com.viroreach.core.designsystem.ViroColors
+import com.viroreach.core.designsystem.ViroSpacing
+import com.viroreach.core.designsystem.components.*
+import com.viroreach.feature.contacts.PhoneNumberFormatter
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+@Composable
+fun ContactDetailScreen(
+    contact: ContactListItem,
+    session: SessionManager,
+    onBack: () -> Unit,
+    onCall: () -> Unit,
+    onMessage: () -> Unit,
+    onOpenRelated: (ContactListItem) -> Unit,
+    onDelete: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var profile by remember(contact.id) { mutableStateOf(contact) }
+    var isEditingName by remember { mutableStateOf(false) }
+    var editedName by remember(profile.effectiveDisplayName) { mutableStateOf(profile.effectiveDisplayName) }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showBlockConfirm by remember { mutableStateOf(false) }
+    var showPhotoOptions by remember { mutableStateOf(false) }
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+
+    val callHistory by session.callHistoryStore.entries.collectAsState()
+    val conversations by session.messagesStore.conversations.collectAsState()
+    var relatedContacts by remember { mutableStateOf<List<ContactListItem>>(emptyList()) }
+    val messageTick = conversations.find { it.phoneE164 == profile.phoneE164 }?.lastTimestampMs ?: 0L
+    val history = remember(profile.phoneE164, callHistory, messageTick) {
+        ContactCommunicationHistory.build(profile.phoneE164, session.callHistoryStore, session.messagesStore)
+    }
+
+    LaunchedEffect(contact.id) {
+        profile = session.contactsRepository.ensureCached(contact)
+        relatedContacts = session.contactsRepository.relatedContacts(profile)
+    }
+
+    LaunchedEffect(profile.id) {
+        relatedContacts = session.contactsRepository.relatedContacts(profile)
+    }
+
+    fun uploadPhoto(uri: Uri) {
+        scope.launch {
+            ProfilePhotoCapture.takePersistableReadPermission(context, uri)
+            session.contactsRepository.setCustomPhoto(profile.id, uri)
+            profile = session.contactsRepository.findById(profile.id) ?: profile.copy(customPhotoUri = uri.toString())
+            statusMessage = "Photo updated"
+        }
+    }
+
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let { uploadPhoto(it) }
+    }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        if (success) cameraUri?.let { uploadPhoto(it) }
+    }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) {
+            val uri = ProfilePhotoCapture.createCameraUri(context)
+            cameraUri = uri
+            cameraLauncher.launch(uri)
+        }
+    }
+
+    fun shareContact() {
+        val phone = profile.phoneE164?.let { PhoneNumberFormatter.formatE164International(it) }.orEmpty()
+        val text = buildString {
+            append("Connect with ${profile.effectiveDisplayName} on Viro Call")
+            if (phone.isNotBlank()) append("\n$phone")
+            append("\nhttps://reach.viro3.online")
+        }
+        context.startActivity(
+            Intent.createChooser(
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, text)
+                },
+                "Share contact",
+            ),
+        )
+    }
+
+    if (showPhotoOptions) {
+        AlertDialog(
+            onDismissRequest = { showPhotoOptions = false },
+            title = { Text("Contact photo") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showPhotoOptions = false
+                    galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }) { Text("Gallery") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showPhotoOptions = false
+                    cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                }) { Text("Camera") }
+            },
+        )
+    }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete contact?") },
+            text = { Text("Removes ${profile.effectiveDisplayName} from Viro Call. Your device contact is not changed.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteConfirm = false
+                    scope.launch {
+                        session.contactsRepository.hideContacts(setOf(profile.id))
+                        onDelete()
+                    }
+                }) { Text("Delete", color = ViroColors.consumerError) }
+            },
+            dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (showBlockConfirm) {
+        AlertDialog(
+            onDismissRequest = { showBlockConfirm = false },
+            title = { Text("Block contact?") },
+            text = { Text("${profile.effectiveDisplayName} won't be able to call or message you on Viro Call.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showBlockConfirm = false
+                    scope.launch {
+                        session.contactsRepository.blockContact(profile.id)
+                            .onSuccess {
+                                statusMessage = "Contact blocked"
+                                onDelete()
+                            }
+                            .onFailure { statusMessage = "Couldn't block contact" }
+                    }
+                }) { Text("Block", color = ViroColors.consumerError) }
+            },
+            dismissButton = { TextButton(onClick = { showBlockConfirm = false }) { Text("Cancel") } },
+        )
+    }
+
+    ViroScreenBackground {
+        ViroSafeScreen {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(ViroSpacing.md),
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    ViroBackButton(onClick = onBack)
+                    Spacer(Modifier.weight(1f))
+                    IconButton(onClick = { shareContact() }) {
+                        Icon(Icons.Default.Share, contentDescription = "Share", tint = ViroColors.textPrimary)
+                    }
+                }
+                Column(
+                    Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(contentAlignment = Alignment.BottomEnd) {
+                        ViroAvatar(
+                            imageUrl = profile.resolveAvatarUrl(),
+                            size = ViroAvatarSize.Hero,
+                        )
+                        FilledIconButton(
+                            onClick = { showPhotoOptions = true },
+                            modifier = Modifier.size(40.dp),
+                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = ViroColors.accent),
+                        ) {
+                            Icon(Icons.Default.Edit, contentDescription = "Change photo", tint = ViroColors.textPrimary)
+                        }
+                    }
+                    Spacer(Modifier.height(ViroSpacing.md))
+                    if (isEditingName) {
+                        OutlinedTextField(
+                            value = editedName,
+                            onValueChange = { editedName = it },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { isEditingName = false }) { Text("Cancel") }
+                            TextButton(onClick = {
+                                scope.launch {
+                                    session.contactsRepository.updateDisplayName(profile.id, editedName)
+                                    profile = session.contactsRepository.findById(profile.id)
+                                        ?: profile.copy(customDisplayName = editedName)
+                                    isEditingName = false
+                                }
+                            }) { Text("Save") }
+                        }
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                profile.effectiveDisplayName,
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = ViroColors.textPrimary,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            IconButton(onClick = {
+                                editedName = profile.effectiveDisplayName
+                                isEditingName = true
+                            }) {
+                                Icon(Icons.Default.Edit, contentDescription = "Edit name", tint = ViroColors.textSecondary)
+                            }
+                        }
+                    }
+                    profile.phoneE164?.let {
+                        Text(
+                            PhoneNumberFormatter.formatE164International(it),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = ViroColors.textSecondary,
+                        )
+                    }
+                    if (profile.isReachable) {
+                        Text("On Viro Call", color = ViroColors.success, style = MaterialTheme.typography.labelMedium)
+                    }
+                    statusMessage?.let {
+                        Text(it, color = ViroColors.textSecondary, style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+                Spacer(Modifier.height(ViroSpacing.lg))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    ProfileActionChip("Call", Icons.Default.Call, onCall)
+                    ProfileActionChip("Message", Icons.Default.Email, onMessage)
+                    ProfileActionChip("Share", Icons.Default.Share) { shareContact() }
+                }
+                Spacer(Modifier.height(ViroSpacing.lg))
+                SectionTitle("Communication history")
+                if (history.isEmpty()) {
+                    Text(
+                        "No calls or messages yet with this contact.",
+                        color = ViroColors.textSecondary,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    history.take(12).forEach { item ->
+                        ContactHistoryRow(item)
+                    }
+                }
+                Spacer(Modifier.height(ViroSpacing.lg))
+                SectionTitle("Other numbers")
+                if (relatedContacts.isEmpty()) {
+                    Text(
+                        "No other numbers saved under this contact.",
+                        color = ViroColors.textSecondary,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(ViroSpacing.md)) {
+                        items(relatedContacts, key = { it.id }) { related ->
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .widthIn(max = 96.dp)
+                                    .clickable { onOpenRelated(related) },
+                            ) {
+                                ViroAvatar(
+                                    imageUrl = related.resolveAvatarUrl(),
+                                    size = ViroAvatarSize.Large,
+                                )
+                                related.phoneE164?.let { phone ->
+                                    Text(
+                                        PhoneNumberFormatter.formatE164International(phone),
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ViroColors.textPrimary,
+                                    )
+                                }
+                                if (related.isReachable) {
+                                    Text(
+                                        "Viro",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ViroColors.success,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(ViroSpacing.lg))
+                SectionTitle("Actions")
+                ProfileMenuRow("Invite to Viro Call", Icons.Default.Person) {
+                    scope.launch {
+                        if (profile.userId != null) {
+                            session.contactsRepository.inviteContact(profile.id)
+                                .onSuccess { statusMessage = it }
+                                .onFailure { shareContact() }
+                        } else {
+                            shareContact()
+                        }
+                    }
+                }
+                ProfileMenuRow("Block", Icons.Default.Close) { showBlockConfirm = true }
+                ProfileMenuRow("Delete", Icons.Default.Delete, destructive = true) {
+                    showDeleteConfirm = true
+                }
+                Spacer(Modifier.height(ViroSpacing.xl))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionTitle(title: String) {
+    Text(title, style = MaterialTheme.typography.titleMedium, color = ViroColors.textPrimary)
+    Spacer(Modifier.height(ViroSpacing.sm))
+}
+
+@Composable
+private fun ProfileActionChip(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit,
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        FilledIconButton(
+            onClick = onClick,
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = ViroColors.NavySurfaceElevated),
+        ) {
+            Icon(icon, contentDescription = label, tint = ViroColors.accent)
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = ViroColors.textSecondary)
+    }
+}
+
+@Composable
+private fun ProfileMenuRow(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    destructive: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (destructive) ViroColors.consumerError else ViroColors.textSecondary,
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            label,
+            color = if (destructive) ViroColors.consumerError else ViroColors.textPrimary,
+            style = MaterialTheme.typography.bodyLarge,
+        )
+    }
+    HorizontalDivider(color = ViroColors.divider)
+}
+
+@Composable
+private fun ContactHistoryRow(item: ContactHistoryItem) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (item.kind == ContactHistoryKind.CALL) Icons.Default.Call else Icons.Default.Email,
+            contentDescription = null,
+            tint = ViroColors.textSecondary,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(item.label, color = ViroColors.textPrimary, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                item.detail,
+                color = ViroColors.textSecondary,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(
+            formatHistoryTime(item.timestampMs),
+            color = ViroColors.textMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+private fun formatHistoryTime(ms: Long): String =
+    SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(ms))

@@ -32,7 +32,13 @@ class LocalNetworkDiscoveryService(
     /**
      * Called when NSD/mDNS discovers a peer. Peer is NOT shown to user yet.
      */
-    suspend fun onPeerDiscovered(ephemeralId: String, transportType: CallRouteType, bindingTag: String? = null) {
+    suspend fun onPeerDiscovered(
+        ephemeralId: String,
+        transportType: CallRouteType,
+        bindingTag: String? = null,
+        hostAddress: String? = null,
+        signalingPort: Int = NsdLanDiscovery.SIGNALING_PORT,
+    ) {
         val peer = AnonymousPeer(ephemeralId, listOf("voice"), transportType)
         val current = _anonymousPeers.value.toMutableList()
         if (current.none { it.ephemeralId == ephemeralId }) {

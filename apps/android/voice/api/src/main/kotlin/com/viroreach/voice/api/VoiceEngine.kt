@@ -49,5 +49,12 @@ data class CallStatistics(
     val jitterMs: Float,
     val packetLossPercent: Float,
     val bitrateKbps: Float,
-    val codec: String
+    val codec: String,
+    /** Cumulative outbound RTP bytes for this call session. */
+    val bytesSent: Long = 0L,
+    /** Cumulative inbound RTP bytes for this call session. */
+    val bytesReceived: Long = 0L,
+    /** ICE candidate-pair round-trip time (ms). */
+    val roundTripMs: Float = 0f,
+    val timestampMs: Long = System.currentTimeMillis(),
 )

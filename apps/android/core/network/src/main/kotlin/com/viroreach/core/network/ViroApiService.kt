@@ -18,6 +18,18 @@ interface ViroApiService {
     @GET("api/v1/me")
     suspend fun getMe(): MeResponse
 
+    @PATCH("api/v1/me")
+    suspend fun updateMe(@Body body: UpdateMeBody): MeResponse
+
+    @POST("api/v1/blocks")
+    suspend fun blockUser(@Body body: BlockUserBody)
+
+    @DELETE("api/v1/blocks/{userId}")
+    suspend fun unblockUser(@Path("userId") userId: String)
+
+    @POST("api/v1/connections")
+    suspend fun inviteConnection(@Body body: ConnectionInviteBody): ConnectionInviteResponse
+
     @POST("api/v1/contacts/discover")
     suspend fun discoverContacts(@Body body: DiscoverBody): DiscoverResponse
 
@@ -53,6 +65,13 @@ data class OtpVerifyResponse(val accessToken: String, val refreshToken: String, 
 data class RefreshBody(val refreshToken: String)
 data class RefreshResponse(val accessToken: String, val refreshToken: String, val expiresIn: Int)
 data class MeResponse(val userId: String, val phoneE164: String, val displayName: String, val avatarUrl: String?, val viroId: String?, val allowCallsFromViroId: String)
+data class UpdateMeBody(
+    val displayName: String? = null,
+    val avatarUrl: String? = null,
+)
+data class BlockUserBody(val blockedUserId: String)
+data class ConnectionInviteBody(val targetUserId: String)
+data class ConnectionInviteResponse(val id: String, val status: String)
 data class DiscoverBody(val phonesE164: List<String>, val defaultRegion: String? = "ZM")
 data class DiscoverResponse(val matches: List<ContactDiscoveryMatch>)
 data class AuthorizeCallBody(val targetUserId: String, val preferredRoute: String? = null)
