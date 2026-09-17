@@ -323,7 +323,10 @@ fun ConsumerNav(
 
     fun callContact(contact: ContactListItem) {
 
-        val phone = contact.phoneE164 ?: return
+        // A phone number isn't required when we already know the Viro user id
+        // (e.g. calling back a server-history entry with no number on file).
+        val phone = contact.phoneE164
+        if (phone == null && contact.userId == null) return
 
         beginCall(
 
@@ -798,23 +801,38 @@ fun ConsumerNav(
 
                     onMessageCallLog = { log ->
 
-                        val phone = log.phoneE164 ?: return@HomeScreen
+                        val phone = log.phoneE164
+                        if (phone == null && log.peerUserId == null) return@HomeScreen
 
-                        val id = session.messagesStore.openOrCreateConversation(log.name, null, phone)
+                        scope.launch {
 
-                        chatRoute = ChatRoute(
+                            // Resolve the registered contact so the chat is sent via the
+                            // real message API (peerUserId != null). Leaving this null
+                            // silently routed the message through the call-signaling
+                            // channel instead, which drops it (no active call session).
+                            val resolvedUserId = log.peerUserId ?: phone?.let {
+                                runCatching {
+                                    session.contactsRepository.contactForCallLog(log.name, it)
+                                }.getOrNull()?.userId
+                            }
 
-                            conversationId = id,
+                            val id = session.messagesStore.openOrCreateConversation(log.name, resolvedUserId, phone)
 
-                            peerName = log.name,
+                            chatRoute = ChatRoute(
 
-                            peerUserId = null,
+                                conversationId = id,
 
-                            peerPhoneE164 = phone,
+                                peerName = log.name,
 
-                        )
+                                peerUserId = resolvedUserId,
 
-                        overlay = ConsumerOverlay.Chat
+                                peerPhoneE164 = phone,
+
+                            )
+
+                            overlay = ConsumerOverlay.Chat
+
+                        }
 
                     },
 
@@ -884,15 +902,18 @@ fun ConsumerNav(
 
                     session = session,
 
-                    onCallBack = { phone, name ->
+                    onCallBack = { phone, name, callLogUserId ->
 
-                        phone ?: return@CallsScreen
+                        if (phone == null && callLogUserId == null) return@CallsScreen
+
+                        val fallbackLabel = phone?.let { PhoneNumberFormatter.formatE164International(it) }
+                            ?: "Viro user"
 
                         beginCall(
 
                             CallPresentation(
 
-                                displayName = name ?: PhoneNumberFormatter.formatE164International(phone),
+                                displayName = name ?: fallbackLabel,
 
                                 phoneE164 = phone,
 
@@ -904,17 +925,16 @@ fun ConsumerNav(
 
                             scope.launch {
 
-                                val cached = session.contactsRepository.findByPhone(phone)
+                                val cached = phone?.let { session.contactsRepository.findByPhone(it) }
+                                    ?: callLogUserId?.let { session.contactsRepository.findByUserId(it) }
 
                                 session.placeOutgoingCall(
 
                                     phoneE164 = phone,
 
-                                    displayName = name ?: cached?.effectiveDisplayName
+                                    displayName = name ?: cached?.effectiveDisplayName ?: fallbackLabel,
 
-                                        ?: PhoneNumberFormatter.formatE164International(phone),
-
-                                    userId = cached?.userId,
+                                    userId = callLogUserId ?: cached?.userId,
 
                                 )
 
@@ -939,33 +959,41 @@ fun ConsumerNav(
 
                     },
 
-                    onMessage = { phone, name ->
+                    onMessage = { phone, name, callLogUserId ->
 
-                        phone ?: return@CallsScreen
+                        if (phone == null && callLogUserId == null) return@CallsScreen
 
-                        val id = session.messagesStore.openOrCreateConversation(
+                        scope.launch {
 
-                            name ?: PhoneNumberFormatter.formatE164International(phone),
+                            val resolvedUserId = callLogUserId ?: phone?.let {
+                                runCatching { session.contactsRepository.findByPhone(it) }.getOrNull()?.userId
+                            }
 
-                            null,
+                            val label = name
+                                ?: phone?.let { PhoneNumberFormatter.formatE164International(it) }
+                                ?: "Viro user"
 
-                            phone,
+                            val id = session.messagesStore.openOrCreateConversation(
+                                label,
+                                resolvedUserId,
+                                phone,
+                            )
 
-                        )
+                            chatRoute = ChatRoute(
 
-                        chatRoute = ChatRoute(
+                                conversationId = id,
 
-                            conversationId = id,
+                                peerName = label,
 
-                            peerName = name ?: phone,
+                                peerUserId = resolvedUserId,
 
-                            peerUserId = null,
+                                peerPhoneE164 = phone,
 
-                            peerPhoneE164 = phone,
+                            )
 
-                        )
+                            overlay = ConsumerOverlay.Chat
 
-                        overlay = ConsumerOverlay.Chat
+                        }
 
                     },
 

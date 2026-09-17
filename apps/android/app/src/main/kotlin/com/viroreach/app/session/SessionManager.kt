@@ -85,7 +85,13 @@ class SessionManager private constructor(context: Context) {
         scope.launch {
             networkMonitor.networkGeneration.collect {
                 if (it == 0) return@collect
-                if (isAuthenticated) {
+                // A network-selector tick (e.g. a transient VALIDATED flag flip on the
+                // same Wi-Fi) does not mean the socket is actually broken. Only force a
+                // teardown/reconnect when it's already unhealthy — forcing one on a live
+                // socket can drop an in-flight call.accept/call.answer mid-handshake,
+                // leaving the caller stuck on "Calling…" forever (delivery is
+                // fire-and-forget, not queued for a reconnecting device).
+                if (isAuthenticated && callManager.wssConnectionState.value != SignalingConnectionState.CONNECTED) {
                     callManager.connectSignaling(force = true)
                 }
                 callManager.recoverFromNetworkTransition()
@@ -155,15 +161,18 @@ class SessionManager private constructor(context: Context) {
 
     /**
      * Consumer outgoing call — auto-connects signaling and uses cached Viro user id when available.
+     * [phoneE164] may be null when calling back a known Viro user id with no phone on file
+     * (e.g. a server-synced call-history entry) — a phone number is only required when
+     * [userId] isn't known, since resolving by raw number needs one.
      */
     suspend fun placeOutgoingCall(
-        phoneE164: String,
+        phoneE164: String?,
         displayName: String,
         userId: String? = null,
     ) {
         if (!userId.isNullOrBlank()) {
             callManager.startCallToRegisteredUser(userId, phoneE164, displayName)
-        } else {
+        } else if (!phoneE164.isNullOrBlank()) {
             callManager.resolveTarget(phoneE164)
             callManager.startCall(phoneE164)
         }

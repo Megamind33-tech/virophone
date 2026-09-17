@@ -231,11 +231,11 @@ class MeshVoiceEngine(context: Context) {
     @Synchronized
     fun shutdown() {
         peers.keys.toList().forEach { removePeer(it) }
-        localAudioTrack?.dispose()
-        audioSource?.dispose()
+        runCatching { localAudioTrack?.dispose() }
+        runCatching { audioSource?.dispose() }
         localAudioTrack = null
         audioSource = null
-        factory?.dispose()
+        runCatching { factory?.dispose() }
         factory = null
         restoreAudio()
     }

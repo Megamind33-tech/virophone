@@ -14,6 +14,7 @@ import { BlocksModule } from '../blocks/blocks.module';
 import { PushModule } from '../push/push.module';
 import { OfflineTrustModule } from '../offline-trust/offline-trust.module';
 import { SignalingDeliveryModule } from '../signaling/signaling-delivery.module';
+import { LiveKitService } from '../livekit/livekit.service';
 
 @Module({
   imports: [
@@ -32,7 +33,7 @@ import { SignalingDeliveryModule } from '../signaling/signaling-delivery.module'
     SignalingDeliveryModule,
   ],
   controllers: [CallsController],
-  providers: [CallsService, CallSessionService],
+  providers: [CallsService, CallSessionService, LiveKitService],
   exports: [CallsService, CallSessionService],
 })
 export class CallsModule {}

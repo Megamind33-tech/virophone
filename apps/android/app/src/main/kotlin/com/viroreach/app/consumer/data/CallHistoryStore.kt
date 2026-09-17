@@ -69,6 +69,9 @@ data class CallLogEntry(
 
     val endTimestampMs: Long? = null,
 
+    /** Known for server-synced history even when no phone number is on file. */
+    val peerUserId: String? = null,
+
 )
 
 

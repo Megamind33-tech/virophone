@@ -13,3 +13,6 @@ process.env.EMAIL_TRANSPORT = 'console';
 process.env.REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 process.env.EPHEMERAL_SIGNING_SECRET = process.env.EPHEMERAL_SIGNING_SECRET || 'test_ephemeral_signing_secret';
 process.env.TURN_SECRET = process.env.TURN_SECRET || 'test_turn_secret';
+process.env.LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY || 'test_livekit_key';
+process.env.LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || 'test_livekit_secret_at_least_32_chars';
+process.env.LIVEKIT_URL = process.env.LIVEKIT_URL || 'wss://livekit.test.local';

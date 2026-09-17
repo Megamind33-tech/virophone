@@ -32,7 +32,13 @@
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- phoneCall (not dataSync): dataSync foreground services are force-stopped
+         after 6 cumulative hours per rolling 24h window on Android 14+, which would
+         silently kill call-signaling after the app sits backgrounded a while.
+         phoneCall has no such limit — it's meant for exactly this. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
 
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
@@ -104,7 +110,7 @@
 
             android:exported="false"
 
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="phoneCall" />
 
 
 

@@ -12,6 +12,7 @@ import com.viroreach.feature.discovery.EphemeralIdGenerator
 import com.viroreach.feature.discovery.LocalNetworkDiscoveryService
 import com.viroreach.feature.discovery.NsdLanDiscovery
 import com.viroreach.voice.api.CallStatistics
+import com.viroreach.voice.webrtc.LiveKitCallEngine
 import com.viroreach.voice.webrtc.WebRtcVoiceEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -49,7 +50,11 @@ class CallManager(
 
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    // WebRTC direct P2P remains for LOCAL_LAN calls only (LiveKit needs a
+    // reachable server, so it cannot serve true offline/no-WAN calling).
+    // Every WSS (internet) call's media now goes through LiveKit instead.
     private val voiceEngine: WebRtcVoiceEngine = WebRtcVoiceEngine(appContext)
+    private val liveKitEngine = LiveKitCallEngine(appContext)
     private val offlineTrust = OfflineTrustStore(appContext)
     private val ephemeralGen = EphemeralIdGenerator()
     private val peerRegistry = LocalPeerRegistry()
@@ -181,6 +186,29 @@ class CallManager(
                 else -> Unit
             }
         }.launchIn(scope)
+        // Same bridging pattern for the LiveKit engine (WSS/internet calls) —
+        // ACTIVE only once LiveKit reports a real remote-track subscription,
+        // never merely on room-connected.
+        liveKitEngine.callState.onEach { engineState ->
+            when (engineState) {
+                CallStateMachineState.ACTIVE -> {
+                    if (_state.value in CALLEE_ACTIVE_PROMOTE_STATES) {
+                        _state.value = CallStateMachineState.ACTIVE
+                    }
+                }
+                CallStateMachineState.RECONNECTING -> {
+                    if (_state.value == CallStateMachineState.ACTIVE) {
+                        _state.value = CallStateMachineState.RECONNECTING
+                    }
+                }
+                CallStateMachineState.MEDIA_FAILED -> {
+                    if (_state.value in CALLEE_ACTIVE_PROMOTE_STATES) {
+                        _state.value = CallStateMachineState.MEDIA_FAILED
+                    }
+                }
+                else -> Unit
+            }
+        }.launchIn(scope)
     }
 
     private fun sendIceRestartSdp(callId: String, sdp: SessionDescription) {
@@ -219,21 +247,6 @@ class CallManager(
                     transportType = com.viroreach.core.model.CallRouteType.LAN,
                 )
             }
-    }
-
-    private fun iceSessionMaterial(callId: String, turn: com.viroreach.core.network.TurnCredentialsResponse): Map<String, String> {
-        val urls = when (relayMode) {
-            RelayMode.AUTO -> turn.urls
-            RelayMode.TURN_UDP -> turn.urls.filter { it.contains("transport=udp") || it.startsWith("stun:") }
-            RelayMode.TURN_TCP -> turn.urls.filter { it.contains("transport=tcp") }
-        }
-        voiceEngine.iceTransportPolicyRelay = relayMode != RelayMode.AUTO
-        return mapOf(
-            "callId" to callId,
-            "iceServers" to urls.joinToString(","),
-            "iceUsername" to turn.username,
-            "iceCredential" to turn.credential,
-        )
     }
 
     private fun lanIceMaterial(callId: String): Map<String, String> = mapOf(
@@ -366,6 +379,13 @@ class CallManager(
             _state.value = CallStateMachineState.FAILED
             return
         }
+        // Set before any suspending work: the call screen opens synchronously the
+        // moment the user taps Call, but isCaller previously wasn't set true until
+        // deep inside startRemoteCall/startLocalCall. During that gap (ensureSignalingReady
+        // alone can take up to 15s) the UI read state=IDLE + isCaller=false, which the
+        // label function renders as "Incoming…" on a call the user just placed themselves.
+        isCaller = true
+        _isCallerRole.value = true
         if (!ensureSignalingReady()) {
             _state.value = CallStateMachineState.FAILED
             return
@@ -429,28 +449,13 @@ class CallManager(
         isCaller = true
         _isCallerRole.value = true
         _incomingCall.value = null
-        _state.value = CallStateMachineState.SIGNALING
 
-        val turn = api.getTurnCredentials()
-        val material = iceSessionMaterial(auth.callId, turn)
-        voiceEngine.startCall(targetUserId, material)
-        voiceEngine.applySessionMaterial(material)
-
+        // No SDP/ICE to negotiate over Viro's own signaling anymore — LiveKit
+        // handles that internally once both sides join the room after Accept.
+        // call.invite still rings the callee's device(s) exactly as before.
         _state.value = CallStateMachineState.INVITING
-        voiceEngine.createOffer { sdp ->
-            activeTransport.send(
-                "call.invite",
-                auth.callId,
-                remotePeerDeviceId(),
-                JSONObject().put("sdp", sdp.description).put("type", sdp.type.canonicalForm()),
-            )
-            activeTransport.send("call.offer", auth.callId, remotePeerDeviceId(), JSONObject().put("sdp", sdp.description))
-        }
-        _routeLabel.value = when (relayMode) {
-            RelayMode.AUTO -> "P2P/TURN (auto)"
-            RelayMode.TURN_UDP -> "TURN UDP (forced)"
-            RelayMode.TURN_TCP -> "TURN TCP (forced)"
-        }
+        activeTransport.send("call.invite", auth.callId, remotePeerDeviceId(), JSONObject())
+        _routeLabel.value = "Viro Call"
     }
 
     private suspend fun startLocalCall(targetUserId: String) {
@@ -495,32 +500,49 @@ class CallManager(
             isCaller = false
             _isCallerRole.value = false
             _state.value = CallStateMachineState.CONNECTING
-            calleeAcceptPending = true
-            val material = if (_signalingRoute.value == SignalingRoute.LOCAL_LAN) {
-                lanIceMaterial(callId)
-            } else {
-                val turn = api.getTurnCredentials()
-                iceSessionMaterial(callId, turn)
-            }
-            voiceEngine.ensureInitialized().getOrElse { e ->
-                throw IllegalStateException("Voice engine unavailable: ${e.message}")
-            }
-            voiceEngine.applySessionMaterial(material)
-            voiceEngine.acceptCall(callId)
-            completeCalleeHandshake(callId)
-            _routeLabel.value = when (_signalingRoute.value) {
-                SignalingRoute.LOCAL_LAN -> "LAN (local signaling)"
-                else -> when (relayMode) {
-                    RelayMode.AUTO -> "P2P/TURN (auto)"
-                    RelayMode.TURN_UDP -> "TURN UDP (forced)"
-                    RelayMode.TURN_TCP -> "TURN TCP (forced)"
+            val target = remotePeerDeviceId()
+            if (_signalingRoute.value == SignalingRoute.LOCAL_LAN) {
+                // Offline/no-WAN calling can't reach a LiveKit server — keep the
+                // existing direct WebRTC P2P path for LAN calls unchanged.
+                calleeAcceptPending = true
+                voiceEngine.ensureInitialized().getOrElse { e ->
+                    throw IllegalStateException("Voice engine unavailable: ${e.message}")
                 }
+                voiceEngine.applySessionMaterial(lanIceMaterial(callId))
+                voiceEngine.acceptCall(callId)
+                completeCalleeHandshake(callId)
+                _routeLabel.value = "LAN (local signaling)"
+            } else {
+                activeTransport.send("call.accept", callId, target)
+                _incomingCall.value = null
+                connectLiveKitMedia(callId)
+                _routeLabel.value = "Viro Call"
             }
         } catch (e: Exception) {
             _lastError.value = e.message ?: "Could not answer call"
             _state.value = CallStateMachineState.MEDIA_FAILED
             clearIncomingState()
         }
+    }
+
+    /**
+     * Fetches a room-scoped LiveKit token for [callId] and joins — used by
+     * both sides once the call is accepted (see acceptCall and the
+     * call.accept branch in handleSignalingMessage).
+     */
+    private suspend fun connectLiveKitMedia(callId: String) {
+        try {
+            val creds = api.getLiveKitToken(callId)
+            log("LIVEKIT_TOKEN_RECEIVED callId=$callId")
+            liveKitEngine.connect(creds.url, creds.token, forceRelay = relayMode != RelayMode.AUTO)
+        } catch (e: Exception) {
+            _lastError.value = "Media connect failed: ${e.message}"
+            _state.value = CallStateMachineState.MEDIA_FAILED
+        }
+    }
+
+    private fun log(event: String) {
+        android.util.Log.i("ViroCall", event)
     }
 
     private fun completeCalleeHandshake(callId: String) {
@@ -544,7 +566,12 @@ class CallManager(
                         .put("sdp", sdp.description)
                         .put("type", sdp.type.canonicalForm()),
                 )
-                _state.value = CallStateMachineState.ACTIVE
+                // Signaling is done, but media hasn't connected yet — stay in
+                // CONNECTING until the ICE observer reports a real connection
+                // (see voiceEngine.callState.onEach below). Marking ACTIVE here
+                // lies to the UI and causes an immediate ACTIVE->RECONNECTING
+                // flip the moment ICE state is actually observed.
+                _state.value = CallStateMachineState.CONNECTING
                 _incomingCall.value = null
                 refreshIceSummary()
             }
@@ -555,8 +582,15 @@ class CallManager(
         pendingRemoteOffer = SessionDescription(SessionDescription.Type.OFFER, sdpText)
     }
 
-    fun setMuted(muted: Boolean) = voiceEngine.setMuted(muted)
-    fun setSpeaker(on: Boolean) = voiceEngine.setSpeaker(on)
+    fun setMuted(muted: Boolean) {
+        if (_signalingRoute.value == SignalingRoute.LOCAL_LAN) voiceEngine.setMuted(muted)
+        else liveKitEngine.setMuted(muted)
+    }
+
+    fun setSpeaker(on: Boolean) {
+        if (_signalingRoute.value == SignalingRoute.LOCAL_LAN) voiceEngine.setSpeaker(on)
+        else liveKitEngine.setSpeaker(on)
+    }
 
     fun sendSignalingEvent(
         type: String,
@@ -587,26 +621,47 @@ class CallManager(
     }
 
     suspend fun rejectCall() {
-        runCatching {
-            activeCallId?.let { id ->
-                activeTransport.send("call.reject", id, remotePeerDeviceId())
+        // The UI's global call-overlay watcher re-shows the call screen for any
+        // non-terminal state, so ENDED must be reached even if teardown throws —
+        // otherwise the call state gets stuck and later navigation (e.g. opening
+        // chat) can suddenly snap back to the call screen.
+        try {
+            runCatching {
+                activeCallId?.let { id ->
+                    activeTransport.send("call.reject", id, remotePeerDeviceId())
+                }
             }
+            runCatching { endActiveMedia() }
+        } finally {
+            _state.value = CallStateMachineState.ENDED
+            clearIncomingState()
         }
-        activeCallId?.let { voiceEngine.endCall(it) }
-        _state.value = CallStateMachineState.ENDED
-        clearIncomingState()
     }
 
     suspend fun hangUp() {
-        activeCallId?.let { id ->
-            runCatching { activeTransport.send("call.end", id, remotePeerDeviceId()) }
-            voiceEngine.endCall(id)
-            if (_signalingRoute.value == SignalingRoute.WSS) {
-                try { api.endCall(id) } catch (_: Exception) {}
+        // See rejectCall — teardown steps must not prevent reaching ENDED.
+        try {
+            activeCallId?.let { id ->
+                runCatching { activeTransport.send("call.end", id, remotePeerDeviceId()) }
+                runCatching { endActiveMedia() }
+                if (_signalingRoute.value == SignalingRoute.WSS) {
+                    runCatching { api.endCall(id) }
+                }
             }
+        } finally {
+            _state.value = CallStateMachineState.ENDED
+            clearIncomingState()
         }
-        _state.value = CallStateMachineState.ENDED
-        clearIncomingState()
+    }
+
+    /** Tears down whichever media engine this call actually used. */
+    private suspend fun endActiveMedia() {
+        val id = activeCallId
+        if (_signalingRoute.value == SignalingRoute.LOCAL_LAN) {
+            id?.let { voiceEngine.endCall(it) }
+        } else {
+            liveKitEngine.disconnect()
+        }
     }
 
     private fun onIncomingCall(msg: SignalingMessage, viaRoute: SignalingRoute) {
@@ -664,9 +719,19 @@ class CallManager(
             "call.accept" -> {
                 if (isCaller && _state.value in CALLER_PREACTIVE_STATES) {
                     _state.value = CallStateMachineState.CONNECTING
+                    if (_signalingRoute.value == SignalingRoute.WSS) {
+                        // LAN calls still complete their media handshake via the
+                        // call.offer/call.answer/call.ice exchange below.
+                        scope.launch { connectLiveKitMedia(msg.callId) }
+                    }
                 }
             }
+            // These four only ever fire for LOCAL_LAN calls now — WSS/internet
+            // calls stopped sending them once LiveKit took over their media
+            // (see startRemoteCall/acceptCall). Guarded so the two media
+            // engines can never both act on the same call.
             "call.offer" -> {
+                if (_signalingRoute.value != SignalingRoute.LOCAL_LAN) return
                 val sdp = msg.payload?.getString("sdp") ?: return
                 if (!isCaller) {
                     // Ignore duplicate/late offers once the call is already up —
@@ -696,20 +761,26 @@ class CallManager(
                                         .put("sdp", answer.description)
                                         .put("type", answer.type.canonicalForm()),
                                 )
-                                _state.value = CallStateMachineState.ACTIVE
+                                // See completeCalleeHandshake: wait for the real ICE
+                                // connection before claiming ACTIVE.
+                                _state.value = CallStateMachineState.CONNECTING
                             }
                         }
                     }
                 }
             }
             "call.answer" -> {
+                if (_signalingRoute.value != SignalingRoute.LOCAL_LAN) return
                 val sdp = msg.payload?.getString("sdp") ?: return
                 voiceEngine.setRemoteDescription(SessionDescription(SessionDescription.Type.ANSWER, sdp)) {
-                    _state.value = CallStateMachineState.ACTIVE
+                    // Media negotiation starts here, but ICE hasn't connected yet —
+                    // let the ICE observer promote to ACTIVE for real.
+                    _state.value = CallStateMachineState.CONNECTING
                     refreshIceSummary()
                 }
             }
             "call.ice" -> {
+                if (_signalingRoute.value != SignalingRoute.LOCAL_LAN) return
                 val payload = msg.payload ?: return
                 val candidate = IceCandidate(
                     payload.optString("sdpMid"),
@@ -718,10 +789,16 @@ class CallManager(
                 )
                 voiceEngine.addIceCandidate(candidate)
             }
-            "call.iceRestart" -> handleIceRestart(msg)
-            "call.end", "call.reject", "call.busy" -> {
-                _state.value = CallStateMachineState.ENDED
+            "call.iceRestart" -> {
+                if (_signalingRoute.value == SignalingRoute.LOCAL_LAN) handleIceRestart(msg)
             }
+            // Distinct terminal states so the UI can show the right reason
+            // ("Call declined" / "Line busy") instead of a generic end — the
+            // labels already existed in consumerFailureMessage but nothing
+            // was ever setting these states to trigger them.
+            "call.reject" -> _state.value = CallStateMachineState.PEER_REJECTED
+            "call.busy" -> _state.value = CallStateMachineState.BUSY
+            "call.end" -> _state.value = CallStateMachineState.ENDED
             "call.error" -> {
                 val code = msg.payload?.optString("code", msg.payload?.optString("reason"))
                 _lastError.value = code?.let { "Signaling error: $it" } ?: "Signaling error"
@@ -783,12 +860,6 @@ class CallManager(
     }
 
     companion object {
-        private val CALL_RECOVERABLE_STATES = setOf(
-            CallStateMachineState.ACTIVE,
-            CallStateMachineState.RECONNECTING,
-            CallStateMachineState.SIGNALING,
-            CallStateMachineState.RINGING,
-        )
         private val CALLER_PREACTIVE_STATES = setOf(
             CallStateMachineState.INVITING,
             CallStateMachineState.RINGING,
@@ -815,20 +886,10 @@ class CallManager(
      * Phase 1B — recover media path after Wi-Fi/mobile handoff or brief connectivity loss.
      */
     suspend fun recoverFromNetworkTransition() {
-        val callId = activeCallId ?: return
-        if (_state.value !in CALL_RECOVERABLE_STATES) return
-        if (_signalingRoute.value != SignalingRoute.WSS) return
-        _state.value = CallStateMachineState.RECONNECTING
-        try {
-            val turn = api.getTurnCredentials()
-            val material = iceSessionMaterial(callId, turn)
-            voiceEngine.updateIceServers(material)
-            if (isCaller) {
-                voiceEngine.triggerIceRestart { sdp -> sendIceRestartSdp(callId, sdp) }
-            }
-        } catch (e: Exception) {
-            _lastError.value = "Network recovery failed: ${e.message}"
-        }
+        // LiveKit (WSS/internet calls) reconnects on network changes on its own —
+        // see the RoomEvent.Reconnecting/Reconnected bridging in init{}, which
+        // already keeps _state in sync. There's no equivalent recovery for a
+        // direct LAN P2P call (no relay to fail over to), so nothing to do there.
     }
 
     private fun handleIceRestart(msg: SignalingMessage) {
@@ -866,6 +927,9 @@ class CallManager(
         discoveryService.stopLanDiscovery()
         wssTransport.disconnect()
         localTransport.disconnect()
-        scope.launch { voiceEngine.shutdown() }
+        scope.launch {
+            voiceEngine.shutdown()
+            liveKitEngine.disconnect()
+        }
     }
 }

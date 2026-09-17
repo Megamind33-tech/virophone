@@ -1,9 +1,21 @@
-import { Controller, Post, Get, Param, Body, UseGuards, Req } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Param,
+  Body,
+  UseGuards,
+  Req,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { CallsService } from './calls.service';
+import { CallSessionService } from './call-session.service';
 import { SignalingDeliveryService } from '../signaling/signaling-delivery.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean } from 'class-validator';
 import { MetricsService } from '../metrics/metrics.module';
+import { LiveKitService } from '../livekit/livekit.service';
 
 class AuthorizeCallDto {
   @IsString()
@@ -56,6 +68,8 @@ export class CallsController {
     private readonly callsService: CallsService,
     private readonly metrics: MetricsService,
     private readonly signalingDelivery: SignalingDeliveryService,
+    private readonly callSessionService: CallSessionService,
+    private readonly liveKitService: LiveKitService,
   ) {}
 
   @Post('authorize')
@@ -93,6 +107,34 @@ export class CallsController {
   @Post(':id/end')
   async end(@Req() req: { user: { sub: string } }, @Param('id') id: string) {
     return this.callsService.endCall(id, req.user.sub);
+  }
+
+  /**
+   * Issues a room-scoped LiveKit token for realtime media. Only a current
+   * participant (caller or one of the callee's devices) on a still-live call
+   * session may obtain one — the same authorization CallSessionService
+   * already enforces for WSS signaling (see SignalingGateway.handleSignaling).
+   * LIVEKIT_API_SECRET is used only to sign the JWT here; it never appears
+   * in the response.
+   */
+  @Post(':id/livekit-token')
+  async livekitToken(
+    @Req() req: { user: { sub: string; deviceId: string } },
+    @Param('id') id: string,
+  ) {
+    const session = await this.callSessionService.getSession(id);
+    if (!session) {
+      throw new NotFoundException('Call not found or already ended.');
+    }
+    const isParticipant = await this.callSessionService.isParticipant(
+      id,
+      req.user.sub,
+      req.user.deviceId,
+    );
+    if (!isParticipant) {
+      throw new ForbiddenException('Not a participant on this call.');
+    }
+    return this.liveKitService.generateToken(id, req.user.sub);
   }
 
   @Post(':id/events')

@@ -30,18 +30,22 @@ object ServerCallHistoryMapper {
             answerMs != null && endMs != null -> ((endMs - answerMs) / 1000).toInt().coerceAtLeast(0)
             else -> 0
         }
+        val peerUserId = entry.peerUserId
+            ?: if (outgoing) entry.calleeUserId else entry.callerUserId
         val name = entry.peerDisplayName?.takeIf { it.isNotBlank() }
-            ?: entry.peerUserId?.take(8)
-            ?: if (outgoing) entry.calleeUserId.take(8) else entry.callerUserId.take(8)
+            ?: peerUserId.take(8)
         return CallLogEntry(
             id = entry.id,
             name = name,
+            // The server doesn't return a phone number for history entries — call-back
+            // and message-back fall back to peerUserId instead (see HomeScreen/ConsumerNav).
             phoneE164 = null,
             type = type,
             timestampMs = startMs,
             durationSeconds = duration,
             answerTimestampMs = answerMs,
             endTimestampMs = endMs,
+            peerUserId = peerUserId,
         )
     }
 

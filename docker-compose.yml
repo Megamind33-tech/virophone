@@ -60,6 +60,9 @@ services:
       TURN_PORT: ${TURN_PORT:-3478}
       TURN_REALM: ${TURN_REALM:-viro-reach.local}
       API_PORT: 3001
+      AVATAR_UPLOAD_DIR: /app/uploads/avatars
+    volumes:
+      - api_avatars:/app/uploads/avatars
     ports:
       - "3001:3001"
     healthcheck:
@@ -102,3 +105,4 @@ volumes:
   redis_data:
   caddy_data:
   caddy_config:
+  api_avatars:

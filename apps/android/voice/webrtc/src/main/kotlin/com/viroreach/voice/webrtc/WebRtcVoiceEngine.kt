@@ -509,10 +509,13 @@ class WebRtcVoiceEngine(
         stopStatisticsPolling()
         iceRecoveryJob?.cancel()
         iceRecoveryAttempts = 0
-        localAudioTrack?.dispose()
-        audioSource?.dispose()
-        peerConnection?.close()
-        peerConnection?.dispose()
+        // WebRTC's native dispose()/close() can throw (e.g. double-dispose racing
+        // against a concurrent ICE-recovery attempt on the same peerConnection) —
+        // one throwing must not skip the rest of cleanup or leave call state stuck.
+        runCatching { localAudioTrack?.dispose() }
+        runCatching { audioSource?.dispose() }
+        runCatching { peerConnection?.close() }
+        runCatching { peerConnection?.dispose() }
         peerConnection = null
         audioSender = null
         pendingIceCandidates.clear()

@@ -72,6 +72,9 @@ services:
       TURN_HOST: ${CADDY_DOMAIN}
       TURN_PORT: ${VIRO_TURN_PORT:-3479}
       TURN_REALM: ${TURN_REALM:-viro-reach}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      LIVEKIT_URL: ${LIVEKIT_URL:-}
       EPHEMERAL_SIGNING_SECRET: ${EPHEMERAL_SIGNING_SECRET}
       OTP_PROVIDER: ${OTP_PROVIDER:-console}
       OTP_PROVIDER_TEST_CODE: ${OTP_PROVIDER_TEST_CODE:-}
@@ -85,6 +88,11 @@ services:
       OTP_EMAIL_FROM: ${OTP_EMAIL_FROM:-}
       OTP_DELIVERY_EMAIL: ${OTP_DELIVERY_EMAIL:-}
       OTP_EMAIL_MAP: ${OTP_EMAIL_MAP:-}
+      AVATAR_UPLOAD_DIR: /app/uploads/avatars
+    volumes:
+      # Without this, every container rebuild/redeploy silently wipes every
+      # uploaded profile photo — the container filesystem is ephemeral.
+      - viro_reach_avatars:/app/uploads/avatars
     ports:
       - "${VIRO_API_BIND:-127.0.0.1:13001}:3001"
     healthcheck:
@@ -116,6 +124,26 @@ services:
     networks:
       - viro_reach_internal
 
+  # Isolated LiveKit instance for Viro Reach's own voice calls — separate
+  # container, ports, and API key/secret from any other LiveKit deployment
+  # that may exist on this shared host for other apps.
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: viro-reach-livekit
+    restart: unless-stopped
+    command: --node-ip=${EXTERNAL_IP}
+    environment:
+      LIVEKIT_PORT: "7980"
+      LIVEKIT_RTC_TCP_PORT: "7981"
+      LIVEKIT_RTC_PORT_RANGE_START: "51000"
+      LIVEKIT_RTC_PORT_RANGE_END: "51100"
+      LIVEKIT_RTC_USE_EXTERNAL_IP: "true"
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    ports:
+      - "127.0.0.1:7980:7980"
+      - "${VIRO_LIVEKIT_TCP_BIND:-0.0.0.0}:7981:7981"
+      - "${VIRO_LIVEKIT_UDP_BIND:-0.0.0.0}:51000-51100:51000-51100/udp"
+
   coturn:
     image: coturn/coturn:latest
     container_name: viro-reach-coturn
@@ -140,3 +168,4 @@ volumes:
   viro_reach_redis:
   viro_reach_caddy_data:
   viro_reach_caddy_config:
+  viro_reach_avatars:

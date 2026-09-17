@@ -78,6 +78,9 @@ interface ViroApiService {
     @POST("api/v1/calls/{callId}/end")
     suspend fun endCall(@Path("callId") callId: String)
 
+    @POST("api/v1/calls/{callId}/livekit-token")
+    suspend fun getLiveKitToken(@Path("callId") callId: String): LiveKitTokenResponse
+
     @POST("api/v1/discovery/ephemeral")
     suspend fun registerEphemeral(@Body body: RegisterEphemeralBody): RegisterEphemeralResponse
 
@@ -204,6 +207,7 @@ data class RegisterEphemeralResponse(val expiresAt: String)
 data class ResolveEphemeralBody(val ephemeralId: String, val authorizedUserIds: List<String>)
 data class ResolveEphemeralResponse(val authorized: Boolean, val userId: String? = null)
 data class TurnCredentialsResponse(val urls: List<String>, val username: String, val credential: String, val ttlSeconds: Int)
+data class LiveKitTokenResponse(val url: String, val token: String, val roomName: String)
 data class OfflineTrustMaterialResponse(val material: List<OfflineTrustEntry>, val syncedAt: String)
 data class OfflineTrustEntry(
     val peerUserId: String,

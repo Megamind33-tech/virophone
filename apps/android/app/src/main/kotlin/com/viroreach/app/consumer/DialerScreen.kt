@@ -44,9 +44,11 @@ fun DialerScreen(
     val cachedContacts = session.contactsCoordinator.uiState.contacts
     var deviceContacts by remember { mutableStateOf<List<ContactListItem>?>(null) }
 
+    val region = remember { DeviceRegion.current(context) }
+
     LaunchedEffect(Unit) {
         deviceContacts = withContext(Dispatchers.IO) {
-            runCatching { DeviceContactsReader.read(context) }.getOrDefault(emptyList())
+            runCatching { DeviceContactsReader.read(context, region) }.getOrDefault(emptyList())
         }
     }
 
@@ -65,14 +67,14 @@ fun DialerScreen(
 
     val dialDigits = remember(dialInput) { dialInput.filter { it.isDigit() } }
     val displayNumber = remember(dialDigits) {
-        PhoneNumberFormatter.formatForDisplay(dialDigits)
+        PhoneNumberFormatter.formatForDisplay(dialDigits, region)
     }
     val matchedContact = remember(dialDigits, dialerContacts) {
         DeviceContactsReader.findByDigitsIn(dialerContacts, dialDigits)
     }
 
     fun startCall() {
-        val e164 = PhoneNumberFormatter.canonicalE164(dialDigits) ?: return
+        val e164 = PhoneNumberFormatter.canonicalE164(dialDigits, region) ?: return
         val name = matchedContact?.displayName ?: displayNumber
         session.updateLastTargetInput(e164)
         val presentation = CallPresentation(
@@ -156,7 +158,7 @@ fun DialerScreen(
                 Spacer(Modifier.height(ViroSpacing.md))
                 FilledIconButton(
                     onClick = {
-                        if (PhoneNumberFormatter.canonicalE164(dialDigits) == null) return@FilledIconButton
+                        if (PhoneNumberFormatter.canonicalE164(dialDigits, region) == null) return@FilledIconButton
                         val action = { startCall() }
                         when (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)) {
                             PackageManager.PERMISSION_GRANTED -> action()

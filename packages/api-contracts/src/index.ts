@@ -144,11 +144,6 @@ export const ENDPOINTS = {
     reject: (id: string) => `${API_BASE}/connections/${id}/reject`,
     delete: (id: string) => `${API_BASE}/connections/${id}`,
   },
-  devices: {
-    register: `${API_BASE}/devices/register`,
-    list: `${API_BASE}/devices`,
-    delete: (id: string) => `${API_BASE}/devices/${id}`,
-  },
   blocks: {
     create: `${API_BASE}/blocks`,
     list: `${API_BASE}/blocks`,
