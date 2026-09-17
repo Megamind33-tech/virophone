@@ -39,6 +39,14 @@ fun ChatScreen(
 ) {
     val store = session.messagesStore
     var activeConversationId by remember(conversationId) { mutableStateOf(conversationId) }
+    // Distinct from activeConversationId: openOrCreateConversation() mints a
+    // fresh random UUID for any conversation with no local cache entry yet,
+    // purely client-side with no relation to anything on the server. Looking
+    // that id up in the local store to decide whether it's "known" was
+    // circular — the store always contains an entry for it, since that's how
+    // it got created. Only set this once the server has actually confirmed
+    // the conversation exists; only then is it safe to send with it.
+    var serverConversationId by remember(conversationId) { mutableStateOf<String?>(null) }
     val messages by store.conversationMessages(activeConversationId).collectAsState()
     val conversations by store.conversations.collectAsState()
     var draft by remember { mutableStateOf("") }
@@ -52,17 +60,25 @@ fun ChatScreen(
         mutableStateOf(peerAvatarUrl)
     }
     var resolvedName by remember(activeConversationId, peerName) { mutableStateOf(peerName) }
+    var resolvedPeerUserId by remember(activeConversationId, peerUserId) { mutableStateOf(peerUserId) }
+    var sendError by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(conversationId, peerUserId) {
+    LaunchedEffect(conversationId, resolvedPeerUserId) {
         val userId = currentUserId
-        // Prefer server conversation when we know the peer.
-        if (peerUserId != null) {
+        // Prefer server conversation when we know the peer. This used to key
+        // off the raw nav-time peerUserId, which is exactly null in the case
+        // the resolution effect below fixes (peer only known after a local
+        // contact lookup) — so it never ran, activeConversationId stayed a
+        // client-only local id the server has never heard of, and every send
+        // 404'd with "Conversation not found."
+        if (resolvedPeerUserId != null) {
             runCatching {
                 val remote = session.serverMessagesRepository.listConversations(userId)
-                val match = remote.find { it.peerUserId == peerUserId }
+                val match = remote.find { it.peerUserId == resolvedPeerUserId }
                 if (match != null) {
                     store.upsertConversation(match)
                     activeConversationId = match.id
+                    serverConversationId = match.id
                 }
             }
         }
@@ -76,16 +92,18 @@ fun ChatScreen(
         }
     }
 
-    LaunchedEffect(activeConversationId, conversationPhone, peerAvatarUrl, peerName) {
-        if (!peerAvatarUrl.isNullOrBlank()) {
-            resolvedAvatarUrl = peerAvatarUrl
-            resolvedName = peerName
-            return@LaunchedEffect
-        }
+    LaunchedEffect(activeConversationId, conversationPhone, peerAvatarUrl, peerName, peerUserId) {
+        // Always re-check the locally cached contact, even when nav already
+        // supplied a photo/name — a device contact almost always has a local
+        // photo before it's ever matched to a Viro account, so bailing out
+        // early here (as this used to) skipped the one lookup that could
+        // populate resolvedPeerUserId, silently leaving "isn't on Viro yet"
+        // showing for someone who actually is.
         val contact = conversationPhone?.let { session.contactsRepository.findByPhone(it) }
             ?: peerUserId?.let { session.contactsRepository.findByUserId(it) }
-        resolvedAvatarUrl = contact?.resolveAvatarUrl()
+        resolvedAvatarUrl = peerAvatarUrl?.takeIf { it.isNotBlank() } ?: contact?.resolveAvatarUrl()
         resolvedName = contact?.effectiveDisplayName ?: peerName
+        resolvedPeerUserId = peerUserId ?: contact?.userId
     }
 
     LaunchedEffect(messages.size) {
@@ -129,6 +147,14 @@ fun ChatScreen(
                         MessageBubble(msg)
                     }
                 }
+                sendError?.let { message ->
+                    Text(
+                        message,
+                        color = ViroColors.MutedBlue,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = ViroSpacing.md),
+                    )
+                }
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -154,37 +180,38 @@ fun ChatScreen(
                     FilledIconButton(
                         onClick = {
                             if (draft.isBlank()) return@FilledIconButton
+                            val toUserId = resolvedPeerUserId
+                            if (toUserId == null) {
+                                // No known Viro account for this peer — there's no working
+                                // transport to deliver a message (the call-signaling channel
+                                // this used to fall back to always fails with call_not_found,
+                                // since a conversation is never a real call session).
+                                sendError = "$resolvedName isn't on Viro yet — invite them to message."
+                                return@FilledIconButton
+                            }
+                            sendError = null
                             val outgoing = draft.trim()
                             draft = ""
                             store.sendMessage(activeConversationId, outgoing)
                             scope.launch {
-                                if (peerUserId != null) {
-                                    runCatching {
-                                        val knownServerId = conversations
-                                            .find { it.id == activeConversationId }
-                                            ?.takeIf { peerUserId != null }
-                                            ?.id
-                                        val serverConvId = session.serverMessagesRepository.send(
-                                            toUserId = peerUserId,
-                                            conversationId = knownServerId,
-                                            body = outgoing,
-                                            clientMsgId = UUID.randomUUID().toString(),
-                                        )
-                                        if (serverConvId != activeConversationId) {
-                                            activeConversationId = serverConvId
-                                        }
-                                        val history = session.serverMessagesRepository.history(
-                                            serverConvId,
-                                            currentUserId,
-                                        )
-                                        store.replaceMessages(serverConvId, history)
-                                    }
-                                } else {
-                                    session.callManager.sendChatMessage(
-                                        activeConversationId,
-                                        peerUserId,
-                                        outgoing,
+                                runCatching {
+                                    val serverConvId = session.serverMessagesRepository.send(
+                                        toUserId = toUserId,
+                                        conversationId = serverConversationId,
+                                        body = outgoing,
+                                        clientMsgId = UUID.randomUUID().toString(),
                                     )
+                                    serverConversationId = serverConvId
+                                    if (serverConvId != activeConversationId) {
+                                        activeConversationId = serverConvId
+                                    }
+                                    val history = session.serverMessagesRepository.history(
+                                        serverConvId,
+                                        currentUserId,
+                                    )
+                                    store.replaceMessages(serverConvId, history)
+                                }.onFailure {
+                                    sendError = "Couldn't send — try again."
                                 }
                                 if (messages.isNotEmpty()) {
                                     listState.animateScrollToItem(messages.lastIndex)

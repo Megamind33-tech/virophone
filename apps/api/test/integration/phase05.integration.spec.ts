@@ -371,14 +371,28 @@ describe('Phase 0.5 Integration (PostgreSQL)', () => {
       await request(app.getHttpServer()).get('/api/v1/me').expect(401);
     });
 
-    it('malformed discover body rejected', async () => {
+    it('malformed body (wrong types) still rejected by DTO validation', async () => {
       if (skipIfNoPg()) return;
       const user = await registerUser(app, '+260971000701');
       await request(app.getHttpServer())
         .post('/api/v1/contacts/discover')
         .set('Authorization', `Bearer ${user.accessToken}`)
-        .send({ phonesE164: ['not-valid'] })
+        .send({ phonesE164: [123] })
         .expect(400);
+    });
+
+    it('unparseable phone entries are skipped, not rejected, so the rest of the batch still resolves', async () => {
+      if (skipIfNoPg()) return;
+      await resetDatabase();
+      const bob = await registerUser(app, '+260971000702');
+      const alice = await registerUser(app, '+260971000701');
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/contacts/discover')
+        .set('Authorization', `Bearer ${alice.accessToken}`)
+        .send({ phonesE164: ['*114#', 'not-valid', '+260971000702'] });
+      expect([200, 201]).toContain(res.status);
+      expect(res.body.matches.some((m: { userId: string }) => m.userId === bob.userId)).toBe(true);
     });
   });
 

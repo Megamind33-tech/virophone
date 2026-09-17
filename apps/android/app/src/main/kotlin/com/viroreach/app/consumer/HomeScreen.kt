@@ -52,6 +52,15 @@ fun HomeScreen(
             contact.phoneE164?.let { it to contact }
         }.toMap()
     }
+    // Server-synced call history never carries a phone number (see
+    // ServerCallHistoryMapper), only peerUserId — without this, every such
+    // entry's name/avatar lookup silently missed and fell back to a raw
+    // "<userId prefix>" label even when the contact is saved locally.
+    val contactsByUserId = remember(contactsState.contacts) {
+        contactsState.contacts.mapNotNull { contact ->
+            contact.userId?.let { it to contact }
+        }.toMap()
+    }
 
     val searchResults = remember(searchQuery, contactsState.contacts) {
         if (searchQuery.isBlank()) emptyList()
@@ -179,6 +188,7 @@ fun HomeScreen(
                     HomeRecentsSection(
                         entries = recentDisplay,
                         contactsByPhone = contactsByPhone,
+                        contactsByUserId = contactsByUserId,
                         session = session,
                         scope = scope,
                         onViewCallLog = onViewCallLog,
@@ -254,6 +264,7 @@ private fun HomeFavoritesExpandedSection(
 private fun HomeRecentsSection(
     entries: List<CallLogEntry>,
     contactsByPhone: Map<String, ContactListItem>,
+    contactsByUserId: Map<String, ContactListItem>,
     session: SessionManager,
     scope: kotlinx.coroutines.CoroutineScope,
     onViewCallLog: (CallLogEntry) -> Unit,
@@ -262,9 +273,12 @@ private fun HomeRecentsSection(
     onOpenDialer: () -> Unit,
 ) {
     entries.forEach { entry ->
+        // Phone-keyed first (device contacts), falling back to the userId a
+        // server-synced entry actually carries — see ServerCallHistoryMapper.
         val contact = entry.phoneE164?.let { contactsByPhone[it] }
+            ?: entry.peerUserId?.let { contactsByUserId[it] }
         ViroCallLogRow(
-            name = entry.name,
+            name = contact?.effectiveDisplayName ?: entry.name,
             statusLabel = callLogStatusLabel(entry.type),
             direction = entry.type.toCallLogDirection(),
             time = formatCallLogTime(entry.timestampMs),
@@ -275,18 +289,34 @@ private fun HomeRecentsSection(
             messageInOverflow = true,
             horizontalPadding = 0.dp,
             onViewContact = { onViewCallLog(entry) },
+            // Prefer the freshly resolved contact (same one used for the name/photo
+            // above) over the call log entry's own fields — a server-synced entry
+            // never carries phoneE164, and its peerUserId can predate a match that
+            // only landed later, so falling back to those stale values silently
+            // broke calling/messaging back.
             onCallBack = {
-                entry.phoneE164?.let { phone ->
-                    onCallContact(
+                val phone = contact?.phoneE164 ?: entry.phoneE164
+                val userId = contact?.userId ?: entry.peerUserId
+                when {
+                    phone != null || userId != null -> onCallContact(
                         ContactListItem(
                             id = entry.id,
                             displayName = entry.name,
                             phoneE164 = phone,
+                            userId = userId,
                         ),
                     )
-                } ?: onOpenDialer()
+                    else -> onOpenDialer()
+                }
             },
-            onMessage = { onMessageCallLog(entry) },
+            onMessage = {
+                onMessageCallLog(
+                    entry.copy(
+                        phoneE164 = contact?.phoneE164 ?: entry.phoneE164,
+                        peerUserId = contact?.userId ?: entry.peerUserId,
+                    ),
+                )
+            },
             onDelete = { session.callHistoryStore.deleteEntry(entry.id) },
             onToggleFavorite = entry.phoneE164?.let { phone ->
                 {

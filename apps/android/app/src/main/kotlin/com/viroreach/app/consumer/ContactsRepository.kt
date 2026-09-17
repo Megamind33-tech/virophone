@@ -38,12 +38,13 @@ class SessionContactsRepository(
     private val context: android.content.Context,
 ) : ContactsRepository {
     override suspend fun loadContacts(): List<ContactListItem> {
-        val local = DeviceContactsReader.read(context)
+        val region = DeviceRegion.current(context)
+        val local = DeviceContactsReader.read(context, region)
         if (local.isEmpty()) return emptyList()
         val phones = local.mapNotNull { it.phoneE164 }
         return try {
             val matches = session.api.discoverContacts(
-                com.viroreach.core.network.DiscoverBody(phones, "ZM"),
+                com.viroreach.core.network.DiscoverBody(phones, region),
             ).matches.associateBy { it.phoneE164 }
             local.map { contact ->
                 val match = contact.phoneE164?.let { matches[it] }

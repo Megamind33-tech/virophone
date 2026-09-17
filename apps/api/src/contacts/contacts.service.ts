@@ -58,13 +58,19 @@ export class ContactsService {
       });
     }
 
+    // A device contact book routinely contains USSD codes, partial numbers,
+    // or other garbage a user never meant as a phone number. Skipping those
+    // (instead of rejecting the whole batch) means the rest of the batch —
+    // which may contain genuine, valid contacts — still gets checked.
     const normalizedPhones: string[] = [];
     for (const raw of phonesE164) {
       const e164 = normalizeE164(raw, defaultRegion as 'ZM');
-      if (!e164) {
-        throw new ViroException('INVALID_E164', `Invalid phone number: ${raw}`, HttpStatus.BAD_REQUEST);
-      }
+      if (!e164) continue;
       normalizedPhones.push(e164);
+    }
+
+    if (normalizedPhones.length === 0) {
+      return { matches: [] };
     }
 
     const phoneHashes = normalizedPhones.map((p) => hashPhoneForStorage(p, this.hashSalt));

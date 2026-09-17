@@ -31,6 +31,8 @@ class ContactsCoordinator(
     private var hasEverLoaded = false
 
     init {
+        repository.watchDeviceContactChanges(scope)
+
         repository.observeContacts()
             .onEach { cached ->
                 if (cached.isNotEmpty()) {

@@ -25,9 +25,9 @@ import java.util.Locale
 @Composable
 fun CallsScreen(
     session: SessionManager,
-    onCallBack: (phone: String?, name: String?) -> Unit,
+    onCallBack: (phone: String?, name: String?, userId: String?) -> Unit,
     onViewContact: (CallLogEntry) -> Unit,
-    onMessage: (phone: String?, name: String?) -> Unit,
+    onMessage: (phone: String?, name: String?, userId: String?) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var filter by remember { mutableStateOf("Recent") }
@@ -36,6 +36,19 @@ fun CallsScreen(
     var menuExpanded by remember { mutableStateOf(false) }
     val entries by session.callHistoryStore.entries.collectAsState()
     val grouped = remember(entries) { session.callHistoryStore.groupedByDate() }
+    val contactsState = session.contactsCoordinator.uiState
+    // Server-synced entries never carry a phone number (see
+    // ServerCallHistoryMapper) — only peerUserId — so without a userId-keyed
+    // fallback here every such row silently showed a raw "<userId prefix>"
+    // instead of the name/photo already saved locally for that person.
+    val contactsByPhone = remember(contactsState.contacts) {
+        contactsState.contacts.mapNotNull { c -> c.phoneE164?.let { it to c } }.toMap()
+    }
+    val contactsByUserId = remember(contactsState.contacts) {
+        contactsState.contacts.mapNotNull { c -> c.userId?.let { it to c } }.toMap()
+    }
+    fun resolveContact(log: CallLogEntry): ContactListItem? =
+        log.phoneE164?.let { contactsByPhone[it] } ?: log.peerUserId?.let { contactsByUserId[it] }
 
     LaunchedEffect(Unit) {
         session.callHistoryStore.syncFromServer(session.api, session.tokenStore.getUserId())
@@ -128,8 +141,9 @@ fun CallsScreen(
                                 )
                             }
                             items(logs, key = { it.id }) { log ->
+                                val contact = resolveContact(log)
                                 ViroCallLogRow(
-                                    name = log.name,
+                                    name = contact?.effectiveDisplayName ?: log.name,
                                     statusLabel = callLogStatusLabel(log.type),
                                     direction = log.type.toCallLogDirection(),
                                     time = formatCallLogTime(log.timestampMs),
@@ -140,9 +154,27 @@ fun CallsScreen(
                                     },
                                     isMissed = callLogIsFailure(log.type),
                                     isGroup = log.type == CallLogType.GROUP,
+                                    imageUrl = contact?.resolveAvatarUrl(),
                                     onViewContact = { onViewContact(log) },
-                                    onCallBack = { onCallBack(log.phoneE164, log.name) },
-                                    onMessage = { onMessage(log.phoneE164, log.name) },
+                                    // Prefer the freshly resolved contact (same one used for the
+                                    // name/photo above) over the call log entry's own fields —
+                                    // a server-synced entry never carries phoneE164, and its
+                                    // peerUserId can predate a match that only landed later, so
+                                    // falling back to those stale values silently broke send.
+                                    onCallBack = {
+                                        onCallBack(
+                                            contact?.phoneE164 ?: log.phoneE164,
+                                            log.name,
+                                            contact?.userId ?: log.peerUserId,
+                                        )
+                                    },
+                                    onMessage = {
+                                        onMessage(
+                                            contact?.phoneE164 ?: log.phoneE164,
+                                            log.name,
+                                            contact?.userId ?: log.peerUserId,
+                                        )
+                                    },
                                     onDelete = { session.callHistoryStore.deleteEntry(log.id) },
                                     onToggleFavorite = log.phoneE164?.let { phone ->
                                         {

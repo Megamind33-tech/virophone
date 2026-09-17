@@ -73,8 +73,13 @@ describe('ContactsService - Discovery Privacy', () => {
     expect(result.matches).toHaveLength(0);
   });
 
-  it('rejects invalid E.164', async () => {
-    await expect(service.discover('user-1', ['not-a-phone'])).rejects.toThrow();
+  it('skips unparseable phone entries instead of rejecting the whole batch', async () => {
+    // A device contact book routinely has USSD codes / garbage entries
+    // (e.g. "*114#") alongside real numbers — one bad entry must not sink
+    // discovery for every other, valid number sent in the same request.
+    mockPhoneRepo.find.mockResolvedValue([]);
+    const result = await service.discover('user-1', ['not-a-phone', '*114#']);
+    expect(result.matches).toHaveLength(0);
   });
 
   it('rejects oversized batches', async () => {
