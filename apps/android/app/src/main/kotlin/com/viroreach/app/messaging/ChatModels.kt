@@ -1,0 +1,213 @@
+package com.viroreach.app.messaging
+
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import com.viroreach.core.database.ConversationEntity
+import com.viroreach.core.database.ConversationRow
+import com.viroreach.core.database.MessageEntity
+import com.viroreach.core.network.ConvDto
+import com.viroreach.core.network.MediaDto
+import com.viroreach.core.network.MsgDto
+import com.viroreach.core.network.ReactionDto
+import com.viroreach.core.network.ReplyDto
+import java.time.Instant
+
+/** What a single tick row says about my own message. */
+enum class Delivery { SCHEDULED, SENDING, FAILED, SENT, DELIVERED, READ, INCOMING }
+
+data class ChatMessage(
+    val id: String,
+    val clientMsgId: String?,
+    val conversationId: String,
+    val senderUserId: String,
+    val mine: Boolean,
+    /** TEXT | VOICE | IMAGE | SYSTEM | LOOP */
+    val type: String,
+    val body: String?,
+    val createdAt: Long,
+    val editedAt: Long?,
+    val deleted: Boolean,
+    val expiresAt: Long?,
+    val deliverAt: Long?,
+    val replyTo: ReplyDto?,
+    val reactions: List<ReactionDto>,
+    val media: MediaDto?,
+    val viewOnce: Boolean,
+    val viewed: Boolean,
+    val forwarded: Boolean,
+    val starred: Boolean,
+    val metadata: Map<String, Any?>,
+    val outboxStatus: String?,
+    val localMediaPath: String?,
+) {
+    val isPending: Boolean get() = outboxStatus != null
+    val effect: String? get() = metadata["effect"] as? String
+    val event: String? get() = metadata["event"] as? String
+    val loopId: String? get() = metadata["loopId"] as? String
+
+    fun delivery(peerLastDeliveredAt: Long?, peerLastReadAt: Long?): Delivery = when {
+        !mine -> Delivery.INCOMING
+        outboxStatus == "FAILED" -> Delivery.FAILED
+        outboxStatus != null -> Delivery.SENDING
+        deliverAt != null -> Delivery.SCHEDULED
+        peerLastReadAt != null && peerLastReadAt >= createdAt -> Delivery.READ
+        peerLastDeliveredAt != null && peerLastDeliveredAt >= createdAt -> Delivery.DELIVERED
+        else -> Delivery.SENT
+    }
+}
+
+data class ConversationItem(
+    val id: String,
+    val kind: String,
+    val peerUserId: String?,
+    val participants: List<String>,
+    val unread: Int,
+    val hidden: Boolean,
+    val muted: Boolean,
+    val locked: Boolean,
+    val expiresAt: Long?,
+    val disappearingSeconds: Int?,
+    val peerLastReadAt: Long?,
+    val peerLastDeliveredAt: Long?,
+    val pinnedIds: List<String>,
+    val lastMessageId: String?,
+    val lastBody: String?,
+    val lastType: String?,
+    val lastMine: Boolean,
+    val lastAt: Long?,
+    val lastDeleted: Boolean,
+    val lastPending: String?,
+    val updatedAt: Long,
+) {
+    val isPrivate: Boolean get() = kind == "PRIVATE"
+}
+
+data class TypingState(val userId: String, val state: String, val at: Long)
+
+internal object ChatJson {
+    val gson = Gson()
+    private val reactionsType = object : TypeToken<List<ReactionDto>>() {}.type
+    private val mapType = object : TypeToken<Map<String, Any?>>() {}.type
+
+    fun reactions(json: String?): List<ReactionDto> =
+        json?.let { runCatching { gson.fromJson<List<ReactionDto>>(it, reactionsType) }.getOrNull() } ?: emptyList()
+
+    fun map(json: String?): Map<String, Any?> =
+        json?.let { runCatching { gson.fromJson<Map<String, Any?>>(it, mapType) }.getOrNull() } ?: emptyMap()
+
+    fun media(json: String?): MediaDto? = json?.let { runCatching { gson.fromJson(it, MediaDto::class.java) }.getOrNull() }
+    fun reply(json: String?): ReplyDto? = json?.let { runCatching { gson.fromJson(it, ReplyDto::class.java) }.getOrNull() }
+    fun <T> toJson(value: T?): String? = value?.let { gson.toJson(it) }
+}
+
+fun parseIso(value: String?): Long? =
+    value?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
+
+internal fun MsgDto.toEntity(existing: MessageEntity?): MessageEntity = MessageEntity(
+    id = id,
+    clientMsgId = clientMsgId,
+    conversationId = conversationId,
+    senderUserId = senderUserId,
+    type = type ?: "TEXT",
+    body = body,
+    createdAt = parseIso(createdAt) ?: System.currentTimeMillis(),
+    updatedAt = parseIso(updatedAt) ?: System.currentTimeMillis(),
+    editedAt = parseIso(editedAt),
+    deletedAt = parseIso(deletedAt),
+    expiresAt = parseIso(expiresAt),
+    deliverAt = parseIso(deliverAt),
+    replyJson = ChatJson.toJson(replyTo),
+    reactionsJson = ChatJson.toJson(reactions ?: emptyList<ReactionDto>()),
+    mediaJson = ChatJson.toJson(media),
+    viewOnce = viewOnce == true,
+    viewed = viewed == true,
+    forwarded = forwarded == true,
+    starred = starred == true,
+    metadataJson = ChatJson.toJson(metadata),
+    status = null,
+    // A recording I sent, or a file already downloaded, stays usable offline.
+    localMediaPath = if (media != null && deletedAt == null) existing?.localMediaPath else null,
+)
+
+internal fun ConvDto.toEntity(myUserId: String?, existing: ConversationEntity?): ConversationEntity {
+    val people = participants ?: emptyList()
+    return ConversationEntity(
+        id = id,
+        kind = kind ?: "DM",
+        peerUserId = people.firstOrNull { it != myUserId },
+        title = title,
+        participantsCsv = people.joinToString(","),
+        unread = unread ?: 0,
+        updatedAt = parseIso(updatedAt) ?: System.currentTimeMillis(),
+        hidden = hidden == true,
+        mutedUntil = parseIso(mutedUntil),
+        clearedAt = parseIso(clearedAt),
+        resetAt = parseIso(resetAt),
+        disappearingSeconds = disappearingSeconds,
+        expiresAt = parseIso(expiresAt),
+        peerLastReadAt = parseIso(peerLastReadAt),
+        peerLastDeliveredAt = parseIso(peerLastDeliveredAt),
+        pinnedCsv = (pinnedMessageIds ?: emptyList()).joinToString(","),
+        locked = existing?.locked ?: false,
+    )
+}
+
+internal fun MessageEntity.toChat(myUserId: String?): ChatMessage = ChatMessage(
+    id = id,
+    clientMsgId = clientMsgId,
+    conversationId = conversationId,
+    senderUserId = senderUserId,
+    mine = senderUserId == myUserId,
+    type = type,
+    body = body,
+    createdAt = createdAt,
+    editedAt = editedAt,
+    deleted = deletedAt != null,
+    expiresAt = expiresAt,
+    deliverAt = deliverAt,
+    replyTo = ChatJson.reply(replyJson),
+    reactions = ChatJson.reactions(reactionsJson),
+    media = ChatJson.media(mediaJson),
+    viewOnce = viewOnce,
+    viewed = viewed,
+    forwarded = forwarded,
+    starred = starred,
+    metadata = ChatJson.map(metadataJson),
+    outboxStatus = status,
+    localMediaPath = localMediaPath,
+)
+
+internal fun ConversationRow.toItem(myUserId: String?): ConversationItem = ConversationItem(
+    id = id,
+    kind = kind,
+    peerUserId = peerUserId,
+    participants = participantsCsv.split(',').filter { it.isNotBlank() },
+    unread = unread,
+    hidden = hidden,
+    muted = (mutedUntil ?: 0L) > System.currentTimeMillis(),
+    locked = locked,
+    expiresAt = expiresAt,
+    disappearingSeconds = disappearingSeconds,
+    peerLastReadAt = peerLastReadAt,
+    peerLastDeliveredAt = peerLastDeliveredAt,
+    pinnedIds = pinnedCsv.split(',').filter { it.isNotBlank() },
+    lastMessageId = lastId,
+    lastBody = lastBody,
+    lastType = lastType,
+    lastMine = lastSender != null && lastSender == myUserId,
+    lastAt = lastAt,
+    lastDeleted = lastDeleted != null,
+    lastPending = lastStatus,
+    updatedAt = updatedAt,
+)
+
+/** One line for the inbox: what the last message was, in words. */
+fun ConversationItem.preview(): String = when {
+    lastMessageId == null -> if (isPrivate) "Private session started" else ""
+    lastDeleted -> "This message was deleted"
+    lastType == "VOICE" -> "🎤 Voice message"
+    lastType == "IMAGE" -> if (lastBody.isNullOrBlank()) "📷 Photo" else "📷 $lastBody"
+    lastType == "LOOP" -> "🔁 ${lastBody ?: "Loop"}"
+    lastType == "SYSTEM" -> lastBody?.replaceFirstChar { it.uppercase() } ?: ""
+    else -> lastBody.orEmpty()
+}

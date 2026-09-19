@@ -17,6 +17,7 @@ import {
   MessageView,
 } from '../database/entities/messaging-extras.entity';
 import { ViroConnection } from '../database/entities/viro-connection.entity';
+import { Profile } from '../database/entities/profile.entity';
 import { BlocksModule } from '../blocks/blocks.module';
 import { PushModule } from '../push/push.module';
 
@@ -34,6 +35,7 @@ import { PushModule } from '../push/push.module';
       ConversationPin,
       MediaObject,
       ViroConnection,
+      Profile,
     ]),
     BlocksModule,
     PushModule,

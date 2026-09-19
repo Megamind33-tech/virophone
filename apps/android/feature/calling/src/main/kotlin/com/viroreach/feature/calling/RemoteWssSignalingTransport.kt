@@ -80,5 +80,7 @@ class RemoteWssSignalingTransport(
         client.sendConference(type, roomId, targetDeviceId, payload)
     }
 
+    fun sendChat(data: JSONObject) = client.sendChat(data)
+
     override fun disconnect() = client.disconnect()
 }

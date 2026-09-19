@@ -121,6 +121,17 @@ dependencies {
     implementation(libs.androidx.datastore)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    // Messaging: media upload/download on the authenticated client, and the
+    // JSON columns of the local message store.
+    implementation(libs.okhttp)
+    implementation("com.google.code.gson:gson:2.10.1")
+    // Photos in chat, fetched with the auth header.
+    implementation("io.coil-kt:coil-compose:2.5.0")
+    // Relationship reminders and the morning brief run on schedules that
+    // must survive the app being closed.
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
+    // Chat lock and hidden chats.
+    implementation("androidx.biometric:biometric:1.1.0")
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

@@ -27,12 +27,14 @@ import com.viroreach.core.designsystem.ViroSpacing
 import com.viroreach.core.designsystem.components.*
 import com.viroreach.feature.contacts.PhoneNumberFormatter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @Composable
 fun ContactDetailScreen(
     contact: ContactListItem,
@@ -42,6 +44,7 @@ fun ContactDetailScreen(
     onMessage: () -> Unit,
     onOpenRelated: (ContactListItem) -> Unit,
     onDelete: () -> Unit,
+    onOpenRelationship: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -55,11 +58,15 @@ fun ContactDetailScreen(
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
 
     val callHistory by session.callHistoryStore.entries.collectAsState()
-    val conversations by session.messagesStore.conversations.collectAsState()
     var relatedContacts by remember { mutableStateOf<List<ContactListItem>>(emptyList()) }
-    val messageTick = conversations.find { it.phoneE164 == profile.phoneE164 }?.lastTimestampMs ?: 0L
-    val history = remember(profile.phoneE164, callHistory, messageTick) {
-        ContactCommunicationHistory.build(profile.phoneE164, session.callHistoryStore, session.messagesStore)
+    val messages by remember(profile.userId) {
+        profile.userId?.let { peer ->
+            kotlinx.coroutines.flow.flow { emit(session.messaging.conversationIdFor(peer)) }
+                .flatMapLatest { id -> session.messaging.messages(id) }
+        } ?: kotlinx.coroutines.flow.flowOf(emptyList())
+    }.collectAsState(initial = emptyList())
+    val history = remember(profile.phoneE164, callHistory, messages) {
+        ContactCommunicationHistory.build(profile.phoneE164, session.callHistoryStore, messages)
     }
 
     LaunchedEffect(contact.id) {
@@ -276,6 +283,11 @@ fun ContactDetailScreen(
                     ProfileActionChip("Call", Icons.Default.Call, onCall)
                     ProfileActionChip("Message", Icons.Default.Email, onMessage)
                     ProfileActionChip("Share", Icons.Default.Share) { shareContact() }
+                }
+                Spacer(Modifier.height(ViroSpacing.md))
+                // Targets, dates, Loops and Moments for this person — private to you.
+                TextButton(onClick = onOpenRelationship, modifier = Modifier.fillMaxWidth()) {
+                    Text("❤️  Relationship, targets & Moments", color = ViroColors.accent)
                 }
                 Spacer(Modifier.height(ViroSpacing.lg))
                 SectionTitle("Communication history")

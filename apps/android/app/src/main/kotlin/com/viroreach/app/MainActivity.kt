@@ -3,7 +3,7 @@ package com.viroreach.app
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.viroreach.app.root.ViroReachRoot
@@ -22,11 +22,14 @@ import androidx.compose.runtime.getValue
 import com.viroreach.core.designsystem.components.LocalViroWallpaper
 import com.viroreach.core.designsystem.components.ViroWallpaperConfig
 
-class MainActivity : ComponentActivity() {
+// A FragmentActivity (still a ComponentActivity) because the biometric prompt
+// behind chat lock needs one.
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         handleIncomingCallIntent(intent)
+        handleOpenIntent(intent)
         val session = SessionManager.get(this)
         setContent {
             val prefs by session.appearanceManager.preferences.collectAsState(
@@ -68,6 +71,19 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIncomingCallIntent(intent)
+        handleOpenIntent(intent)
+    }
+
+    /** A notification tap: open a chat or the Connections dashboard. */
+    private fun handleOpenIntent(intent: Intent?) {
+        val target = intent?.getStringExtra(EXTRA_OPEN) ?: return
+        AppNavigation.request(
+            AppNavigation.Target(
+                screen = target,
+                peerUserId = intent.getStringExtra(EXTRA_PEER_USER_ID),
+            ),
+        )
+        intent.removeExtra(EXTRA_OPEN)
     }
 
     private fun handleIncomingCallIntent(intent: Intent?) {
@@ -79,6 +95,10 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_INCOMING_CALL = "extra_incoming_call"
         const val EXTRA_CALL_ID = "extra_call_id"
         const val EXTRA_CALLER_NAME = "extra_caller_name"
+        const val EXTRA_OPEN = "extra_open"
+        const val EXTRA_PEER_USER_ID = "extra_peer_user_id"
+        const val OPEN_CHAT = "chat"
+        const val OPEN_CONNECTIONS = "connections"
 
         fun incomingCallIntent(context: Context, callId: String, callerName: String): Intent =
             Intent(context, MainActivity::class.java).apply {

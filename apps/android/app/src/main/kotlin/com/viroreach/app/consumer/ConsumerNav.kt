@@ -116,13 +116,20 @@ enum class ConsumerOverlay {
 
     Subscription,
 
+    Relationship,
+
 }
 
 
 
+/**
+ * A chat to open. [conversationId] is the server's id when known; null opens
+ * the chat with [peerUserId] (the real conversation is found or created on the
+ * first message) — never a locally invented id.
+ */
 data class ChatRoute(
 
-    val conversationId: String,
+    val conversationId: String? = null,
 
     val peerName: String,
 
@@ -161,6 +168,18 @@ fun ConsumerNav(
     var callPresentation by remember { mutableStateOf<CallPresentation?>(null) }
 
     var selectedContact by remember { mutableStateOf<ContactListItem?>(null) }
+
+    var relationshipTarget by remember { mutableStateOf<Triple<String?, String?, String>?>(null) }
+
+    var connectionsRequested by remember { mutableStateOf(false) }
+
+    LaunchedEffect(connectionsRequested) {
+        // One-shot: the Messages tab has switched to Connections by now.
+        if (connectionsRequested) {
+            kotlinx.coroutines.delay(800)
+            connectionsRequested = false
+        }
+    }
 
     var userInitiatedCall by remember { mutableStateOf(false) }
 
@@ -259,35 +278,29 @@ fun ConsumerNav(
 
 
 
-    LaunchedEffect(Unit) {
-
-        session.callManager.chatEvents.collect { event ->
-
-            // Land inbound messages in the sender's conversation (keyed by peer
-            // userId) so they appear regardless of the server-side conversation id.
-            val peerUserId = event.fromUserId
-            val convId = if (peerUserId != null) {
-                // A raw id fragment as the name (as this used to do) is exactly
-                // what showed up in place of a saved contact's name whenever
-                // this fired before the inbox had a chance to sync — look the
-                // sender up locally first, same as every other screen does.
-                val contact = session.contactsRepository.findByUserId(peerUserId)
-                session.messagesStore.openOrCreateConversation(
-                    peerName = PeerNameResolver.resolve(
-                        session = session,
-                        userId = peerUserId,
-                        phoneE164 = contact?.phoneE164,
-                    ),
-                    peerUserId = peerUserId,
-                    phoneE164 = contact?.phoneE164,
-                )
-            } else {
-                event.conversationId
+    // A notification tap: open the chat, or Connections.
+    val pendingNav by com.viroreach.app.AppNavigation.pending.collectAsState()
+    LaunchedEffect(pendingNav) {
+        val target = com.viroreach.app.AppNavigation.consume() ?: return@LaunchedEffect
+        when (target.screen) {
+            com.viroreach.app.MainActivity.OPEN_CONNECTIONS -> {
+                overlay = ConsumerOverlay.None
+                tab = ViroConsumerTab.Messages
+                connectionsRequested = true
             }
-            session.messagesStore.receiveMessage(convId, event.body)
-
+            com.viroreach.app.MainActivity.OPEN_CHAT -> {
+                val peer = target.peerUserId ?: return@LaunchedEffect
+                val contact = runCatching { session.contactsRepository.findByUserId(peer) }.getOrNull()
+                chatRoute = ChatRoute(
+                    conversationId = null,
+                    peerName = contact?.effectiveDisplayName ?: PeerNameResolver.resolve(session = session, userId = peer, phoneE164 = null),
+                    peerUserId = peer,
+                    peerPhoneE164 = contact?.phoneE164,
+                    peerAvatarUrl = contact?.resolveAvatarUrl(),
+                )
+                overlay = ConsumerOverlay.Chat
+            }
         }
-
     }
 
 
@@ -379,6 +392,7 @@ fun ConsumerNav(
         when (overlay) {
             ConsumerOverlay.ContactDetail -> selectedContact = null
             ConsumerOverlay.Chat -> chatRoute = null
+            ConsumerOverlay.Relationship -> relationshipTarget = null
             else -> Unit
         }
         overlay = ConsumerOverlay.None
@@ -408,19 +422,9 @@ fun ConsumerNav(
 
     fun openChat(contact: ContactListItem) {
 
-        val id = session.messagesStore.openOrCreateConversation(
-
-            contact.displayName,
-
-            contact.userId,
-
-            contact.phoneE164,
-
-        )
-
         chatRoute = ChatRoute(
 
-            conversationId = id,
+            conversationId = null,
 
             peerName = contact.effectiveDisplayName,
 
@@ -589,6 +593,14 @@ fun ConsumerNav(
 
                 onOpenRelated = { related -> selectedContact = related },
 
+                onOpenRelationship = {
+
+                    relationshipTarget = Triple(contact.userId, contact.phoneE164, contact.effectiveDisplayName)
+
+                    overlay = ConsumerOverlay.Relationship
+
+                },
+
                 onDelete = {
 
                     overlay = ConsumerOverlay.None
@@ -625,23 +637,13 @@ fun ConsumerNav(
 
                 onOpenChat = {
 
-                    val id = session.messagesStore.openOrCreateConversation(
-
-                        presentation.displayName,
-
-                        null,
-
-                        presentation.phoneE164,
-
-                    )
-
                     chatRoute = ChatRoute(
 
-                        conversationId = id,
+                        conversationId = null,
 
                         peerName = presentation.displayName,
 
-                        peerUserId = null,
+                        peerUserId = session.callManager.incomingCall.value?.callerUserId,
 
                         peerPhoneE164 = presentation.phoneE164,
 
@@ -681,11 +683,11 @@ fun ConsumerNav(
 
                 onOpenChat = {
 
-                    val id = session.messagesStore.openOrCreateConversation("Group", null, null)
+                    // Group chats are not part of messaging yet; go to Messages.
 
-                    chatRoute = ChatRoute(id, "Group", null)
+                    overlay = ConsumerOverlay.None
 
-                    overlay = ConsumerOverlay.Chat
+                    tab = ViroConsumerTab.Messages
 
                 },
 
@@ -707,17 +709,69 @@ fun ConsumerNav(
 
                 session = session,
 
-                conversationId = route.conversationId,
-
-                peerName = route.peerName,
-
-                peerUserId = route.peerUserId,
-
-                peerPhoneE164 = route.peerPhoneE164,
-
-                peerAvatarUrl = route.peerAvatarUrl,
+                route = route,
 
                 onBack = { overlay = ConsumerOverlay.None },
+
+                onCall = { peer, phone, name ->
+
+                    beginCall(CallPresentation(displayName = name, phoneE164 = phone, avatarUrl = route.peerAvatarUrl))
+
+                    withMic { scope.launch { runCatching { session.placeOutgoingCall(phone, name, peer) } } }
+
+                },
+
+                onOpenRelationship = { peer, phone, name ->
+
+                    relationshipTarget = Triple(peer, phone, name)
+
+                    overlay = ConsumerOverlay.Relationship
+
+                },
+
+                onOpenConversation = { next -> chatRoute = next },
+
+            )
+
+            return
+
+        }
+
+        ConsumerOverlay.Relationship -> {
+
+            val target = relationshipTarget
+            if (target == null) {
+                LaunchedEffect(Unit) { overlay = ConsumerOverlay.None }
+                return
+            }
+
+            com.viroreach.app.relationships.ui.RelationshipScreen(
+
+                session = session,
+
+                peerUserId = target.first,
+
+                phone = target.second,
+
+                name = target.third,
+
+                onBack = {
+
+                    relationshipTarget = null
+
+                    overlay = if (chatRoute != null) ConsumerOverlay.Chat else ConsumerOverlay.None
+
+                },
+
+                onOpenChat = {
+
+                    chatRoute = ChatRoute(conversationId = null, peerName = target.third, peerUserId = target.first, peerPhoneE164 = target.second)
+
+                    relationshipTarget = null
+
+                    overlay = ConsumerOverlay.Chat
+
+                },
 
             )
 
@@ -837,11 +891,9 @@ fun ConsumerNav(
                                 }.getOrNull()?.userId
                             }
 
-                            val id = session.messagesStore.openOrCreateConversation(log.name, resolvedUserId, phone)
-
                             chatRoute = ChatRoute(
 
-                                conversationId = id,
+                                conversationId = null,
 
                                 peerName = log.name,
 
@@ -916,6 +968,24 @@ fun ConsumerNav(
                         overlay = ConsumerOverlay.Chat
 
                     },
+
+                    onCall = { peer, phone, name ->
+
+                        beginCall(CallPresentation(displayName = name, phoneE164 = phone))
+
+                        withMic { scope.launch { runCatching { session.placeOutgoingCall(phone, name, peer) } } }
+
+                    },
+
+                    onOpenRelationship = { peer, phone, name ->
+
+                        relationshipTarget = Triple(peer, phone, name)
+
+                        overlay = ConsumerOverlay.Relationship
+
+                    },
+
+                    startOnConnections = connectionsRequested,
 
                 )
 
@@ -994,15 +1064,9 @@ fun ConsumerNav(
                                 ?: phone?.let { PhoneNumberFormatter.formatE164International(it) }
                                 ?: "Viro user"
 
-                            val id = session.messagesStore.openOrCreateConversation(
-                                label,
-                                resolvedUserId,
-                                phone,
-                            )
-
                             chatRoute = ChatRoute(
 
-                                conversationId = id,
+                                conversationId = null,
 
                                 peerName = label,
 

@@ -98,6 +98,11 @@
 
 
 
+        <!-- "Done" / "In an hour" on a commitment reminder. -->
+        <receiver
+            android:name=".relationships.CommitmentActionReceiver"
+            android:exported="false" />
+
         <receiver
 
             android:name=".call.IncomingCallActionReceiver"

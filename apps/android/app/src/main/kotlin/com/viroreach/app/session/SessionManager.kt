@@ -7,8 +7,12 @@ import com.viroreach.app.consumer.data.PreferenceSync
 import com.viroreach.app.consumer.data.CallHistoryStore
 import com.viroreach.app.consumer.data.syncFromServer
 import com.viroreach.app.consumer.data.ConferenceManager
-import com.viroreach.app.consumer.data.MessagesStore
-import com.viroreach.app.consumer.data.ServerMessagesRepository
+import com.viroreach.app.messaging.MessageNotifier
+import com.viroreach.app.messaging.MessagingRepository
+import com.viroreach.app.messaging.VoicePlayer
+import com.viroreach.app.relationships.RelationshipRepository
+import com.viroreach.app.relationships.ReminderScheduler
+import com.viroreach.core.network.ViroMessagingApi
 import com.viroreach.app.personalization.ProfileRepository
 import com.viroreach.app.personalization.ViroAppearanceManager
 import com.viroreach.core.model.CallStateMachineState
@@ -27,6 +31,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import com.viroreach.core.network.UpdatePresenceBody
@@ -47,8 +52,20 @@ class SessionManager private constructor(context: Context) {
     )
     val networkMonitor: NetworkMonitor = NetworkMonitor(appContext)
     val callHistoryStore: CallHistoryStore = CallHistoryStore(appContext)
-    val messagesStore: MessagesStore = MessagesStore()
-    val serverMessagesRepository: ServerMessagesRepository = ServerMessagesRepository(api)
+    val messagingApi: ViroMessagingApi = viroApiClient.messaging
+    /** Messages, kept in Room and synced — see MessagingRepository. */
+    val messaging: MessagingRepository = MessagingRepository(
+        appContext,
+        messagingApi,
+        viroApiClient.httpClient,
+        viroApiClient.baseUrl,
+        tokenStore,
+        callManager,
+    )
+    val relationships: RelationshipRepository = RelationshipRepository(appContext, messagingApi)
+    val messageNotifier: MessageNotifier = MessageNotifier(appContext)
+    /** One voice note plays at a time, across every chat. */
+    val voicePlayer: VoicePlayer = VoicePlayer()
     val conferenceManager: ConferenceManager = ConferenceManager(this, appContext)
     val appearanceManager: ViroAppearanceManager = ViroAppearanceManager(appContext)
     val profileRepository: ProfileRepository = ProfileRepository(
@@ -118,6 +135,24 @@ class SessionManager private constructor(context: Context) {
         observeCallLifecycle()
         startPresenceHeartbeat()
         startWssWatchdog()
+        startMessaging()
+    }
+
+    /**
+     * Messaging runs for the life of the process, not of a screen: frames are
+     * applied and notifications raised whether or not a chat is open.
+     */
+    private fun startMessaging() {
+        messaging.start()
+        runCatching { ReminderScheduler.start(appContext) }
+        scope.launch {
+            messaging.incoming.collect { (conversationId, message) ->
+                val conv = runCatching { messaging.conversation(conversationId).first() }.getOrNull()
+                val name = runCatching { contactsRepository.displayNameForUserId(message.senderUserId) }.getOrNull()
+                    ?: "Viro"
+                messageNotifier.show(conv, name, message)
+            }
+        }
     }
 
     /**
@@ -310,7 +345,7 @@ class SessionManager private constructor(context: Context) {
      */
     private suspend fun clearLocalUserData(reason: String) {
         android.util.Log.i("ViroSession", "CLEARING_LOCAL_USER_DATA reason=$reason")
-        messagesStore.clearAll()
+        runCatching { messaging.clearLocal() }
         runCatching { contactsRepository.clearCache() }
         runCatching { callHistoryStore.clearAll() }
         runCatching { profileRepository.clearCachedProfile() }
@@ -354,6 +389,8 @@ class SessionManager private constructor(context: Context) {
                 }
             }
             runCatching { registerPushToken() }
+            runCatching { messaging.syncNow() }
+            runCatching { relationships.refresh(force = true) }
         }
         // A cold first sync on a phone with hundreds of contacts genuinely takes
         // longer than this. When that happens the app opens on whatever is
@@ -416,7 +453,7 @@ class SessionManager private constructor(context: Context) {
         // The wipe belongs at sign-in instead (see enforceAccountBoundary): the
         // data is only unsafe once a DIFFERENT account is about to read it, and
         // nothing is readable between logout and the next sign-in anyway.
-        messagesStore.clearAll()
+        voicePlayer.stop()
     }
 
     fun resetTestSession() {

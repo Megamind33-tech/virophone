@@ -62,6 +62,9 @@ class SettingsDto {
   @IsBoolean() @IsOptional() hidden?: boolean;
   @ValidateIf((_, v) => v !== null) @IsISO8601() @IsOptional() mutedUntil?: string | null;
   @ValidateIf((_, v) => v !== null) @IsInt() @IsOptional() disappearingSeconds?: number | null;
+  // Clients whose JSON encoders drop nulls say "off" explicitly.
+  @IsBoolean() @IsOptional() clearDisappearing?: boolean;
+  @IsBoolean() @IsOptional() clearMute?: boolean;
 }
 
 class PrivateSessionDto {
@@ -114,7 +117,10 @@ export class MessagesController {
 
   @Patch('conversations/:id/settings')
   async settings(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: SettingsDto) {
-    return this.messagesService.updateSettings(req.user.sub, id, body);
+    const { clearDisappearing, clearMute, ...rest } = body;
+    if (clearDisappearing) rest.disappearingSeconds = null;
+    if (clearMute) rest.mutedUntil = null;
+    return this.messagesService.updateSettings(req.user.sub, id, rest);
   }
 
   /** Delete chat — for me only. */

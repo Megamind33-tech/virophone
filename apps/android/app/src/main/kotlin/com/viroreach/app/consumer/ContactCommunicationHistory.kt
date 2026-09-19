@@ -2,8 +2,7 @@ package com.viroreach.app.consumer
 
 import com.viroreach.app.consumer.data.CallHistoryStore
 import com.viroreach.app.consumer.data.CallLogEntry
-import com.viroreach.app.consumer.data.MessagesStore
-import com.viroreach.app.consumer.callLogStatusLabel
+import com.viroreach.app.messaging.ChatMessage
 
 enum class ContactHistoryKind { CALL, MESSAGE }
 
@@ -19,26 +18,25 @@ object ContactCommunicationHistory {
     fun build(
         phoneE164: String?,
         callHistoryStore: CallHistoryStore,
-        messagesStore: MessagesStore,
+        messages: List<ChatMessage>,
     ): List<ContactHistoryItem> {
-        if (phoneE164.isNullOrBlank()) return emptyList()
-        val calls = callHistoryStore.historyForPhone(phoneE164).map { entry ->
-            entry.toHistoryItem()
+        val calls = if (phoneE164.isNullOrBlank()) emptyList() else callHistoryStore.historyForPhone(phoneE164).map { it.toHistoryItem() }
+        val msgs = messages.filter { it.type != "SYSTEM" }.map { m ->
+            ContactHistoryItem(
+                id = m.id,
+                kind = ContactHistoryKind.MESSAGE,
+                label = if (m.mine) "Message sent" else "Message received",
+                detail = when {
+                    m.deleted -> "Deleted message"
+                    m.type == "VOICE" -> "🎤 Voice message"
+                    m.type == "IMAGE" -> "📷 Photo"
+                    m.type == "LOOP" -> "🔁 ${m.body ?: "Loop"}"
+                    else -> m.body.orEmpty()
+                },
+                timestampMs = m.createdAt,
+            )
         }
-        val messages = messagesStore.conversations.value
-            .filter { it.phoneE164 == phoneE164 }
-            .flatMap { conversation ->
-                messagesStore.conversationMessages(conversation.id).value.map { message ->
-                    ContactHistoryItem(
-                        id = message.id,
-                        kind = ContactHistoryKind.MESSAGE,
-                        label = if (message.isOutgoing) "Message sent" else "Message received",
-                        detail = message.body,
-                        timestampMs = message.timestampMs,
-                    )
-                }
-            }
-        return (calls + messages).sortedByDescending { it.timestampMs }
+        return (calls + msgs).sortedByDescending { it.timestampMs }
     }
 
     private fun CallLogEntry.toHistoryItem() = ContactHistoryItem(

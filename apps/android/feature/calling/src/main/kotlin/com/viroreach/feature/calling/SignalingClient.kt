@@ -189,6 +189,16 @@ class SignalingClient {
         )
     }
 
+    /** Chat presence ("typing…", "recording voice…"); fire-and-forget. */
+    fun sendChat(data: JSONObject) {
+        webSocket?.send(
+            JSONObject()
+                .put("event", "chat")
+                .put("data", data)
+                .toString(),
+        )
+    }
+
     fun disconnect() = disconnectInternal(userInitiated = true)
 
     private fun disconnectInternal(userInitiated: Boolean) {

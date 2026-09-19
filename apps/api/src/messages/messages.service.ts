@@ -14,6 +14,7 @@ import {
   MessageView,
 } from '../database/entities/messaging-extras.entity';
 import { ViroConnection } from '../database/entities/viro-connection.entity';
+import { Profile } from '../database/entities/profile.entity';
 import { BlocksService } from '../blocks/blocks.service';
 import { PushService } from '../push/push.service';
 import { RealtimeRegistry } from '../realtime/realtime.registry';
@@ -152,6 +153,8 @@ export class MessagesService {
     private readonly mediaRepo: Repository<MediaObject>,
     @InjectRepository(ViroConnection)
     private readonly connectionRepo: Repository<ViroConnection>,
+    @InjectRepository(Profile)
+    private readonly profileRepo: Repository<Profile>,
     private readonly blocksService: BlocksService,
     private readonly pushService: PushService,
     private readonly realtime: RealtimeRegistry,
@@ -316,8 +319,11 @@ export class MessagesService {
       if (delivered && type === 'message.new') {
         await this.markDelivered(uid, message.conversationId);
       } else if (!delivered && opts.pushIfOffline) {
+        // The sender's own name as they set it; the phone shows its saved
+        // contact name instead once the app is open.
+        const sender = await this.profileRepo.findOne({ where: { userId: message.senderUserId } });
         await this.pushService.sendToUser(uid, {
-          title: 'New message',
+          title: sender?.displayName?.trim() || 'New message',
           body: this.pushPreview(message),
           data: {
             type: 'message',
@@ -1080,7 +1086,8 @@ export class MessagesService {
 
   /** Chat "typing…" / "recording voice…" relay, validated against membership. */
   async relayTyping(userId: string, conversationId: string, state: string) {
-    if (!['typing', 'recording', 'idle'].includes(state)) return { error: 'invalid_state' };
+    // 'present' = has the chat open right now ("together now"); never stored.
+    if (!['typing', 'recording', 'idle', 'present', 'left'].includes(state)) return { error: 'invalid_state' };
     if (!(await this.isMember(conversationId, userId))) return { error: 'not_participant' };
     const others = (await this.participantIds(conversationId)).filter((id) => id !== userId);
     for (const uid of others) {

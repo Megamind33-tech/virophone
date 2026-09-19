@@ -124,6 +124,26 @@ class CallManager(
     private val _chatEvents = MutableSharedFlow<ChatSignalingEvent>(extraBufferCapacity = 32)
     val chatEvents: SharedFlow<ChatSignalingEvent> = _chatEvents.asSharedFlow()
 
+    /**
+     * Every messaging frame — message.*, conversation.*, chat.typing, loop.* —
+     * as (type, payload). The messaging layer owns their meaning; this class
+     * only carries them, the same way it carries conference frames.
+     */
+    private val _messagingFrames = MutableSharedFlow<Pair<String, JSONObject>>(extraBufferCapacity = 256)
+    val messagingFrames: SharedFlow<Pair<String, JSONObject>> = _messagingFrames.asSharedFlow()
+
+    /** "typing" | "recording" | "idle" in a conversation, relayed to the other people in it. */
+    fun sendChatTyping(conversationId: String, state: String) {
+        runCatching {
+            wssTransport.sendChat(
+                JSONObject()
+                    .put("type", "chat.typing")
+                    .put("conversationId", conversationId)
+                    .put("state", state),
+            )
+        }
+    }
+
     private val _conferenceEvents = MutableSharedFlow<SignalingMessage>(extraBufferCapacity = 32)
     val conferenceEvents: SharedFlow<SignalingMessage> = _conferenceEvents.asSharedFlow()
 
@@ -815,6 +835,13 @@ class CallManager(
             scope.launch { _conferenceEvents.emit(msg) }
             return
         }
+        if (msg.type.startsWith("message.") || msg.type.startsWith("conversation.") ||
+            msg.type.startsWith("loop.") || msg.type == "chat.typing"
+        ) {
+            val payload = msg.payload ?: JSONObject()
+            scope.launch { _messagingFrames.emit(msg.type to payload) }
+            return
+        }
         when (msg.type) {
             "call.incoming", "call.invite" -> onIncomingCall(msg, viaRoute)
             "call.ringing" -> {
@@ -949,24 +976,6 @@ class CallManager(
                         ChatSignalingEvent(
                             conversationId = msg.callId,
                             fromUserId = msg.fromUserId,
-                            body = body,
-                        ),
-                    )
-                }
-            }
-            "message.new" -> {
-                // Server-delivered persisted message (Phase B messaging).
-                val payload = msg.payload ?: return
-                val messageObj = payload.optJSONObject("message") ?: return
-                val body = messageObj.optString("body")
-                if (body.isNullOrBlank()) return
-                val senderUserId = messageObj.optString("senderUserId", msg.fromUserId ?: "")
-                val conversationId = payload.optString("conversationId", msg.callId)
-                scope.launch {
-                    _chatEvents.emit(
-                        ChatSignalingEvent(
-                            conversationId = conversationId,
-                            fromUserId = senderUserId.ifBlank { msg.fromUserId },
                             body = body,
                         ),
                     )
