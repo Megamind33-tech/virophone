@@ -27,6 +27,24 @@ TESTERS="${VIRO_TESTERS:-chansamosty11@gmail.com}"
 
 NOTES="${1:-$(git -C "$ROOT" log -1 --pretty=%s)}"
 
+# The firebase CLI is not on PATH under Git Bash on this machine (npm installs
+# it as a .cmd shim), and Node stalls ~15s on an IPv6 connect here before
+# falling back to IPv4 — longer than the CLI's own 10s timeout, so every call
+# failed with a connect error that looked like an outage. Both are worked around
+# rather than requiring the operator to remember them.
+FIREBASE_BIN="${VIRO_FIREBASE_BIN:-}"
+if [[ -z "$FIREBASE_BIN" ]]; then
+  if command -v firebase >/dev/null 2>&1; then
+    FIREBASE_BIN="firebase"
+  elif [[ -x "$HOME/AppData/Roaming/npm/firebase.cmd" ]]; then
+    FIREBASE_BIN="$HOME/AppData/Roaming/npm/firebase.cmd"
+  else
+    echo "firebase CLI not found. Install it with: npm install -g firebase-tools" >&2
+    exit 1
+  fi
+fi
+export NODE_OPTIONS="${NODE_OPTIONS:---dns-result-order=ipv4first}"
+
 echo "==> Building debug APK"
 (cd "$ANDROID_DIR" && ./gradlew :app:assembleDebug -q)
 
@@ -37,11 +55,11 @@ fi
 
 echo "==> Uploading $(du -h "$APK" | cut -f1) to Firebase App Distribution"
 if [[ -n "$TESTER_GROUP" ]]; then
-  firebase appdistribution:distribute "$APK" \
+  "$FIREBASE_BIN" appdistribution:distribute "$APK" \
     --app "$APP_ID" --project "$PROJECT" \
     --release-notes "$NOTES" --group-aliases "$TESTER_GROUP"
 else
-  firebase appdistribution:distribute "$APK" \
+  "$FIREBASE_BIN" appdistribution:distribute "$APK" \
     --app "$APP_ID" --project "$PROJECT" \
     --release-notes "$NOTES" --testers "$TESTERS"
 fi

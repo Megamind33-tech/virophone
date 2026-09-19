@@ -64,7 +64,11 @@ export class UsersController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
-      limits: { fileSize: 2 * 1024 * 1024 },
+      // The client downscales to ~1024px JPEG, which lands well under 1MB.
+      // This is headroom for an unusually large one rather than a target: at
+      // 2MB every unprocessed camera photo was rejected, which is exactly what
+      // made avatar upload fail for everyone.
+      limits: { fileSize: 8 * 1024 * 1024 },
     }),
   )
   async uploadAvatar(
