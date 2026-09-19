@@ -23,6 +23,7 @@ import { CallSessionService } from '../calls/call-session.service';
 import { CallsService } from '../calls/calls.service';
 import { ConferenceService } from '../conference/conference.service';
 import { MetricsService } from '../metrics/metrics.module';
+import { MessagesService } from '../messages/messages.service';
 
 interface AuthenticatedSocket extends WebSocket {
   userId?: string;
@@ -82,6 +83,7 @@ export class SignalingGateway
     @InjectRepository(Device) private readonly deviceRepo: Repository<Device>,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
     private readonly signalingDelivery: SignalingDeliveryService,
+    private readonly messagesService: MessagesService,
   ) {}
 
   onModuleInit(): void {
@@ -327,6 +329,24 @@ export class SignalingGateway
    * Mesh conference signaling. Members relay offer/answer/ICE peer-to-peer;
    * the server tracks membership and fans join/leave to the room.
    */
+  /**
+   * Chat presence that is not worth persisting: "typing…" and "recording
+   * voice…". Relayed only to the other participants of a conversation the
+   * sender belongs to.
+   */
+  @SubscribeMessage('chat')
+  async handleChat(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() envelope: { type?: string; conversationId?: string; state?: string },
+  ) {
+    if (!client.userId || !client.deviceId) return { error: 'unauthorized' };
+    await this.touchPresence(client.userId, client.deviceId);
+    if (envelope?.type !== 'chat.typing' || !envelope.conversationId || !envelope.state) {
+      return { error: 'invalid_envelope' };
+    }
+    return this.messagesService.relayTyping(client.userId, envelope.conversationId, envelope.state);
+  }
+
   @SubscribeMessage('conference')
   async handleConference(
     @ConnectedSocket() client: AuthenticatedSocket,

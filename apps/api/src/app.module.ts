@@ -31,6 +31,7 @@ import { AdminModule } from './admin/admin.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { PreferencesModule } from './preferences/preferences.module';
 import { MediaModule } from './media/media.module';
+import { RelationshipsModule } from './relationships/relationships.module';
 
 @Module({
   imports: [
@@ -68,6 +69,7 @@ import { MediaModule } from './media/media.module';
     PushModule,
     RealtimeModule,
     MessagesModule,
+    RelationshipsModule,
     ConferenceModule,
     MetricsModule,
     AdminModule,

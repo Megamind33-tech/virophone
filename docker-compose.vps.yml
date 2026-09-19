@@ -97,6 +97,7 @@ services:
       OTP_DELIVERY_EMAIL: ${OTP_DELIVERY_EMAIL:-}
       OTP_EMAIL_MAP: ${OTP_EMAIL_MAP:-}
       AVATAR_UPLOAD_DIR: /app/uploads/avatars
+      MEDIA_UPLOAD_DIR: /app/uploads/media
       # Push. The service-account key is MOUNTED rather than inlined as JSON:
       # a key with embedded newlines in an env file that is both sourced by bash
       # and parsed by compose is a reliable way to ship a subtly corrupt secret.
@@ -106,6 +107,9 @@ services:
       # Without this, every container rebuild/redeploy silently wipes every
       # uploaded profile photo — the container filesystem is ephemeral.
       - viro_reach_avatars:/app/uploads/avatars
+      # Voice notes. Private (served only through an authorised endpoint) and,
+      # like avatars, must survive redeploys.
+      - viro_reach_media:/app/uploads/media
       # Read-only, and never part of the image or the synced tree.
       - ./secrets/firebase-admin.json:/app/secrets/firebase-admin.json:ro
     ports:
@@ -193,3 +197,4 @@ volumes:
   viro_reach_caddy_data:
   viro_reach_caddy_config:
   viro_reach_avatars:
+  viro_reach_media:

@@ -23,6 +23,19 @@ export class Conversation {
   @Column({ name: 'created_by', type: 'uuid', nullable: true })
   createdBy!: string | null;
 
+  /** DM (the permanent 1:1 thread) or PRIVATE (deleted outright at expiresAt). */
+  @Column({ type: 'varchar', length: 16, default: 'DM' })
+  kind!: string;
+
+  @Column({ name: 'expires_at', type: 'timestamptz', nullable: true })
+  expiresAt!: Date | null;
+
+  @Column({ name: 'disappearing_seconds', type: 'integer', nullable: true })
+  disappearingSeconds!: number | null;
+
+  @Column({ name: 'reset_at', type: 'timestamptz', nullable: true })
+  resetAt!: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

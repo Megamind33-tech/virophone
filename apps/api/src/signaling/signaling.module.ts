@@ -8,6 +8,7 @@ import { User } from '../database/entities/user.entity';
 import { PresenceModule } from '../presence/presence.module';
 import { CallsModule } from '../calls/calls.module';
 import { ConferenceModule } from '../conference/conference.module';
+import { MessagesModule } from '../messages/messages.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { ConferenceModule } from '../conference/conference.module';
     PresenceModule,
     CallsModule,
     ConferenceModule,
+    MessagesModule,
   ],
   providers: [SignalingGateway],
 })
