@@ -19,6 +19,7 @@ class TokenStore(context: Context) {
         userId: String,
         deviceId: String,
         phoneE164: String? = null,
+        email: String? = null,
     ) {
         val editor = prefs.edit()
             .putString(KEY_ACCESS, accessToken)
@@ -27,6 +28,9 @@ class TokenStore(context: Context) {
             .putString(KEY_DEVICE_ID, deviceId)
         if (phoneE164 != null) {
             editor.putString(KEY_PHONE, phoneE164)
+        }
+        if (email != null) {
+            editor.putString(KEY_EMAIL, email)
         }
         editor.apply()
     }
@@ -45,6 +49,13 @@ class TokenStore(context: Context) {
     }
 
     fun getAuthenticatedPhoneE164(): String? = prefs.getString(KEY_PHONE, null)
+
+    /**
+     * Kept separate from the phone number rather than sharing that slot: an
+     * email-only account has no phone, and storing the address in its place
+     * put an email everywhere the UI expected a number.
+     */
+    fun getAuthenticatedEmail(): String? = prefs.getString(KEY_EMAIL, null)
 
     fun getAccessToken(): String? = prefs.getString(KEY_ACCESS, null)
     fun getRefreshToken(): String? = prefs.getString(KEY_REFRESH, null)
@@ -83,6 +94,7 @@ class TokenStore(context: Context) {
         private const val KEY_USER_ID = "user_id"
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_PHONE = "authenticated_phone_e164"
+        private const val KEY_EMAIL = "authenticated_email"
         private const val KEY_ACCESS_EXPIRY = "access_token_expiry_ms"
         private const val KEY_LAST_USER_ID = "last_user_id"
     }

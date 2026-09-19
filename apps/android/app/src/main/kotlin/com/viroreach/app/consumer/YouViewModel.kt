@@ -9,6 +9,7 @@ import com.viroreach.app.session.SessionManager
 
 data class YouUiState(
     val phoneE164: String? = null,
+    val email: String? = null,
     val versionName: String = BuildConfig.VERSION_NAME,
     val showDeveloperEntry: Boolean = false,
 )
@@ -20,13 +21,17 @@ class YouViewModel(
     var uiState by mutableStateOf(
         YouUiState(
             phoneE164 = session.authenticatedPhoneE164,
+            email = session.authenticatedEmail,
             showDeveloperEntry = showDeveloperEntry,
         ),
     )
         private set
 
     fun refresh() {
-        uiState = uiState.copy(phoneE164 = session.authenticatedPhoneE164)
+        uiState = uiState.copy(
+            phoneE164 = session.authenticatedPhoneE164,
+            email = session.authenticatedEmail,
+        )
     }
 
     fun logout() {

@@ -36,8 +36,9 @@ class SessionTokenManager(
         deviceId: String,
         phoneE164: String?,
         expiresInSeconds: Int,
+        email: String? = null,
     ) {
-        tokenStore.saveSession(accessToken, refreshToken, userId, deviceId, phoneE164)
+        tokenStore.saveSession(accessToken, refreshToken, userId, deviceId, phoneE164, email)
         tokenStore.saveAccessTokenExpiry(System.currentTimeMillis() + expiresInSeconds * 1000L)
     }
 
@@ -50,6 +51,7 @@ class SessionTokenManager(
             userId,
             deviceId,
             tokenStore.getAuthenticatedPhoneE164(),
+            tokenStore.getAuthenticatedEmail(),
         )
         tokenStore.saveAccessTokenExpiry(System.currentTimeMillis() + expiresInSeconds * 1000L)
     }

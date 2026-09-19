@@ -144,13 +144,16 @@ class AuthRepository(
                 signIn.refreshToken,
                 signIn.userId,
                 signIn.deviceId,
-                // An email account has no phone number; the session stores the
-                // email in its place so the UI has something to show for "who
-                // am I". Contact discovery by phone will not find this account.
-                signIn.email,
+                // An email account genuinely has no phone number. The address
+                // used to be stored in the phone slot so the UI had something
+                // to show, which meant an email rendered everywhere a number
+                // was expected — on the profile, and as prefilled "digits" on
+                // the next sign-in. It gets its own field instead.
+                null,
                 signIn.expiresIn,
+                email = signIn.email,
             )
-            session.onAuthenticationSuccess(signIn.email)
+            session.onAuthenticationSuccess(null)
             Result.success(Unit)
         } catch (e: Exception) {
             ApiDiagnostics.logFailure(

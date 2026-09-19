@@ -80,6 +80,10 @@ class SessionManager private constructor(context: Context) {
         get() = tokenStore.getAuthenticatedPhoneE164()
             ?: testIdentityStore.getPhoneE164()
 
+    /** Set only for accounts that signed in with an email; null for phone accounts. */
+    val authenticatedEmail: String?
+        get() = tokenStore.getAuthenticatedEmail()
+
     init {
         scope.launch {
             networkMonitor.hasInternet.collect { available ->
@@ -211,14 +215,20 @@ class SessionManager private constructor(context: Context) {
 
     val isReturningInstall: Boolean
         get() = testIdentityStore.hasRegisteredBefore() ||
-            !tokenStore.getAuthenticatedPhoneE164().isNullOrBlank()
+            !tokenStore.getAuthenticatedPhoneE164().isNullOrBlank() ||
+            !tokenStore.getAuthenticatedEmail().isNullOrBlank()
 
     fun updateLastTargetInput(input: String) {
         lastTargetInput = input
     }
 
-    suspend fun onAuthenticationSuccess(normalizedPhoneE164: String) {
-        testIdentityStore.savePhoneE164(normalizedPhoneE164)
+    /**
+     * [normalizedPhoneE164] is null for an email-only account — it has no
+     * number to remember, and storing anything else here would surface as a
+     * phone number elsewhere in the app.
+     */
+    suspend fun onAuthenticationSuccess(normalizedPhoneE164: String?) {
+        normalizedPhoneE164?.let { testIdentityStore.savePhoneE164(it) }
         connectSignalingAuto()
         // The heavy loading happens in warmUpForSession(), behind the preparing
         // screen, so nothing here races the first paint.

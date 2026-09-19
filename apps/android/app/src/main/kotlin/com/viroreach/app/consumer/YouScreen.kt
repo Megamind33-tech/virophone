@@ -83,11 +83,19 @@ fun YouScreen(
                     )
                     Spacer(Modifier.height(ViroSpacing.sm))
                     Text(displayName, style = MaterialTheme.typography.headlineMedium, color = ViroColors.textPrimary)
-                    Text(
-                        state.phoneE164?.let { PhoneNumberFormatter.formatE164International(it) } ?: "—",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = ViroColors.textSecondary,
-                    )
+                    // An email account has no number, so show the address it
+                    // actually signed in with rather than a dash — and never
+                    // an email formatted as though it were a phone number.
+                    val identityLine = state.phoneE164
+                        ?.let { PhoneNumberFormatter.formatE164International(it) }
+                        ?: state.email
+                    identityLine?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = ViroColors.textSecondary,
+                        )
+                    }
                     Text(
                         "Edit profile",
                         color = ViroColors.accent,
@@ -109,6 +117,9 @@ fun YouScreen(
                             label = "Phone",
                             value = PhoneNumberFormatter.formatE164International(state.phoneE164),
                         )
+                    }
+                    state.email?.takeIf { it.isNotBlank() }?.let {
+                        SettingsRow(label = "Email", value = it)
                     }
                     SettingsNavRow("Subscription", onSubscription)
                 }
