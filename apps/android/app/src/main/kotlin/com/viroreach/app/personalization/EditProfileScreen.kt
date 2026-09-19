@@ -41,7 +41,7 @@ fun EditProfileScreen(
             statusMessage = null
             session.profileRepository.uploadPhoto(uri)
                 .onSuccess { statusMessage = "Photo uploaded" }
-                .onFailure { statusMessage = "Couldn't upload photo" }
+                .onFailure { statusMessage = uploadFailureMessage(it) }
             isSaving = false
         }
     }
@@ -188,5 +188,21 @@ fun EditProfileScreen(
                 Spacer(Modifier.height(ViroSpacing.xl))
             }
         }
+    }
+}
+
+/**
+ * Says why an upload failed. A single "Couldn't upload photo" for every cause
+ * is what left the last round of testing unable to tell a network drop from a
+ * server rejection.
+ */
+private fun uploadFailureMessage(error: Throwable): String {
+    if (error is java.io.IOException) return "Couldn't upload photo: no connection. Try again."
+    val code = Regex("""\((\d{3})\)""").find(error.message.orEmpty())?.groupValues?.get(1)
+    return when (code) {
+        "413" -> "That photo is too large to upload"
+        "401", "403" -> "Your session has expired. Sign in again to change your photo."
+        null -> "Couldn't upload photo: ${error.message ?: "unknown error"}"
+        else -> "Couldn't upload photo (error $code)"
     }
 }

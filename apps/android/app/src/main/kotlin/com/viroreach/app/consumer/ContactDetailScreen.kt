@@ -26,7 +26,9 @@ import com.viroreach.core.designsystem.ViroColors
 import com.viroreach.core.designsystem.ViroSpacing
 import com.viroreach.core.designsystem.components.*
 import com.viroreach.feature.contacts.PhoneNumberFormatter
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -71,10 +73,26 @@ fun ContactDetailScreen(
 
     fun uploadPhoto(uri: Uri) {
         scope.launch {
-            ProfilePhotoCapture.takePersistableReadPermission(context, uri)
-            session.contactsRepository.setCustomPhoto(profile.id, uri)
-            profile = session.contactsRepository.findById(profile.id) ?: profile.copy(customPhotoUri = uri.toString())
-            statusMessage = "Photo updated"
+            // The picked URI is copied into app storage rather than kept: the
+            // picker's grant and the camera's cache file both go away, which
+            // is why a contact photo used to fail or disappear.
+            runCatching {
+                // Make sure the row exists first: a device contact opened
+                // before the cache caught up has no row, and the patch would
+                // fail with "Contact not found".
+                val cached = session.contactsRepository.ensureCached(profile)
+                val stored = withContext(Dispatchers.IO) {
+                    ProfilePhotoCapture.storeContactPhoto(context, cached.id, uri)
+                }
+                session.contactsRepository.setCustomPhoto(cached.id, stored)
+                session.contactsRepository.findById(cached.id)
+                    ?: cached.copy(customPhotoUri = stored.toString())
+            }.onSuccess {
+                profile = it
+                statusMessage = "Photo updated"
+            }.onFailure {
+                statusMessage = "Couldn't set photo: ${it.message ?: "unknown error"}"
+            }
         }
     }
 
@@ -89,6 +107,8 @@ fun ContactDetailScreen(
             val uri = ProfilePhotoCapture.createCameraUri(context)
             cameraUri = uri
             cameraLauncher.launch(uri)
+        } else {
+            statusMessage = "Camera permission is required to take a photo"
         }
     }
 

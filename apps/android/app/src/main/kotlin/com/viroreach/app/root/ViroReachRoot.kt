@@ -13,7 +13,8 @@ import com.viroreach.app.developer.DeveloperAccess
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.designsystem.ViroSpacing
 import androidx.compose.ui.unit.dp
-import com.viroreach.core.designsystem.components.ViroLoadingIndicator
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import com.viroreach.core.designsystem.components.ViroLogoMark
 
 @Composable
@@ -72,9 +73,8 @@ private fun StartupLoadingScreen(message: String = "Restoring secure session…"
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Native size, and no wordmark: the mark is the name.
-        ViroLogoMark()
-        Spacer(Modifier.height(ViroSpacing.lg))
-        ViroLoadingIndicator(message = message)
+        // The logo alone: no wordmark, no spinner, no second mark. The
+        // message still reaches screen readers.
+        ViroLogoMark(modifier = Modifier.semantics { contentDescription = message })
     }
 }

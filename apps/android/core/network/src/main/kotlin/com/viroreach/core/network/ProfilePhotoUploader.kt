@@ -2,9 +2,9 @@ package com.viroreach.core.network
 
 import android.content.Context
 import android.net.Uri
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import com.google.gson.Gson
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -24,7 +24,14 @@ class ProfilePhotoUploader(
         .build()
     private val gson = Gson()
 
-    suspend fun upload(uri: Uri): MeResponse {
+    // Everything below blocks: bitmap decoding and OkHttp's execute(). Callers
+    // launch this from a Compose scope, which runs on the main thread, and
+    // Android refuses network I/O there with NetworkOnMainThreadException — so
+    // until this switched dispatcher, every upload failed before a single byte
+    // left the phone, whatever the photo's size.
+    suspend fun upload(uri: Uri): MeResponse = withContext(Dispatchers.IO) { uploadBlocking(uri) }
+
+    private suspend fun uploadBlocking(uri: Uri): MeResponse {
         val token = sessionTokenManager.getAccessTokenForRequest()
             ?: throw IllegalStateException("Not authenticated")
         val tempFile = copyUriToTempFile(uri)
@@ -55,68 +62,21 @@ class ProfilePhotoUploader(
     }
 
     /**
-     * Decodes the chosen image, scales it down and re-encodes it as JPEG.
-     *
-     * The original file was uploaded byte-for-byte, which meant every real
-     * camera photo failed: a phone shoots 3-8MB and the server accepts 2MB, so
-     * "Couldn't upload photo" was the only outcome anyone ever saw. An avatar is
-     * displayed at a few hundred pixels, so full sensor resolution buys nothing
-     * — and on mobile data in Zambia, uploading 6MB to show a 96dp circle is
-     * worth avoiding on its own.
-     *
-     * inJustDecodeBounds + inSampleSize means the full-size bitmap is never
-     * allocated; a large photo would otherwise risk OutOfMemory on a low-end
-     * device before it ever reached the network.
+     * The original file used to be uploaded byte-for-byte, so every real
+     * camera photo (3-8MB) was rejected. It is re-encoded small and upright
+     * first; see [ImageDownscaler].
      */
     private fun copyUriToTempFile(uri: Uri): File {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(uri)?.use {
-            BitmapFactory.decodeStream(it, null, bounds)
-        } ?: throw IllegalStateException("Could not read selected photo")
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-            throw IllegalStateException("That file does not look like an image")
-        }
-
-        var sample = 1
-        while (
-            bounds.outWidth / sample > MAX_EDGE_PX * 2 ||
-            bounds.outHeight / sample > MAX_EDGE_PX * 2
-        ) {
-            sample *= 2
-        }
-
-        val decoded = context.contentResolver.openInputStream(uri)?.use {
-            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
-        } ?: throw IllegalStateException("Could not read selected photo")
-
-        val longest = maxOf(decoded.width, decoded.height)
-        val scaled = if (longest > MAX_EDGE_PX) {
-            val ratio = MAX_EDGE_PX.toFloat() / longest
-            Bitmap.createScaledBitmap(
-                decoded,
-                (decoded.width * ratio).toInt().coerceAtLeast(1),
-                (decoded.height * ratio).toInt().coerceAtLeast(1),
-                true,
-            )
-        } else {
-            decoded
-        }
-
         val temp = File.createTempFile("viro_avatar_", ".jpg", context.cacheDir)
-        temp.outputStream().use { out ->
-            scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
+        try {
+            ImageDownscaler.writeJpeg(context, uri, temp)
+        } catch (e: Exception) {
+            temp.delete()
+            throw e
         }
-        if (scaled !== decoded) scaled.recycle()
-        decoded.recycle()
         return temp
     }
 
     private fun String.ensureTrailingSlash(): String =
         if (endsWith("/")) this else "$this/"
-
-    private companion object {
-        /** Comfortably above any avatar display size, far below a camera frame. */
-        const val MAX_EDGE_PX = 1024
-        const val JPEG_QUALITY = 85
-    }
 }

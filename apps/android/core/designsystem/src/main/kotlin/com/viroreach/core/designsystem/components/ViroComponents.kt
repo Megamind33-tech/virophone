@@ -184,21 +184,14 @@ fun ViroLoadingIndicator(message: String = "Loading…", modifier: Modifier = Mo
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(ViroSpacing.md),
     ) {
-        ViroPulseMark()
+        // A plain spinner. This used to be a blue circle with a "V" in it,
+        // which read as a second, fake logo wherever it appeared.
+        CircularProgressIndicator(
+            modifier = Modifier.size(28.dp),
+            color = ViroColors.accent,
+            strokeWidth = 2.5.dp,
+        )
         Text(message, style = MaterialTheme.typography.bodyMedium, color = ViroColors.textSecondary)
-    }
-}
-
-@Composable
-fun ViroPulseMark(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .size(48.dp)
-            .clip(ViroShapes.avatar)
-            .background(ViroColors.accent),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text("V", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
     }
 }
 
