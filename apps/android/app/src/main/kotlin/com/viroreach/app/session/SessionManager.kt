@@ -14,6 +14,7 @@ import com.viroreach.app.personalization.ViroAppearanceManager
 import com.viroreach.core.model.CallStateMachineState
 import kotlinx.coroutines.tasks.await
 import com.viroreach.core.network.NetworkMonitor
+import com.viroreach.core.network.looksLikeE164
 import com.viroreach.core.network.ProfilePhotoUploader
 import com.viroreach.core.network.SessionTokenManager
 import com.viroreach.core.network.TestIdentityStore
@@ -78,7 +79,9 @@ class SessionManager private constructor(context: Context) {
 
     val authenticatedPhoneE164: String?
         get() = tokenStore.getAuthenticatedPhoneE164()
-            ?: testIdentityStore.getPhoneE164()
+            // Same legacy guard as TokenStore: an email-only account signed in
+            // on an older build left its address in this slot too.
+            ?: testIdentityStore.getPhoneE164()?.takeIf { looksLikeE164(it) }
 
     /** Set only for accounts that signed in with an email; null for phone accounts. */
     val authenticatedEmail: String?

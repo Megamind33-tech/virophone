@@ -4,6 +4,11 @@ import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
+private val E164_SHAPE = Regex("^\\+[1-9]\\d{6,14}$")
+
+/** A stored identity counts as a phone number only if it's shaped like one. */
+fun looksLikeE164(value: String): Boolean = E164_SHAPE.matches(value.trim())
+
 class TokenStore(context: Context) {
     private val prefs = EncryptedSharedPreferences.create(
         context,
@@ -48,14 +53,25 @@ class TokenStore(context: Context) {
         return if (v > 0) v else null
     }
 
-    fun getAuthenticatedPhoneE164(): String? = prefs.getString(KEY_PHONE, null)
+    /**
+     * Only returns a value that is actually a phone number. Builds before the
+     * email/phone split stored an email address in this slot for email-only
+     * accounts, so a session created by one of those is still on disk with an
+     * address here — checking the shape means those sessions correct
+     * themselves instead of needing a sign-out.
+     */
+    fun getAuthenticatedPhoneE164(): String? =
+        prefs.getString(KEY_PHONE, null)?.takeIf { looksLikeE164(it) }
 
     /**
      * Kept separate from the phone number rather than sharing that slot: an
      * email-only account has no phone, and storing the address in its place
-     * put an email everywhere the UI expected a number.
+     * put an email everywhere the UI expected a number. Falls back to reading
+     * the legacy phone slot so an existing session still knows its address.
      */
-    fun getAuthenticatedEmail(): String? = prefs.getString(KEY_EMAIL, null)
+    fun getAuthenticatedEmail(): String? =
+        prefs.getString(KEY_EMAIL, null)
+            ?: prefs.getString(KEY_PHONE, null)?.takeIf { it.contains('@') }
 
     fun getAccessToken(): String? = prefs.getString(KEY_ACCESS, null)
     fun getRefreshToken(): String? = prefs.getString(KEY_REFRESH, null)
