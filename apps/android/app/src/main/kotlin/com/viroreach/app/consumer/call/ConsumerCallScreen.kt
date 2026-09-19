@@ -195,7 +195,7 @@ fun ConsumerCallScreen(
 
                     Text(
 
-                        "Incoming Viro Call",
+                        "Incoming Viro",
 
                         style = MaterialTheme.typography.labelLarge,
 

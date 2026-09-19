@@ -90,20 +90,12 @@ fun ViroCallBrand(
                 contentScale = ContentScale.Fit,
             )
             if (!compact) {
-                Column {
-                    Text(
-                        "Viro Call",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Color.White,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        "PEOPLE. VOICE. PROGRESS.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = ViroColors.TaglineBlue,
-                        letterSpacing = 0.5.sp,
-                    )
-                }
+                Text(
+                    "People closer",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ViroColors.TaglineBlue,
+                    letterSpacing = 0.5.sp,
+                )
             }
         }
     }
@@ -113,10 +105,13 @@ fun ViroCallBrand(
  * The mark on its own at a chosen size, for the startup screen — where a small
  * corner badge would be lost and the wordmark is already rendered as text.
  */
+/** The artwork's natural size; rendering larger visibly softens it. */
+val NATIVE_LOGO_DP = 96.dp
+
 @Composable
 fun ViroLogoMark(
     modifier: Modifier = Modifier,
-    size: androidx.compose.ui.unit.Dp = 96.dp,
+    size: androidx.compose.ui.unit.Dp = NATIVE_LOGO_DP,
 ) {
     Image(
         painter = painterResource(R.drawable.viro_logo),

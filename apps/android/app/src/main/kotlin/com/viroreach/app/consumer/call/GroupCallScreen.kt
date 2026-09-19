@@ -66,7 +66,7 @@ fun GroupCallScreen(
                     onEndCall()
                 })
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
-                    Text("Viro Call", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text("Viro", color = Color.White, fontWeight = FontWeight.Bold)
                     Text(state.title, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(8.dp).background(ViroColors.GreenAvailable, CircleShape))

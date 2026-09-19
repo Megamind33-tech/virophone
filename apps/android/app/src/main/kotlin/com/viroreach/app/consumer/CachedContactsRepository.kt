@@ -429,7 +429,7 @@ class CachedContactsRepository(
 
     suspend fun inviteContact(contactId: String): Result<String> = runCatching {
         val entity = dao.findById(contactId) ?: error("Contact not found")
-        val userId = entity.userId ?: error("Contact is not on Viro Call yet")
+        val userId = entity.userId ?: error("Contact is not on Viro yet")
         val response = session.api.inviteConnection(ConnectionInviteBody(userId))
         "Invite sent (${response.status})"
     }

@@ -95,7 +95,7 @@ fun ContactDetailScreen(
     fun shareContact() {
         val phone = profile.phoneE164?.let { PhoneNumberFormatter.formatE164International(it) }.orEmpty()
         val text = buildString {
-            append("Connect with ${profile.effectiveDisplayName} on Viro Call")
+            append("Connect with ${profile.effectiveDisplayName} on Viro")
             if (phone.isNotBlank()) append("\n$phone")
             append("\nhttps://reach.viro3.online")
         }
@@ -133,7 +133,7 @@ fun ContactDetailScreen(
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
             title = { Text("Delete contact?") },
-            text = { Text("Removes ${profile.effectiveDisplayName} from Viro Call. Your device contact is not changed.") },
+            text = { Text("Removes ${profile.effectiveDisplayName} from Viro. Your device contact is not changed.") },
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteConfirm = false
@@ -151,7 +151,7 @@ fun ContactDetailScreen(
         AlertDialog(
             onDismissRequest = { showBlockConfirm = false },
             title = { Text("Block contact?") },
-            text = { Text("${profile.effectiveDisplayName} won't be able to call or message you on Viro Call.") },
+            text = { Text("${profile.effectiveDisplayName} won't be able to call or message you on Viro.") },
             confirmButton = {
                 TextButton(onClick = {
                     showBlockConfirm = false
@@ -245,7 +245,7 @@ fun ContactDetailScreen(
                         )
                     }
                     if (profile.isReachable) {
-                        Text("On Viro Call", color = ViroColors.success, style = MaterialTheme.typography.labelMedium)
+                        Text("On Viro", color = ViroColors.success, style = MaterialTheme.typography.labelMedium)
                     }
                     statusMessage?.let {
                         Text(it, color = ViroColors.textSecondary, style = MaterialTheme.typography.labelMedium)
@@ -313,7 +313,7 @@ fun ContactDetailScreen(
                 }
                 Spacer(Modifier.height(ViroSpacing.lg))
                 SectionTitle("Actions")
-                ProfileMenuRow("Invite to Viro Call", Icons.Default.Person) {
+                ProfileMenuRow("Invite to Viro", Icons.Default.Person) {
                     scope.launch {
                         if (profile.userId != null) {
                             session.contactsRepository.inviteContact(profile.id)

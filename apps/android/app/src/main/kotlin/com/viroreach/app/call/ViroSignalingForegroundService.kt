@@ -60,8 +60,8 @@ class ViroSignalingForegroundService : Service() {
             pendingIntentFlags(),
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle("Viro Call ready")
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("Viro ready")
             .setContentText("Listening for incoming calls")
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -74,7 +74,7 @@ class ViroSignalingForegroundService : Service() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Viro Call signaling",
+            "Viro signaling",
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
             description = "Keeps call signaling active while the app is in the background"

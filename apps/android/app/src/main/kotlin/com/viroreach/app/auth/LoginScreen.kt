@@ -66,7 +66,7 @@ fun LoginScreen(
                 Spacer(Modifier.height(8.dp))
                 Text(
                     if (returningUser) {
-                        "Verify your number to continue using Viro Call."
+                        "Verify your number to continue using Viro."
                     } else {
                         "We'll send you a verification code to get started."
                     },

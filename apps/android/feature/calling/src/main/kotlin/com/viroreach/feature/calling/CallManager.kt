@@ -366,7 +366,7 @@ class CallManager(
         if (!ready) {
             _lastError.value = when (routeEngine.isInternetAvailable()) {
                 false -> "No network connection. Try mobile data or Wi-Fi."
-                else -> "Connecting to Viro Call… please wait a moment and try again"
+                else -> "Connecting to Viro… please wait a moment and try again"
             }
         }
         return ready
@@ -377,7 +377,7 @@ class CallManager(
         _lastError.value = null
     }
 
-    /** Skip discover API when the contact is already known to be on Viro Call. */
+    /** Skip discover API when the contact is already known to be on Viro. */
     suspend fun startCallToRegisteredUser(
         userId: String,
         phoneE164: String?,
@@ -506,7 +506,7 @@ class CallManager(
         // call.invite still rings the callee's device(s) exactly as before.
         _state.value = CallStateMachineState.INVITING
         activeTransport.send("call.invite", auth.callId, remotePeerDeviceId(), JSONObject())
-        _routeLabel.value = "Viro Call"
+        _routeLabel.value = "Viro"
     }
 
     private suspend fun startLocalCall(targetUserId: String) {
@@ -567,7 +567,7 @@ class CallManager(
                 activeTransport.send("call.accept", callId, target)
                 _incomingCall.value = null
                 connectLiveKitMedia(callId)
-                _routeLabel.value = "Viro Call"
+                _routeLabel.value = "Viro"
             }
         } catch (e: Exception) {
             _lastError.value = e.message ?: "Could not answer call"

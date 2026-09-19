@@ -135,7 +135,7 @@ fun ContactsScreen(
                     Spacer(Modifier.height(12.dp))
                     ViroSearchBar(query, { query = it }, "Search contacts")
                     Spacer(Modifier.height(12.dp))
-                    ViroFilterChipRow(listOf("All", "Viro Call", "Other"), filter, { filter = it })
+                    ViroFilterChipRow(listOf("All", "Viro", "Other"), filter, { filter = it })
                     if (state.refreshFailed) {
                         Text(
                             "Couldn't refresh",
@@ -152,7 +152,7 @@ fun ContactsScreen(
                     state.loadState == ContactsLoadState.Error && state.contacts.isEmpty() -> {
                         ViroEmptyState(
                             "Couldn't load contacts",
-                            state.errorMessage ?: "Allow contact access to reach people on Viro Call.",
+                            state.errorMessage ?: "Allow contact access to reach people on Viro.",
                         )
                     }
                     else -> {
@@ -162,7 +162,7 @@ fun ContactsScreen(
                                 contact.displayName.contains(query, true) ||
                                 (contact.phoneE164?.contains(query) == true)
                             val matchesFilter = when (filter) {
-                                "Viro Call" -> contact.isReachable
+                                "Viro" -> contact.isReachable
                                 "Other" -> !contact.isReachable
                                 else -> true
                             }
@@ -174,7 +174,7 @@ fun ContactsScreen(
                         if (filtered.isEmpty() && state.contacts.isEmpty()) {
                             ViroEmptyState(
                                 "No contacts yet",
-                                "Allow contact access or add people to reach them on Viro Call.",
+                                "Allow contact access or add people to reach them on Viro.",
                             )
                         } else if (filtered.isEmpty()) {
                             ViroEmptyState("No matches", "Try a different search or filter.")

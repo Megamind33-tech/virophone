@@ -45,8 +45,8 @@ class IncomingCallNotifier(private val context: Context) {
             pendingIntentFlags(),
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle("Incoming Viro Call")
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("Incoming Viro")
             .setContentText(callerName)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -77,7 +77,7 @@ class IncomingCallNotifier(private val context: Context) {
             "Incoming calls",
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
-            description = "Ringtone and alerts for incoming Viro Call sessions"
+            description = "Ringtone and alerts for incoming Viro sessions"
             setBypassDnd(true)
             lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
             enableVibration(true)

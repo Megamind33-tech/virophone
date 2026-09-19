@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * Real Android NSD/mDNS LAN discovery for Viro Reach.
+ * Real Android NSD/mDNS LAN discovery for Viro.
  * Advertises only protocol-level TXT records — no PII.
  */
 class NsdLanDiscovery(

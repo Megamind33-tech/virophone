@@ -36,7 +36,7 @@ class CallTargetResolver(private val api: ViroApiService) {
         val match = response.matches.firstOrNull()
             ?: throw CallTargetException(
                 "TARGET_NOT_FOUND",
-                "This number is not on Viro Call yet. They need to sign up first.",
+                "This number is not on Viro yet. They need to sign up first.",
             )
         return ResolvedCallTarget(
             inputIdentity = trimmed,

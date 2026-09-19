@@ -137,7 +137,7 @@ fun DiscoveryDiagnosticScreen(session: EngineeringSession) {
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("Viro Reach — Phase 1A Diagnostic") })
+            TopAppBar(title = { Text("Viro — Phase 1A Diagnostic") })
         },
     ) { padding ->
         LazyColumn(

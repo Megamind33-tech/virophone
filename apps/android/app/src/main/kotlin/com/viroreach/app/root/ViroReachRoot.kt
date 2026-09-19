@@ -72,9 +72,8 @@ private fun StartupLoadingScreen(message: String = "Restoring secure session…"
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        ViroLogoMark(size = 112.dp)
-        Spacer(Modifier.height(ViroSpacing.md))
-        Text("Viro Call", style = MaterialTheme.typography.headlineMedium)
+        // Native size, and no wordmark: the mark is the name.
+        ViroLogoMark()
         Spacer(Modifier.height(ViroSpacing.lg))
         ViroLoadingIndicator(message = message)
     }

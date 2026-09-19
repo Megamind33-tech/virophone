@@ -16,6 +16,17 @@ if (googleServicesConfig.exists()) {
     )
 }
 
+// Commit count as the version code: every build gets a distinct, increasing
+// number without anyone remembering to bump it. Until now versionCode was
+// hardcoded to 1, so every APK ever distributed was "0.3.8-network-bind (1)" —
+// identical to Firebase App Distribution and to Android's installer, which made
+// it impossible to tell which build a tester actually had when they reported a
+// bug, and meant an install might not register as an update at all.
+val gitCommitCount: Int = providers.exec {
+    commandLine("git", "rev-list", "--count", "HEAD")
+    isIgnoreExitValue = true
+}.standardOutput.asText.get().trim().toIntOrNull() ?: 1
+
 val gitCommitAbbrev: String = providers.exec {
     commandLine("git", "rev-parse", "--short", "HEAD")
     isIgnoreExitValue = true
@@ -29,8 +40,10 @@ android {
         applicationId = "com.viroreach.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.3.8-network-bind"
+        versionCode = gitCommitCount
+        // Carries the commit it was built from, so a bug report identifies the
+        // exact source state rather than a name that never changes.
+        versionName = "0.4.$gitCommitCount-$gitCommitAbbrev"
         buildConfigField("String", "API_BASE_URL", "\"https://reach.viro3.online\"")
         buildConfigField("String", "WSS_URL", "\"wss://reach.viro3.online/api/v1/signaling/ws\"")
         buildConfigField("boolean", "FORCE_TURN_RELAY", "false")

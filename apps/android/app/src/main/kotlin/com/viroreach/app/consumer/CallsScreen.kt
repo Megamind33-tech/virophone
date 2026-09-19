@@ -85,7 +85,7 @@ fun CallsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column {
-                        Text("Viro Call", style = MaterialTheme.typography.headlineMedium, color = Color.White)
+                        Text("Viro", style = MaterialTheme.typography.headlineMedium, color = Color.White)
                         Text(
                             "PEOPLE. VOICE. PROGRESS.",
                             style = MaterialTheme.typography.labelSmall,
