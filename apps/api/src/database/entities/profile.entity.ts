@@ -27,6 +27,14 @@ export class Profile {
   })
   allowCallsFromViroId!: string;
 
+  /** Set once the person has chosen their name and Viro ID; NULL shows the setup step. */
+  @Column({ name: 'profile_completed_at', type: 'timestamptz', nullable: true })
+  profileCompletedAt!: Date | null;
+
+  /** Whether an exact, verified email match can find this person in Find people. */
+  @Column({ name: 'discoverable_by_email', type: 'boolean', default: true })
+  discoverableByEmail!: boolean;
+
   @OneToOne(() => User, (u) => u.profile)
   @JoinColumn({ name: 'user_id' })
   user!: User;

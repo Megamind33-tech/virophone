@@ -117,8 +117,9 @@ fun EmailAuthScreen(
                     Text("ⓘ", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "People who have your phone number won't find this account " +
-                            "in their contacts. Sign in with your phone number for that.",
+                        "People who have your phone number won't find this account in " +
+                            "their contacts. They can reach you by the Viro ID you'll " +
+                            "choose next, or by this email address.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

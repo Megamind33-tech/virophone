@@ -79,7 +79,7 @@ interface ViroApiService {
     suspend fun unblockUser(@Path("userId") userId: String)
 
     @POST("api/v1/connections")
-    suspend fun inviteConnection(@Body body: ConnectionInviteBody): ConnectionInviteResponse
+    suspend fun inviteConnection(@Body body: ConnectionInviteBody): ConnectionDto
 
     @GET("api/v1/connections")
     suspend fun listConnections(): List<ConnectionDto>
@@ -110,6 +110,14 @@ interface ViroApiService {
 
     @POST("api/v1/contacts/discover")
     suspend fun discoverContacts(@Body body: DiscoverBody): DiscoverResponse
+
+    /** Is this Viro ID valid and free for me? Always carries a few free suggestions. */
+    @GET("api/v1/me/viro-id/check")
+    suspend fun checkViroId(@Query("id") id: String?, @Query("name") name: String?): ViroIdCheck
+
+    /** Find one person by exact Viro ID or exact verified email. */
+    @GET("api/v1/directory/find")
+    suspend fun findPerson(@Query("q") query: String): FindPersonResponse
 
     @GET("api/v1/directory/exact/{viroId}")
     suspend fun exactViroIdLookup(@Path("viroId") viroId: String): Response<PublicProfile>
@@ -265,7 +273,38 @@ data class FirebaseSignInResponse(
 
 data class RefreshBody(val refreshToken: String)
 data class RefreshResponse(val accessToken: String, val refreshToken: String, val expiresIn: Int)
-data class MeResponse(val userId: String, val phoneE164: String, val displayName: String, val avatarUrl: String?, val viroId: String?, val allowCallsFromViroId: String)
+data class MeResponse(
+    val userId: String,
+    val phoneE164: String,
+    val displayName: String,
+    val avatarUrl: String?,
+    val viroId: String?,
+    val allowCallsFromViroId: String,
+    val email: String? = null,
+    val emailVerified: Boolean? = null,
+    val discoverableByEmail: Boolean? = null,
+    /** False until the one-time name + Viro ID step is done. Null from an older server: treat as done. */
+    val profileCompleted: Boolean? = null,
+)
+data class ViroIdCheck(
+    val viroId: String?,
+    val valid: Boolean,
+    val available: Boolean,
+    val reason: String?,
+    val suggestions: List<String>?,
+)
+data class FindPersonResponse(val person: FoundPerson?)
+data class FoundPerson(
+    val userId: String,
+    val displayName: String?,
+    val avatarUrl: String?,
+    val viroId: String?,
+    /** VIRO_ID or EMAIL. */
+    val matchedBy: String?,
+    val connection: ConnectionState?,
+    val canCall: Boolean?,
+)
+data class ConnectionState(val id: String, val status: String, val direction: String)
 data class DeleteAccountResponse(val deleted: Boolean)
 data class AccountExport(
     val userId: String,
@@ -288,6 +327,8 @@ data class UpdateMeBody(
     val avatarUrl: String? = null,
     val viroId: String? = null,
     val allowCallsFromViroId: String? = null,
+    val discoverableByEmail: Boolean? = null,
+    val completeProfile: Boolean? = null,
 )
 data class BlockUserBody(val blockedUserId: String)
 data class BlockedUser(val blockedUserId: String)
@@ -299,6 +340,10 @@ data class ConnectionDto(
     val recipientUserId: String,
     val status: String,
     val direction: String,
+    val peerUserId: String? = null,
+    val peerDisplayName: String? = null,
+    val peerAvatarUrl: String? = null,
+    val peerViroId: String? = null,
 )
 data class DeviceSummary(
     val id: String,

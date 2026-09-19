@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
+import { EmailIdentity } from '../database/entities/email-identity.entity';
 import { Profile } from '../database/entities/profile.entity';
 import { PhoneIdentity } from '../database/entities/phone-identity.entity';
 import { User } from '../database/entities/user.entity';
@@ -18,6 +19,7 @@ import { Message } from '../database/entities/message.entity';
   imports: [
     TypeOrmModule.forFeature([
       Profile,
+      EmailIdentity,
       PhoneIdentity,
       User,
       Device,

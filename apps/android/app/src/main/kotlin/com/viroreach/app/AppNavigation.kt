@@ -9,7 +9,13 @@ import kotlinx.coroutines.flow.asStateFlow
  * to take it, then consumed, so a tap during startup is not lost.
  */
 object AppNavigation {
-    data class Target(val screen: String, val peerUserId: String? = null, val conversationId: String? = null)
+    data class Target(
+        val screen: String,
+        val peerUserId: String? = null,
+        val conversationId: String? = null,
+        /** A Viro ID or email to search for, from a shared link. */
+        val query: String? = null,
+    )
 
     private val _pending = MutableStateFlow<Target?>(null)
     val pending: StateFlow<Target?> = _pending.asStateFlow()

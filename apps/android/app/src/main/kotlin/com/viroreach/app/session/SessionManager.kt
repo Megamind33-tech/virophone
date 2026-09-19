@@ -63,6 +63,8 @@ class SessionManager private constructor(context: Context) {
         callManager,
     )
     val relationships: RelationshipRepository = RelationshipRepository(appContext, messagingApi)
+    /** My profile + reaching people without a phone number (Viro ID / email, connections). */
+    val people: com.viroreach.app.people.PeopleRepository = com.viroreach.app.people.PeopleRepository(appContext) { api }
     val messageNotifier: MessageNotifier = MessageNotifier(appContext)
     /** One voice note plays at a time, across every chat. */
     val voicePlayer: VoicePlayer = VoicePlayer()
@@ -382,6 +384,7 @@ class SessionManager private constructor(context: Context) {
         val job = scope.launch {
             runCatching { profileRepository.refreshFromServer() }
             runCatching { contactsRepository.loadContacts() }
+            runCatching { people.refreshConnections() }
             runCatching { preferenceSync.pull() }
             runCatching {
                 callHistoryStore.syncFromServer(api, tokenStore.getUserId()) { peerUserId ->

@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.viroreach.app.people.isIncomingRequest
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.designsystem.ViroColors
 import com.viroreach.core.designsystem.ViroSpacing
@@ -33,6 +35,7 @@ fun ContactsScreen(
     onMessageContact: (ContactListItem) -> Unit,
     onContactDetail: (ContactListItem) -> Unit,
     onStartGroupCall: (List<ContactListItem>) -> Unit,
+    onAddPeople: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -72,6 +75,14 @@ fun ContactsScreen(
                             )
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            // Anyone on Viro can be reached by their Viro ID or
+                            // email, even with no phone number in the address book.
+                            val requests = session.people.connections.collectAsState().value.count { it.isIncomingRequest }
+                            IconButton(onClick = onAddPeople) {
+                                BadgedBox(badge = { if (requests > 0) Badge { Text("$requests") } }) {
+                                    Icon(Icons.Default.PersonAdd, contentDescription = if (requests > 0) "Add people, $requests requests waiting" else "Add people", tint = ViroColors.textPrimary)
+                                }
+                            }
                             // The only path to a group call used to be inside this
                             // overflow menu, several taps deep with no visible hint
                             // it existed — a single always-visible button makes the

@@ -43,7 +43,10 @@ fun ViroReachRoot() {
     LaunchedEffect(startupState) {
         if (startupState == AppStartupState.Preparing) {
             runCatching { session.warmUpForSession() }
-            startupState = AppStartupState.Authenticated
+            // Ask for a name and Viro ID once. Offline, or on an older server,
+            // this is false and the app opens as before.
+            val needsName = runCatching { session.people.needsProfileSetup() }.getOrDefault(false)
+            startupState = if (needsName) AppStartupState.ProfileSetup else AppStartupState.Authenticated
         }
     }
 
@@ -51,6 +54,10 @@ fun ViroReachRoot() {
         AppStartupState.RestoringSession -> StartupLoadingScreen()
         AppStartupState.Preparing -> StartupLoadingScreen(
             message = "Getting your contacts and calls ready…",
+        )
+        AppStartupState.ProfileSetup -> com.viroreach.app.people.ProfileSetupScreen(
+            session = session,
+            onDone = { startupState = AppStartupState.Authenticated },
         )
         AppStartupState.Unauthenticated -> AuthFlow(
             session = session,

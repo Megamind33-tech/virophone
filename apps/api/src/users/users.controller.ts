@@ -7,6 +7,7 @@ import {
   Body,
   UseGuards,
   Req,
+  Query,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -14,11 +15,12 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { IsString, IsOptional, IsIn } from 'class-validator';
+import { IsString, IsOptional, IsIn, IsBoolean, MaxLength } from 'class-validator';
 
 class UpdateMeDto {
   @IsString()
   @IsOptional()
+  @MaxLength(100)
   displayName?: string;
 
   @IsString()
@@ -33,6 +35,16 @@ class UpdateMeDto {
   @IsOptional()
   @IsIn(['CONNECTIONS_ONLY', 'EXACT_ID_ALLOWED'])
   allowCallsFromViroId?: string;
+
+  /** Let an exact, verified email match find me in Find people. */
+  @IsBoolean()
+  @IsOptional()
+  discoverableByEmail?: boolean;
+
+  /** Marks the one-time name + Viro ID step done (needs a name and a Viro ID). */
+  @IsBoolean()
+  @IsOptional()
+  completeProfile?: boolean;
 }
 
 @Controller('api/v1/me')
@@ -43,6 +55,12 @@ export class UsersController {
   @Get()
   async getMe(@Req() req: { user: { sub: string } }) {
     return this.usersService.getMe(req.user.sub);
+  }
+
+  /** Is this Viro ID valid and free? With suggestions when it isn't (or when none is given). */
+  @Get('viro-id/check')
+  async checkViroId(@Req() req: { user: { sub: string } }, @Query('id') id?: string, @Query('name') name?: string) {
+    return this.usersService.checkViroId(req.user.sub, id, name);
   }
 
   @Get('export')

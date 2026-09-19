@@ -75,14 +75,22 @@ class MainActivity : FragmentActivity() {
         handleOpenIntent(intent)
     }
 
-    /** A notification tap: open a chat or the Connections dashboard. */
+    /** A notification tap, or a shared Viro ID link: open a chat, Connections, or Add people. */
     private fun handleOpenIntent(intent: Intent?) {
+        if (intent?.action == Intent.ACTION_VIEW) {
+            com.viroreach.app.people.ViroLinks.viroIdFromUrl(intent.dataString)?.let { id ->
+                AppNavigation.request(AppNavigation.Target(screen = OPEN_FIND_PEOPLE, query = "@$id"))
+                intent.data = null
+                return
+            }
+        }
         val target = intent?.getStringExtra(EXTRA_OPEN) ?: return
         AppNavigation.request(
             AppNavigation.Target(
                 screen = target,
                 peerUserId = intent.getStringExtra(EXTRA_PEER_USER_ID),
                 conversationId = intent.getStringExtra(EXTRA_CONVERSATION_ID),
+                query = intent.getStringExtra(EXTRA_QUERY),
             ),
         )
         intent.removeExtra(EXTRA_OPEN)
@@ -102,6 +110,9 @@ class MainActivity : FragmentActivity() {
         const val EXTRA_CONVERSATION_ID = "extra_conversation_id"
         const val OPEN_CHAT = "chat"
         const val OPEN_CONNECTIONS = "connections"
+        const val OPEN_CONNECTIONS_REQUESTS = "connection_requests"
+        const val OPEN_FIND_PEOPLE = "find_people"
+        const val EXTRA_QUERY = "extra_query"
 
         fun incomingCallIntent(context: Context, callId: String, callerName: String): Intent =
             Intent(context, MainActivity::class.java).apply {

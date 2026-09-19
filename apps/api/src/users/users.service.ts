@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as fs from 'fs';
 import { Profile } from '../database/entities/profile.entity';
+import { EmailIdentity } from '../database/entities/email-identity.entity';
 import { PhoneIdentity } from '../database/entities/phone-identity.entity';
 import { User } from '../database/entities/user.entity';
 import { Device } from '../database/entities/device.entity';
@@ -27,6 +28,7 @@ import {
 export class UsersService {
   constructor(
     @InjectRepository(Profile) private readonly profileRepo: Repository<Profile>,
+    @InjectRepository(EmailIdentity) private readonly emailRepo: Repository<EmailIdentity>,
     @InjectRepository(PhoneIdentity) private readonly phoneRepo: Repository<PhoneIdentity>,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
     @InjectRepository(Device) private readonly deviceRepo: Repository<Device>,
@@ -46,13 +48,18 @@ export class UsersService {
     if (!profile) {
       throw new ViroException('NOT_FOUND', 'Profile not found.', HttpStatus.NOT_FOUND);
     }
+    const email = await this.emailRepo.findOne({ where: { userId }, order: { createdAt: 'DESC' } });
     return {
       userId,
       phoneE164: phone?.phoneE164 || '',
+      email: email?.email ?? null,
+      emailVerified: email?.status === 'VERIFIED',
       displayName: profile.displayName,
       avatarUrl: publicAvatarUrl(profile.avatarUrl),
       viroId: profile.viroId,
       allowCallsFromViroId: profile.allowCallsFromViroId,
+      discoverableByEmail: profile.discoverableByEmail,
+      profileCompleted: profile.profileCompletedAt != null,
     };
   }
 
@@ -61,13 +68,22 @@ export class UsersService {
     avatarUrl?: string | null;
     viroId?: string;
     allowCallsFromViroId?: string;
+    discoverableByEmail?: boolean;
+    completeProfile?: boolean;
   }) {
     const profile = await this.profileRepo.findOne({ where: { userId } });
     if (!profile) {
       throw new ViroException('NOT_FOUND', 'Profile not found.', HttpStatus.NOT_FOUND);
     }
 
-    if (updates.displayName !== undefined) profile.displayName = updates.displayName;
+    if (updates.displayName !== undefined) {
+      const name = updates.displayName.replace(/\s+/g, ' ').trim();
+      if (!name) {
+        throw new ViroException('VALIDATION_ERROR', 'Please enter your name.', HttpStatus.BAD_REQUEST);
+      }
+      profile.displayName = name.slice(0, 60);
+    }
+    if (updates.discoverableByEmail !== undefined) profile.discoverableByEmail = updates.discoverableByEmail;
     if (updates.avatarUrl !== undefined) profile.avatarUrl = updates.avatarUrl;
     if (updates.allowCallsFromViroId !== undefined) {
       profile.allowCallsFromViroId = updates.allowCallsFromViroId;
@@ -86,8 +102,63 @@ export class UsersService {
       profile.viroIdNormalized = normalized;
     }
 
+    if (updates.completeProfile) {
+      if (!profile.displayName.trim() || !profile.viroIdNormalized) {
+        throw new ViroException('VALIDATION_ERROR', 'Choose your name and Viro ID first.', HttpStatus.BAD_REQUEST);
+      }
+      profile.profileCompletedAt = profile.profileCompletedAt ?? new Date();
+    }
+
     await this.profileRepo.save(profile);
     return this.getMe(userId);
+  }
+
+  /**
+   * Validates a Viro ID and says whether it is free for this user. Always
+   * returns a few free suggestions, derived from [name] (or the requested id).
+   */
+  async checkViroId(userId: string, id?: string, name?: string) {
+    const normalized = id ? normalizeViroId(id) : null;
+    let available = false;
+    if (normalized) {
+      const owner = await this.profileRepo.findOne({ where: { viroIdNormalized: normalized } });
+      available = !owner || owner.userId === userId;
+    }
+    const suggestions = await this.suggestViroIds(userId, name || id || '', normalized && available ? normalized : null);
+    return {
+      viroId: normalized ? formatViroId(normalized) : null,
+      valid: normalized != null,
+      available,
+      reason: !id ? null
+        : !normalized ? 'Use 3–30 letters, numbers, dots or underscores, starting with a letter or number.'
+        : available ? null : 'That Viro ID is taken.',
+      suggestions,
+    };
+  }
+
+  private async suggestViroIds(userId: string, seed: string, exclude: string | null): Promise<string[]> {
+    const base = seed
+      .normalize('NFKD').replace(/[\u0300-\u036f]/g, '') // é → e
+      .toLowerCase()
+      .replace(/^@/, '')
+      .replace(/[^a-z0-9]+/g, '.')
+      .replace(/^\.+|\.+$/g, '')
+      .replace(/\.{2,}/g, '.')
+      .slice(0, 24) || 'viro.user';
+    const parts = base.split('.').filter(Boolean);
+    const raw = [
+      base,
+      parts.join(''),
+      parts.length > 1 ? parts.join('_') : null,
+      parts.length > 1 ? `${parts[0]}.${parts[parts.length - 1][0]}` : null,
+    ];
+    for (let i = 0; raw.length < 12 && i < 8; i++) raw.push(`${parts.join('') || 'viro'}${Math.floor(10 + Math.random() * 990)}`);
+    const candidates = Array.from(new Set(raw.map((r) => (r ? normalizeViroId(r.length < 3 ? r + 'viro' : r) : null))))
+      .filter((c): c is string => !!c && c !== exclude);
+    if (!candidates.length) return [];
+    const taken = await this.profileRepo.find({ where: { viroIdNormalized: In(candidates) } });
+    const takenSet = new Set(taken.filter((p) => p.userId !== userId).map((p) => p.viroIdNormalized));
+    return candidates.filter((c) => !takenSet.has(c)).slice(0, 4).map(formatViroId);
   }
 
   /** GDPR data export for the authenticated user. */

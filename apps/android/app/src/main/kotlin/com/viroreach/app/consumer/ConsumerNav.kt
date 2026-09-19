@@ -119,6 +119,8 @@ enum class ConsumerOverlay {
 
     Relationship,
 
+    FindPeople,
+
     NewGroup,
 
     GroupInfo,
@@ -184,6 +186,8 @@ fun ConsumerNav(
     var connectionsRequested by remember { mutableStateOf(false) }
 
     var groupInfoId by remember { mutableStateOf<String?>(null) }
+
+    var findPeopleQuery by remember { mutableStateOf("") }
 
     LaunchedEffect(connectionsRequested) {
         // One-shot: the Messages tab has switched to Connections by now.
@@ -313,6 +317,13 @@ fun ConsumerNav(
                 overlay = ConsumerOverlay.None
                 tab = ViroConsumerTab.Messages
                 connectionsRequested = true
+            }
+            com.viroreach.app.MainActivity.OPEN_CONNECTIONS_REQUESTS -> {
+                overlay = ConsumerOverlay.FindPeople
+            }
+            com.viroreach.app.MainActivity.OPEN_FIND_PEOPLE -> {
+                findPeopleQuery = target.query.orEmpty()
+                overlay = ConsumerOverlay.FindPeople
             }
             com.viroreach.app.MainActivity.OPEN_CHAT -> {
                 target.conversationId?.let { groupId ->
@@ -802,6 +813,38 @@ fun ConsumerNav(
 
         }
 
+        ConsumerOverlay.FindPeople -> {
+
+            com.viroreach.app.people.FindPeopleScreen(
+
+                session = session,
+
+                initialQuery = findPeopleQuery,
+
+                onBack = { overlay = ConsumerOverlay.None },
+
+                onMessage = { userId, name, avatarUrl ->
+
+                    chatRoute = ChatRoute(conversationId = null, peerName = name, peerUserId = userId, peerAvatarUrl = avatarUrl)
+
+                    overlay = ConsumerOverlay.Chat
+
+                },
+
+                onCall = { userId, name ->
+
+                    beginCall(CallPresentation(displayName = name, phoneE164 = null))
+
+                    withMic { scope.launch { runCatching { session.placeOutgoingCall(null, name, userId) } } }
+
+                },
+
+            )
+
+            return
+
+        }
+
         ConsumerOverlay.NewGroup -> {
 
             com.viroreach.app.consumer.messages.NewGroupScreen(
@@ -1076,7 +1119,15 @@ fun ConsumerNav(
 
                     },
 
-                    onStartGroupCall = { contacts ->
+                    onAddPeople = {
+
+                        findPeopleQuery = ""
+
+                        overlay = ConsumerOverlay.FindPeople
+
+                    },
+
+                onStartGroupCall = { contacts ->
 
                         session.conferenceManager.startConference(contacts)
 
@@ -1254,6 +1305,8 @@ fun ConsumerNav(
                     onBlockedContacts = { overlay = ConsumerOverlay.BlockedContacts },
 
                     onConnections = { overlay = ConsumerOverlay.Connections },
+
+                    onAddPeople = { findPeopleQuery = ""; overlay = ConsumerOverlay.FindPeople },
 
                     onDevices = { overlay = ConsumerOverlay.Devices },
 

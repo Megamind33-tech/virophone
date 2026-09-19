@@ -25,7 +25,6 @@ fun ConnectionsScreen(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    val myUserId = session.tokenStore.getUserId()
 
     suspend fun reload() {
         loading = true
@@ -60,7 +59,8 @@ fun ConnectionsScreen(
                     }
                     error != null -> Text(error!!, color = ViroColors.textSecondary)
                     connections.isEmpty() -> Text(
-                        "No connection requests yet. Invite someone from their contact page.",
+                        "No connections yet. Use Add people to find someone by their " +
+                            "Viro ID or email — useful when they have no phone number on Viro.",
                         color = ViroColors.textSecondary,
                     )
                     else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(ViroSpacing.md)) {
@@ -74,7 +74,7 @@ fun ConnectionsScreen(
                             }
                             items(incoming, key = { it.id }) { conn ->
                                 ConnectionCard(
-                                    title = peerLabel(conn, myUserId),
+                                    title = peerLabel(conn),
                                     subtitle = "Wants to connect",
                                     actions = {
                                         TextButton(onClick = {
@@ -103,7 +103,7 @@ fun ConnectionsScreen(
                             }
                             items(outgoing, key = { it.id }) { conn ->
                                 ConnectionCard(
-                                    title = peerLabel(conn, myUserId),
+                                    title = peerLabel(conn),
                                     subtitle = "Pending",
                                     actions = {
                                         TextButton(onClick = {
@@ -126,7 +126,7 @@ fun ConnectionsScreen(
                             }
                             items(accepted, key = { it.id }) { conn ->
                                 ConnectionCard(
-                                    title = peerLabel(conn, myUserId),
+                                    title = peerLabel(conn),
                                     subtitle = "Connected",
                                     actions = {
                                         TextButton(onClick = {
@@ -161,7 +161,12 @@ private fun ConnectionCard(
     }
 }
 
-private fun peerLabel(conn: ConnectionDto, myUserId: String?): String {
-    val peer = if (conn.requesterUserId == myUserId) conn.recipientUserId else conn.requesterUserId
-    return peer.take(12)
-}
+/**
+ * The other person's name. A Viro ID (an internal identifier) is never shown
+ * as a name — their handle, or a neutral label, stands in until the server
+ * sends the profile.
+ */
+private fun peerLabel(conn: ConnectionDto): String =
+    conn.peerDisplayName?.takeIf { it.isNotBlank() }
+        ?: conn.peerViroId?.takeIf { it.isNotBlank() }
+        ?: "Viro user"

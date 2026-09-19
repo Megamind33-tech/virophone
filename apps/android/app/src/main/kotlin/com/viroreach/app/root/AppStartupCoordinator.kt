@@ -5,6 +5,8 @@ enum class AppStartupState {
     Unauthenticated,
     /** Signed in, loading contacts and history before the app is shown. */
     Preparing,
+    /** Signed in, but the one-time name + Viro ID step hasn't been done. */
+    ProfileSetup,
     Authenticated,
 }
 

@@ -33,6 +33,7 @@ fun YouScreen(
     onAddPhone: () -> Unit,
     onBlockedContacts: () -> Unit,
     onConnections: () -> Unit,
+    onAddPeople: () -> Unit,
     onDevices: () -> Unit,
     onSubscription: () -> Unit,
     onHelp: () -> Unit,
@@ -121,6 +122,42 @@ fun YouScreen(
                     state.email?.takeIf { it.isNotBlank() }?.let {
                         SettingsRow(label = "Email", value = it)
                     }
+                    // How people reach this account without its phone number.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Viro ID", style = MaterialTheme.typography.bodyLarge, color = ViroColors.textPrimary)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                profile.viroId ?: "Not set",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = ViroColors.textSecondary,
+                            )
+                            profile.viroId?.let { id ->
+                                Text(
+                                    "Share",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = ViroColors.accent,
+                                    modifier = Modifier
+                                        .clickable {
+                                            val share = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                                type = "text/plain"
+                                                putExtra(
+                                                    android.content.Intent.EXTRA_TEXT,
+                                                    "Reach me on Viro: " + id + System.lineSeparator() + com.viroreach.app.people.inviteLink(id),
+                                                )
+                                            }
+                                            runCatching {
+                                                context.startActivity(android.content.Intent.createChooser(share, "Share your Viro ID"))
+                                            }
+                                        }
+                                        .padding(start = ViroSpacing.md),
+                                )
+                            }
+                        }
+                    }
                     SettingsNavRow("Subscription", onSubscription)
                 }
                 SettingsSection(title = "Preferences") {
@@ -130,7 +167,35 @@ fun YouScreen(
                     SettingsRow(label = "Notifications", value = "Coming soon")
                 }
                 SettingsSection(title = "Privacy & Security") {
+                    SettingsNavRow("Add people", onAddPeople)
                     SettingsNavRow("Connections", onConnections)
+                    // Exact-match only, and only for a verified address.
+                    val me by session.people.me.collectAsState()
+                    val findableByEmail = me?.discoverableByEmail ?: true
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Find me by email", style = MaterialTheme.typography.bodyLarge, color = ViroColors.textPrimary)
+                            Text(
+                                "People who type your exact email address can find you.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ViroColors.textSecondary,
+                            )
+                        }
+                        Switch(
+                            checked = findableByEmail,
+                            onCheckedChange = { on ->
+                                scope.launch {
+                                    session.people.update(
+                                        com.viroreach.core.network.UpdateMeBody(discoverableByEmail = on),
+                                    )
+                                }
+                            },
+                        )
+                    }
                     SettingsNavRow("Blocked contacts", onBlockedContacts)
                     SettingsNavRow("Devices", onDevices)
                 }

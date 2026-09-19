@@ -3,6 +3,9 @@ package com.viroreach.app.push
 import android.util.Log
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import com.viroreach.app.MainActivity
+import com.viroreach.app.relationships.ReminderNotifications
+import com.viroreach.app.relationships.ReminderScheduler
 import com.viroreach.app.session.SessionManager
 import com.viroreach.feature.calling.IncomingCallInfo
 import kotlinx.coroutines.CoroutineScope
@@ -47,6 +50,17 @@ class ViroFirebaseMessagingService : FirebaseMessagingService() {
             scope.launch { runCatching { session.callManager.ensureSignalingReady() } }
             return
         }
+        if (data["type"] == "connection_request" || data["type"] == "connection_accepted") {
+            val session = SessionManager.get(applicationContext)
+            scope.launch { runCatching { session.people.refreshConnections() } }
+            notifyConnection(
+                accepted = data["type"] == "connection_accepted",
+                title = message.notification?.title ?: if (data["type"] == "connection_accepted") "Connection accepted" else "Connection request",
+                body = message.notification?.body.orEmpty(),
+                key = data["connectionId"].orEmpty(),
+            )
+            return
+        }
         if (data["type"] != TYPE_INCOMING_CALL) {
             Log.i(TAG, "PUSH_IGNORED type=${data["type"]}")
             return
@@ -79,6 +93,23 @@ class ViroFirebaseMessagingService : FirebaseMessagingService() {
             runCatching { session.callManager.ensureSignalingReady() }
                 .onFailure { Log.w(TAG, "PUSH_SIGNALING_WAKE_FAILED ${it.message}") }
         }
+    }
+
+    /** A connection request, or someone accepting mine: opens Add people. */
+    private fun notifyConnection(accepted: Boolean, title: String, body: String, key: String) {
+        val intent = ReminderNotifications.openIntent(
+            applicationContext,
+            MainActivity.OPEN_CONNECTIONS_REQUESTS,
+            requestCode = ("conn:" + key).hashCode(),
+        )
+        ReminderNotifications.post(
+            context = applicationContext,
+            id = ("conn:" + key).hashCode(),
+            channel = if (accepted) ReminderScheduler.CH_LOW else ReminderScheduler.CH_NORMAL,
+            title = title,
+            body = body,
+            intent = intent,
+        )
     }
 
     companion object {
