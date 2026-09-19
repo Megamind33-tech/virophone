@@ -16,6 +16,7 @@ const EXT: Record<string, string> = {
   'image/jpeg': '.jpg',
   'image/png': '.png',
   'image/webp': '.webp',
+  'image/gif': '.gif',
 };
 
 export const ALLOWED_VOICE_MIME = new Set(Object.keys(EXT).filter((m) => m.startsWith('audio/')));

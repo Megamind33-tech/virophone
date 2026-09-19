@@ -727,6 +727,7 @@ export class RelationshipsService {
       targets: Object.values(groups).filter((g) => g.total > 0),
       achievements: achievements.all.slice(0, 20),
       newAchievements: achievements.fresh,
+      achievementProgress: achievements.progress,
       brief: this.brief(firstName, today, ctx),
       moments: this.monthMoments(evals, loops, ctx),
     };
@@ -949,6 +950,70 @@ export class RelationshipsService {
       earned.push({ key: `client_care:${lastMonth}`, title: 'Client Care', detail: `No important client went without contact in ${monthName}.` });
     }
 
+    // ---- Early achievements: earned in days, not months.
+    for (const ev of evals) {
+      const who = this.name(ev.rel);
+      const together = loops.filter((l) => ev.rel.subjectUserId && l.participants.includes(ev.rel.subjectUserId)).reduce((n, l) => n + l.completedTotal, 0);
+      if (together >= 1) earned.push({ key: `first_moment:${ev.rel.id}`, title: 'First Moment', detail: `You and ${who} completed your first Loop together.` });
+    }
+    if (onTime >= 1) earned.push({ key: 'promise_kept:1', title: 'Promise Kept', detail: 'You kept your first commitment on time.' });
+
+    // A Week Well Spent — every target met across last Monday–Sunday.
+    const lastWeekStart = addDays(weekStart(ctx.today), -7);
+    const lastWeekEnd = addDays(lastWeekStart, 6);
+    const weekly = evals.filter((e) => e.rel.targetCadence && e.rel.targetCadence !== 'MONTHLY');
+    const keptWeek = (e: typeof evals[number]) => {
+      const inWeek = [...e.days].filter((d) => d >= lastWeekStart && d <= lastWeekEnd).sort();
+      switch (e.rel.targetCadence) {
+        case 'DAILY': return inWeek.length >= 7;
+        case 'WEEKLY': return inWeek.length >= (e.rel.targetCount || 1);
+        case 'WEEKDAY': {
+          const day = addDays(lastWeekStart, ((e.rel.targetWeekday ?? 1) + 6) % 7);
+          return e.days.has(day);
+        }
+        case 'EVERY_N_DAYS': {
+          const n = e.rel.targetEveryDays || 7;
+          const before = [...e.days].filter((d) => d < lastWeekStart).sort().pop();
+          const points = [before ?? inWeek[0] ?? lastWeekStart, ...inWeek, addDays(lastWeekEnd, 1)];
+          for (let i = 1; i < points.length; i++) if (daysBetween(points[i - 1], points[i]) > n) return false;
+          return inWeek.length > 0 || (before !== undefined && daysBetween(before, lastWeekEnd) <= n);
+        }
+        default: return false;
+      }
+    };
+    // Only for relationships that already existed before that week.
+    const eligible = weekly.filter((e) => localDayKey(e.rel.createdAt, ctx.tz) <= lastWeekStart);
+    if (eligible.length > 0 && eligible.every(keptWeek)) {
+      earned.push({ key: `week_well_spent:${isoWeekKey(lastWeekStart)}`, title: 'A Week Well Spent', detail: 'You kept every target you set, all last week.' });
+    }
+
+    // ---- Progress towards the longer ones, so they are visible before they land.
+    const progress: { key: string; title: string; detail: string; done: number; total: number }[] = [];
+    const monthStart = `${ctx.today.slice(0, 7)}-01`;
+    const monthWeeks = new Set<string>();
+    for (let k = monthStart; k <= this.monthEnd(ctx.today); k = addDays(k, 1)) monthWeeks.add(isoWeekKey(k));
+    for (const ev of evals) {
+      const who = this.name(ev.rel);
+      if (ev.rel.category === 'PERSONAL') {
+        const covered = new Set([...ev.days].filter((d) => d >= monthStart).map((d) => isoWeekKey(d)));
+        const done = [...monthWeeks].filter((w) => covered.has(w)).length;
+        if (done > 0) progress.push({ key: `p:present:${ev.rel.id}`, title: 'Present', detail: `${who}: ${done} of ${monthWeeks.size} weeks this month`, done, total: monthWeeks.size });
+      }
+      let run = 0;
+      let m = ctx.today.slice(0, 7);
+      const months = new Set([...ev.days].map((d) => d.slice(0, 7)));
+      while (months.has(m) && run < 6) {
+        run++;
+        m = addDays(`${m}-01`, -1).slice(0, 7);
+      }
+      if (run > 0 && run < 6) progress.push({ key: `p:still:${ev.rel.id}`, title: 'Still Connected', detail: `${who}: ${run} of 6 months in touch`, done: run, total: 6 });
+      const together = loops.filter((l) => ev.rel.subjectUserId && l.participants.includes(ev.rel.subjectUserId)).reduce((n, l) => n + l.completedTotal, 0);
+      const next = [10, 50, 100].find((x) => together < x);
+      if (together > 0 && next) progress.push({ key: `p:moments:${ev.rel.id}`, title: 'Our Moments', detail: `${who}: ${together} of ${next} Loops`, done: together, total: next });
+    }
+    const nextReliable = [10, 25, 50].find((x) => onTime < x);
+    if (onTime > 0 && nextReliable) progress.push({ key: 'p:reliable', title: 'Reliable', detail: `${onTime} of ${nextReliable} promises kept on time`, done: onTime, total: nextReliable });
+
     const existing = await this.achRepo.find({ where: { userId: ownerId } });
     const have = new Set(existing.map((a) => a.achievementKey));
     const fresh = earned.filter((e) => !have.has(e.key));
@@ -959,6 +1024,7 @@ export class RelationshipsService {
     return {
       all: all.map((a) => ({ key: a.achievementKey, title: a.title, detail: a.detail, unlockedAt: a.unlockedAt.toISOString(), shared: a.shared })),
       fresh,
+      progress: progress.sort((a, b) => b.done / b.total - a.done / a.total).slice(0, 6),
     };
   }
 

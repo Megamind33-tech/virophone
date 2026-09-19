@@ -15,7 +15,11 @@ import {
   MessageReaction,
   MessageStar,
   MessageView,
+  PollVote,
 } from '../database/entities/messaging-extras.entity';
+import { LinkPreviewService } from './link-preview.service';
+import { GifService } from './gif.service';
+import { TranscriptionService } from './transcription.service';
 import { ViroConnection } from '../database/entities/viro-connection.entity';
 import { Profile } from '../database/entities/profile.entity';
 import { BlocksModule } from '../blocks/blocks.module';
@@ -36,12 +40,13 @@ import { PushModule } from '../push/push.module';
       MediaObject,
       ViroConnection,
       Profile,
+      PollVote,
     ]),
     BlocksModule,
     PushModule,
   ],
   controllers: [MessagesController],
-  providers: [MessagesService, MessagesSweeper, MediaStore],
+  providers: [MessagesService, MessagesSweeper, MediaStore, LinkPreviewService, GifService, TranscriptionService],
   exports: [MessagesService],
 })
 export class MessagesModule {}

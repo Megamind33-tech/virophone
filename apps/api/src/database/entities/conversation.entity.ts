@@ -17,6 +17,12 @@ export class Conversation {
   @Column({ type: 'varchar', length: 120, nullable: true })
   title!: string | null;
 
+  @Column({ type: 'varchar', length: 300, nullable: true })
+  description!: string | null;
+
+  @Column({ name: 'avatar_media_id', type: 'uuid', nullable: true })
+  avatarMediaId!: string | null;
+
   @Column({ name: 'dm_key', type: 'varchar', length: 73, nullable: true })
   dmKey!: string | null;
 

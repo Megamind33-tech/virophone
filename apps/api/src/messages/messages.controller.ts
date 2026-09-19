@@ -32,6 +32,10 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { MessagesService } from './messages.service';
+import { LinkPreviewService } from './link-preview.service';
+import { GifService } from './gif.service';
+import { TranscriptionService } from './transcription.service';
+import { IsArray, IsObject, ArrayMaxSize } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ALLOWED_IMAGE_MIME, ALLOWED_VOICE_MIME } from './media.store';
 import { ViroException } from '../common/exceptions/viro.exception';
@@ -41,13 +45,40 @@ class SendMessageDto {
   @IsString() @IsOptional() conversationId?: string;
   @IsString() @IsOptional() @MaxLength(4000) body?: string;
   @IsString() @IsOptional() @MaxLength(64) clientMsgId?: string;
-  @IsString() @IsOptional() @IsIn(['TEXT', 'VOICE', 'IMAGE', 'LOOP', 'text', 'voice', 'image', 'loop']) type?: string;
+  @IsString() @IsOptional() @IsIn(['TEXT', 'VOICE', 'IMAGE', 'LOOP', 'POLL', 'GIF', 'STICKER', 'text', 'voice', 'image', 'loop', 'poll', 'gif', 'sticker']) type?: string;
   @IsString() @IsOptional() replyToId?: string;
   @IsString() @IsOptional() mediaId?: string;
   @IsBoolean() @IsOptional() viewOnce?: boolean;
   @IsBoolean() @IsOptional() forwarded?: boolean;
   @IsISO8601() @IsOptional() deliverAt?: string;
   @IsString() @IsOptional() @MaxLength(24) effect?: string;
+  @IsObject() @IsOptional() poll?: { question: string; options: string[]; multi?: boolean };
+  @IsObject() @IsOptional() linkPreview?: { url: string; title?: string; description?: string; siteName?: string; mediaId?: string };
+  @IsObject() @IsOptional() gif?: { url: string; previewUrl?: string; width?: number; height?: number; provider?: string };
+  @IsObject() @IsOptional() sticker?: { pack: string; id: string };
+}
+
+class GroupDto {
+  @IsString() @IsNotEmpty() @MaxLength(120) title!: string;
+  @IsArray() @ArrayMaxSize(255) memberIds!: string[];
+  @IsString() @IsOptional() @MaxLength(300) description?: string;
+}
+
+class GroupPatchDto {
+  @IsString() @IsOptional() @MaxLength(120) title?: string;
+  @ValidateIf((_, v) => v !== null) @IsString() @IsOptional() @MaxLength(300) description?: string | null;
+}
+
+class MembersDto {
+  @IsArray() @ArrayMaxSize(255) userIds!: string[];
+}
+
+class RoleDto {
+  @IsString() @IsIn(['ADMIN', 'MEMBER']) role!: 'ADMIN' | 'MEMBER';
+}
+
+class VoteDto {
+  @IsArray() @ArrayMaxSize(12) options!: number[];
 }
 
 class EditMessageDto {
@@ -77,7 +108,79 @@ type AuthedReq = { user: { sub: string; deviceId: string } };
 @Controller('api/v1/messages')
 @UseGuards(JwtAuthGuard)
 export class MessagesController {
-  constructor(private readonly messagesService: MessagesService) {}
+  constructor(
+    private readonly messagesService: MessagesService,
+    private readonly linkPreviews: LinkPreviewService,
+    private readonly gifs: GifService,
+    private readonly transcripts: TranscriptionService,
+  ) {}
+
+  /** What this server can do, so the app shows only what works. */
+  @Get('features')
+  features() {
+    return { gifs: this.gifs.provider !== null, gifProvider: this.gifs.provider, transcripts: this.transcripts.enabled };
+  }
+
+  @Get('search')
+  async search(@Req() req: AuthedReq, @Query('q') q?: string, @Query('conversationId') conversationId?: string) {
+    return this.messagesService.search(req.user.sub, q || '', conversationId || undefined);
+  }
+
+  @Get('link-preview')
+  async linkPreview(@Req() req: AuthedReq, @Query('url') url?: string) {
+    return { preview: url ? await this.linkPreviews.preview(req.user.sub, url) : null };
+  }
+
+  @Get('gifs')
+  async searchGifs(@Query('q') q?: string, @Query('pos') pos?: string) {
+    return this.gifs.search(q, pos);
+  }
+
+  @Post('media/:id/transcribe')
+  async transcribe(@Req() req: AuthedReq, @Param('id') id: string) {
+    return this.transcripts.transcribe(req.user.sub, id);
+  }
+
+  // --- groups
+  @Post('groups')
+  async createGroup(@Req() req: AuthedReq, @Body() body: GroupDto) {
+    return this.messagesService.createGroup(req.user.sub, body.title, body.memberIds, body.description);
+  }
+
+  @Get('conversations/:id/members')
+  async members(@Req() req: AuthedReq, @Param('id') id: string) {
+    return this.messagesService.members(req.user.sub, id);
+  }
+
+  @Post('conversations/:id/members')
+  async addMembers(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: MembersDto) {
+    return this.messagesService.addMembers(req.user.sub, id, body.userIds);
+  }
+
+  @Delete('conversations/:id/members/:userId')
+  async removeMember(@Req() req: AuthedReq, @Param('id') id: string, @Param('userId') userId: string) {
+    return this.messagesService.removeMember(req.user.sub, id, userId);
+  }
+
+  @Put('conversations/:id/members/:userId/role')
+  async setRole(@Req() req: AuthedReq, @Param('id') id: string, @Param('userId') userId: string, @Body() body: RoleDto) {
+    return this.messagesService.setRole(req.user.sub, id, userId, body.role);
+  }
+
+  @Post('conversations/:id/leave')
+  async leave(@Req() req: AuthedReq, @Param('id') id: string) {
+    return this.messagesService.leaveGroup(req.user.sub, id);
+  }
+
+  @Patch('conversations/:id/group')
+  async updateGroup(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: GroupPatchDto) {
+    return this.messagesService.updateGroup(req.user.sub, id, body);
+  }
+
+  @Put(':id/vote')
+  async vote(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: VoteDto) {
+    return this.messagesService.vote(req.user.sub, id, body.options);
+  }
 
   @Post()
   async send(@Req() req: AuthedReq, @Body() body: SendMessageDto) {

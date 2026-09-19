@@ -66,6 +66,21 @@ export class ConversationPin {
   createdAt!: Date;
 }
 
+@Entity('poll_votes')
+export class PollVote {
+  @PrimaryColumn({ name: 'message_id', type: 'uuid' })
+  messageId!: string;
+
+  @PrimaryColumn({ name: 'user_id', type: 'uuid' })
+  userId!: string;
+
+  @PrimaryColumn({ name: 'option_index', type: 'smallint' })
+  optionIndex!: number;
+
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt!: Date;
+}
+
 @Entity('media_objects')
 export class MediaObject {
   @PrimaryGeneratedColumn('uuid')
@@ -94,6 +109,15 @@ export class MediaObject {
 
   @Column({ type: 'integer', nullable: true })
   width!: number | null;
+
+  @Column({ type: 'text', nullable: true })
+  transcript!: string | null;
+
+  @Column({ name: 'transcript_lang', type: 'varchar', length: 12, nullable: true })
+  transcriptLang!: string | null;
+
+  @Column({ name: 'transcribed_at', type: 'timestamptz', nullable: true })
+  transcribedAt!: Date | null;
 
   @Column({ type: 'integer', nullable: true })
   height!: number | null;

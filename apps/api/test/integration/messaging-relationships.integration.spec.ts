@@ -403,11 +403,93 @@ describe('Messaging v2 and relationships end-to-end', () => {
     expect(tl.body.items.some((i: any) => i.kind === 'LOOP')).toBe(true);
   });
 
+  it('runs a group: create, deliver to all, polls, admins, remove, leave', async () => {
+    if (skip()) return;
+    await connect(carol, 'carol');
+    const g = await http().post('/api/v1/messages/groups').set(as(alice)).send({ title: 'Family', memberIds: [bob.userId, carol.userId] });
+    expect(g.status).toBe(201);
+    expect(g.body.isGroup).toBe(true);
+    expect(g.body.myRole).toBe('ADMIN');
+    const gid = g.body.id;
+
+    const hello = await send(bob, { conversationId: gid, body: 'Hi everyone' });
+    await waitFor('alice', (f) => f.type === 'message.new' && (f.message as any)?.id === hello.message.id);
+    await waitFor('carol', (f) => f.type === 'message.new' && (f.message as any)?.id === hello.message.id);
+
+    const poll = await send(alice, { conversationId: gid, type: 'POLL', poll: { question: 'Sunday lunch?', options: ['Rice', 'Nshima'] } });
+    expect(poll.message.poll.options).toHaveLength(2);
+    const v1 = await http().put(`/api/v1/messages/${poll.message.id}/vote`).set(as(bob)).send({ options: [1] });
+    expect(v1.body.poll.options[1].votes).toBe(1);
+    expect(v1.body.poll.myVotes).toEqual([1]);
+    await http().put(`/api/v1/messages/${poll.message.id}/vote`).set(as(carol)).send({ options: [0, 1] }).expect(400);
+    const v2 = await http().put(`/api/v1/messages/${poll.message.id}/vote`).set(as(carol)).send({ options: [1] });
+    expect(v2.body.poll.totalVoters).toBe(2);
+
+    // Only admins manage members.
+    await http().delete(`/api/v1/messages/conversations/${gid}/members/${alice.userId}`).set(as(bob)).expect(403);
+    await http().put(`/api/v1/messages/conversations/${gid}/members/${bob.userId}/role`).set(as(alice)).send({ role: 'ADMIN' }).expect(200);
+    const members = await http().delete(`/api/v1/messages/conversations/${gid}/members/${carol.userId}`).set(as(bob));
+    expect(members.body.map((m: any) => m.userId)).not.toContain(carol.userId);
+    await waitFor('carol', (f) => f.type === 'conversation.erased' && f.conversationId === gid);
+    await send(carol, { conversationId: gid, body: 'still here?' }).then(
+      () => { throw new Error('removed member could send'); },
+      (e) => expect(String(e)).toMatch(/403/),
+    );
+
+    // The last admin leaving hands the group on.
+    await http().post(`/api/v1/messages/conversations/${gid}/leave`).set(as(alice)).expect(201);
+    const after = await http().get(`/api/v1/messages/conversations/${gid}/members`).set(as(bob));
+    expect(after.body).toHaveLength(1);
+    expect(after.body[0].role).toBe('ADMIN');
+    const hist = await history(bob, gid);
+    expect(hist.filter((m) => m.type === 'SYSTEM').map((m) => m.metadata.event)).toEqual(
+      expect.arrayContaining(['group_created', 'group_removed', 'group_left']),
+    );
+  });
+
+  it('searches messages the user can see', async () => {
+    if (skip()) return;
+    const s = await send(alice, { toUserId: bob.userId, body: 'The quotation for Kafue is ready' });
+    const found = await http().get('/api/v1/messages/search').query({ q: 'kafue' }).set(as(bob));
+    expect(found.body.map((m: any) => m.id)).toContain(s.message.id);
+    const outsider = await http().get('/api/v1/messages/search').query({ q: 'kafue' }).set(as(carol));
+    expect(outsider.body).toHaveLength(0);
+  });
+
+  it('sends stickers and provider GIFs, refuses anything else', async () => {
+    if (skip()) return;
+    const st = await send(alice, { toUserId: bob.userId, type: 'STICKER', body: '🥰', sticker: { pack: 'love', id: 'hug' } });
+    expect(st.message.metadata.sticker).toEqual({ pack: 'love', id: 'hug' });
+    const gif = await send(alice, { toUserId: bob.userId, type: 'GIF', gif: { url: 'https://media.giphy.com/media/abc/giphy.gif', width: 200, height: 150 } });
+    expect(gif.message.metadata.gif.url).toContain('giphy.com');
+    await http().post('/api/v1/messages').set(as(alice)).send({
+      toUserId: bob.userId, type: 'GIF', clientMsgId: 'evil', gif: { url: 'https://evil.example.com/x.gif' },
+    }).expect(400);
+  });
+
+  it('reports which optional features are switched on', async () => {
+    if (skip()) return;
+    const f = await http().get('/api/v1/messages/features').set(as(alice));
+    expect(f.body).toEqual(expect.objectContaining({ gifs: false, transcripts: false }));
+    await http().get('/api/v1/messages/gifs').query({ q: 'cat' }).set(as(alice)).expect(503);
+  });
+
+  it('awards early achievements and shows progress', async () => {
+    if (skip()) return;
+    const ov = await http().get('/api/v1/relationships/overview').set(as(alice));
+    const keys = ov.body.achievements.map((a: any) => a.key);
+    expect(keys).toEqual(expect.arrayContaining(['promise_kept:1']));
+    expect(keys.some((k: string) => k.startsWith('first_moment:'))).toBe(true);
+    expect(Array.isArray(ov.body.achievementProgress)).toBe(true);
+  });
+
   it('erase & disconnect removes every shared conversation for both', async () => {
     if (skip()) return;
     await http().post(`/api/v1/messages/erase-with/${bob.userId}`).set(as(alice)).expect(201);
     await waitFor('bob', (f) => f.type === 'conversation.erased' && f.conversationId === cid);
-    expect((await http().get('/api/v1/messages/conversations').set(as(bob))).body).toHaveLength(0);
-    expect((await http().get('/api/v1/messages/conversations').set(as(alice))).body).toHaveLength(0);
+    // One-to-one and private chats go; groups they share are not theirs alone to erase.
+    const oneToOne = (list: any[]) => list.filter((c) => !c.isGroup);
+    expect(oneToOne((await http().get('/api/v1/messages/conversations').set(as(bob))).body)).toHaveLength(0);
+    expect(oneToOne((await http().get('/api/v1/messages/conversations').set(as(alice))).body)).toHaveLength(0);
   });
 });

@@ -98,6 +98,11 @@ services:
       OTP_EMAIL_MAP: ${OTP_EMAIL_MAP:-}
       AVATAR_UPLOAD_DIR: /app/uploads/avatars
       MEDIA_UPLOAD_DIR: /app/uploads/media
+      # Voice-note transcripts: the self-hosted speech model below.
+      WHISPER_URL: ${WHISPER_URL:-http://whisper:9000}
+      # GIF search switches on when either key is set in .env.vps.
+      GIPHY_API_KEY: ${GIPHY_API_KEY:-}
+      TENOR_API_KEY: ${TENOR_API_KEY:-}
       # Push. The service-account key is MOUNTED rather than inlined as JSON:
       # a key with embedded newlines in an env file that is both sourced by bash
       # and parsed by compose is a reliable way to ship a subtly corrupt secret.
@@ -120,6 +125,26 @@ services:
       timeout: 5s
       retries: 5
       start_period: 45s
+    networks:
+      - viro_reach_internal
+
+  # Voice-note transcripts. Whisper ("base", faster-whisper, int8 on CPU) on
+  # this server, so audio is never sent to a third party. Reachable only on
+  # the internal network, and capped so a burst of transcripts cannot starve
+  # the calls or the other apps sharing this host. The model is downloaded
+  # once into the volume.
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    container_name: viro-reach-whisper
+    restart: unless-stopped
+    environment:
+      ASR_ENGINE: faster_whisper
+      ASR_MODEL: ${WHISPER_MODEL:-base}
+      ASR_MODEL_PATH: /data/whisper
+    volumes:
+      - viro_reach_whisper:/data/whisper
+    cpus: 2
+    mem_limit: 1800m
     networks:
       - viro_reach_internal
 
@@ -197,4 +222,5 @@ volumes:
   viro_reach_caddy_data:
   viro_reach_caddy_config:
   viro_reach_avatars:
+  viro_reach_whisper:
   viro_reach_media:

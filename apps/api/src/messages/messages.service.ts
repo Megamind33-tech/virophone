@@ -12,6 +12,7 @@ import {
   MessageReaction,
   MessageStar,
   MessageView,
+  PollVote,
 } from '../database/entities/messaging-extras.entity';
 import { ViroConnection } from '../database/entities/viro-connection.entity';
 import { Profile } from '../database/entities/profile.entity';
@@ -43,7 +44,22 @@ export interface SendMessageInput {
   forwarded?: boolean;
   deliverAt?: string;
   effect?: string;
+  poll?: { question: string; options: string[]; multi?: boolean };
+  linkPreview?: { url: string; title?: string; description?: string; siteName?: string; mediaId?: string };
+  gif?: { url: string; previewUrl?: string; width?: number; height?: number; provider?: string };
+  sticker?: { pack: string; id: string };
 }
+
+export interface PollDto {
+  question: string;
+  multi: boolean;
+  options: { text: string; votes: number; voters: string[] }[];
+  totalVoters: number;
+  myVotes: number[];
+}
+
+/** GIFs play straight from the provider's CDN; nothing else is accepted. */
+const GIF_HOSTS = /^https:\/\/([a-z0-9-]+\.)*(giphy\.com|tenor\.com)\//i;
 
 export interface MediaDto {
   id: string;
@@ -54,6 +70,8 @@ export interface MediaDto {
   waveform: string | null;
   width: number | null;
   height: number | null;
+  transcript: string | null;
+  transcriptLang: string | null;
 }
 
 export interface ReplyPreviewDto {
@@ -86,6 +104,7 @@ export interface MessageDto {
   forwarded: boolean;
   starred: boolean;
   metadata: Record<string, unknown> | null;
+  poll: PollDto | null;
 }
 
 export interface ConversationSummaryDto {
@@ -104,6 +123,8 @@ export interface ConversationSummaryDto {
   resetAt: string | null;
   disappearingSeconds: number | null;
   expiresAt: string | null;
+  description: string | null;
+  myRole: string;
   /** Read/delivery watermarks of the OTHER participants, for ticks. */
   peerLastReadAt: string | null;
   peerLastDeliveredAt: string | null;
@@ -155,6 +176,8 @@ export class MessagesService {
     private readonly connectionRepo: Repository<ViroConnection>,
     @InjectRepository(Profile)
     private readonly profileRepo: Repository<Profile>,
+    @InjectRepository(PollVote)
+    private readonly pollRepo: Repository<PollVote>,
     private readonly blocksService: BlocksService,
     private readonly pushService: PushService,
     private readonly realtime: RealtimeRegistry,
@@ -234,6 +257,8 @@ export class MessagesService {
     const ids = msgs.map((m) => m.id);
     const replyIds = [...new Set(msgs.map((m) => m.replyToId).filter((x): x is string => !!x))];
     const mediaIds = [...new Set(msgs.map((m) => m.mediaId).filter((x): x is string => !!x))];
+    const pollIds = msgs.filter((m) => m.type === 'POLL').map((m) => m.id);
+    const votes = pollIds.length ? await this.pollRepo.find({ where: { messageId: In(pollIds) } }) : [];
     const [reactions, replies, media, views, stars] = await Promise.all([
       this.reactionRepo.find({ where: { messageId: In(ids) } }),
       replyIds.length ? this.msgRepo.find({ where: { id: In(replyIds) } }) : Promise.resolve([]),
@@ -292,8 +317,24 @@ export class MessagesService {
         forwarded: m.forwarded,
         starred: starred.has(m.id),
         metadata: m.metadata,
+        poll: m.type === 'POLL' && !deleted ? this.pollDto(m, votes.filter((v) => v.messageId === m.id), viewerId) : null,
       };
     });
+  }
+
+  private pollDto(m: Message, votes: PollVote[], viewerId: string): PollDto | null {
+    const p = (m.metadata?.poll ?? null) as { question?: string; options?: string[]; multi?: boolean } | null;
+    if (!p?.question || !Array.isArray(p.options)) return null;
+    return {
+      question: p.question,
+      multi: !!p.multi,
+      options: p.options.map((text, i) => {
+        const on = votes.filter((v) => v.optionIndex === i);
+        return { text, votes: on.length, voters: on.map((v) => v.userId) };
+      }),
+      totalVoters: new Set(votes.map((v) => v.userId)).size,
+      myVotes: votes.filter((v) => v.userId === viewerId).map((v) => v.optionIndex).sort((a, b) => a - b),
+    };
   }
 
   /** Sends one frame, hydrated for each participant, to all of their devices. */
@@ -322,9 +363,12 @@ export class MessagesService {
         // The sender's own name as they set it; the phone shows its saved
         // contact name instead once the app is open.
         const sender = await this.profileRepo.findOne({ where: { userId: message.senderUserId } });
+        const senderName = sender?.displayName?.trim() || 'Someone';
+        const conv = await this.convRepo.findOne({ where: { id: message.conversationId } });
+        const group = conv?.isGroup ? conv.title || 'Group' : null;
         await this.pushService.sendToUser(uid, {
-          title: sender?.displayName?.trim() || 'New message',
-          body: this.pushPreview(message),
+          title: group ?? (sender?.displayName?.trim() || 'New message'),
+          body: group ? `${senderName}: ${this.pushPreview(message)}` : this.pushPreview(message),
           data: {
             type: 'message',
             conversationId: message.conversationId,
@@ -341,6 +385,9 @@ export class MessagesService {
     if (m.type === 'VOICE') return '🎤 Voice message';
     if (m.type === 'IMAGE') return m.body ? `📷 ${m.body.slice(0, 100)}` : '📷 Photo';
     if (m.type === 'LOOP') return 'Answered a Loop';
+    if (m.type === 'POLL') return `📊 ${(m.metadata?.poll as { question?: string })?.question ?? 'Poll'}`;
+    if (m.type === 'GIF') return 'GIF';
+    if (m.type === 'STICKER') return `${m.body ?? ''} Sticker`.trim();
     return (m.body || '').slice(0, 120);
   }
 
@@ -355,7 +402,7 @@ export class MessagesService {
 
   async sendMessage(senderId: string, senderDeviceId: string | null, input: SendMessageInput) {
     const type = (input.type || 'TEXT').toUpperCase();
-    if (!['TEXT', 'VOICE', 'IMAGE', 'LOOP'].includes(type)) {
+    if (!['TEXT', 'VOICE', 'IMAGE', 'LOOP', 'POLL', 'GIF', 'STICKER'].includes(type)) {
       this.fail('VALIDATION_ERROR', 'Unsupported message type.', HttpStatus.BAD_REQUEST);
     }
     const body = (input.body || '').trim();
@@ -364,6 +411,21 @@ export class MessagesService {
     }
     if ((type === 'VOICE' || type === 'IMAGE') && !input.mediaId) {
       this.fail('VALIDATION_ERROR', 'This message needs its file.', HttpStatus.BAD_REQUEST);
+    }
+    let poll: { question: string; options: string[]; multi: boolean } | null = null;
+    if (type === 'POLL') {
+      const question = (input.poll?.question || '').trim().slice(0, 200);
+      const options = (input.poll?.options || []).map((o) => String(o).trim().slice(0, 100)).filter(Boolean);
+      if (!question || options.length < 2 || options.length > 12 || new Set(options).size !== options.length) {
+        this.fail('VALIDATION_ERROR', 'A poll needs a question and 2 to 12 different options.', HttpStatus.BAD_REQUEST);
+      }
+      poll = { question, options, multi: !!input.poll?.multi };
+    }
+    if (type === 'GIF' && !(input.gif?.url && GIF_HOSTS.test(input.gif.url))) {
+      this.fail('VALIDATION_ERROR', 'Unsupported GIF.', HttpStatus.BAD_REQUEST);
+    }
+    if (type === 'STICKER' && !(input.sticker?.pack && input.sticker?.id && body)) {
+      this.fail('VALIDATION_ERROR', 'Unsupported sticker.', HttpStatus.BAD_REQUEST);
     }
 
     let conversation: Conversation;
@@ -381,7 +443,9 @@ export class MessagesService {
     } else {
       this.fail('VALIDATION_ERROR', 'toUserId or conversationId is required.', HttpStatus.BAD_REQUEST);
     }
-    for (const rid of recipientIds) {
+    // A block stops two people messaging each other directly; it does not
+    // silence someone in a group they both belong to.
+    for (const rid of conversation.isGroup ? [] : recipientIds) {
       if (await this.blocksService.isBlocked(senderId, rid)) {
         this.fail('FORBIDDEN', 'This person is unavailable.', HttpStatus.FORBIDDEN);
       }
@@ -433,6 +497,30 @@ export class MessagesService {
 
     const metadata: Record<string, unknown> = {};
     if (input.effect && /^[a-z_]{1,24}$/.test(input.effect)) metadata.effect = input.effect;
+    if (poll) metadata.poll = poll;
+    if (type === 'GIF' && input.gif) {
+      const n = (v: unknown) => (typeof v === 'number' && v > 0 && v < 5000 ? Math.round(v) : null);
+      metadata.gif = {
+        url: input.gif.url,
+        previewUrl: input.gif.previewUrl && GIF_HOSTS.test(input.gif.previewUrl) ? input.gif.previewUrl : input.gif.url,
+        width: n(input.gif.width),
+        height: n(input.gif.height),
+        provider: (input.gif.provider || '').slice(0, 16),
+      };
+    }
+    if (type === 'STICKER' && input.sticker) {
+      metadata.sticker = { pack: String(input.sticker.pack).slice(0, 24), id: String(input.sticker.id).slice(0, 24) };
+    }
+    if (input.linkPreview?.url && /^https?:\/\//i.test(input.linkPreview.url) && type === 'TEXT') {
+      const lp = input.linkPreview;
+      metadata.linkPreview = {
+        url: lp.url.slice(0, 1000),
+        title: lp.title?.slice(0, 200) ?? null,
+        description: lp.description?.slice(0, 400) ?? null,
+        siteName: lp.siteName?.slice(0, 80) ?? null,
+        mediaId: lp.mediaId && /^[0-9a-f-]{36}$/i.test(lp.mediaId) ? lp.mediaId : null,
+      };
+    }
 
     const now = new Date();
     const message = await this.msgRepo.save(
@@ -660,6 +748,8 @@ export class MessagesService {
       resetAt: iso(conv.resetAt),
       disappearingSeconds: conv.disappearingSeconds,
       expiresAt: iso(conv.expiresAt),
+      description: conv.description,
+      myRole: part.role,
       peerLastReadAt: iso(minOf(others.map((o) => o.lastReadAt))),
       peerLastDeliveredAt: iso(minOf(others.map((o) => o.lastDeliveredAt ?? o.lastReadAt))),
       pinnedMessageIds: pins.map((p) => p.messageId),
@@ -1036,6 +1126,7 @@ export class MessagesService {
         break;
       }
       if (!allowed) allowed = await this.loopMediaAllowed(userId, mediaId);
+      if (!allowed) allowed = await this.sharedMediaAllowed(userId, mediaId);
       if (!allowed) return null;
     }
     const path = this.mediaStore.pathFor(media.fileName);
@@ -1052,11 +1143,24 @@ export class MessagesService {
       waveform: mo.waveform,
       width: mo.width,
       height: mo.height,
+      transcript: mo.transcript ?? null,
+      transcriptLang: mo.transcriptLang ?? null,
     };
   }
 
   async deleteMediaIds(ids: string[]) {
     return this.deleteMedia(ids);
+  }
+
+  /** Link-preview thumbnails and group photos: visible to the conversation's members. */
+  private async sharedMediaAllowed(userId: string, mediaId: string): Promise<boolean> {
+    const rows: { conversation_id: string }[] = await this.msgRepo.query(
+      `SELECT conversation_id FROM messages WHERE metadata -> 'linkPreview' ->> 'mediaId' = $1::text AND deleted_at IS NULL
+       UNION SELECT id AS conversation_id FROM conversations WHERE avatar_media_id::text = $1::text LIMIT 20`,
+      [mediaId],
+    );
+    for (const r of rows) if (await this.isMember(r.conversation_id, userId)) return true;
+    return false;
   }
 
   /** A Loop answer's attachment follows the Loop's reveal rule. */
@@ -1082,6 +1186,207 @@ export class MessagesService {
     const rows = await this.mediaRepo.find({ where: { id: In(ids) } });
     for (const r of rows) this.mediaStore.remove(r.fileName);
     await this.mediaRepo.delete({ id: In(ids) });
+  }
+
+  // -------------------------------------------------------------- groups
+
+  private async namesOf(userIds: string[]): Promise<string> {
+    if (userIds.length === 0) return '';
+    const profiles = await this.profileRepo.find({ where: { userId: In(userIds) } });
+    const names = userIds.map((id) => profiles.find((p) => p.userId === id)?.displayName?.trim() || 'someone');
+    return names.length <= 3 ? names.join(', ') : `${names.slice(0, 3).join(', ')} and ${names.length - 3} more`;
+  }
+
+  private async existingUsers(ids: string[]): Promise<string[]> {
+    if (ids.length === 0) return [];
+    const rows: { id: string }[] = await this.msgRepo.query(
+      `SELECT id FROM users WHERE id = ANY($1) AND status = 'ACTIVE'`,
+      [ids],
+    );
+    return rows.map((r) => r.id);
+  }
+
+  private async groupAsAdmin(userId: string, conversationId: string) {
+    const part = await this.assertMember(conversationId, userId);
+    const conv = await this.loadConversation(conversationId);
+    if (!conv.isGroup) this.fail('VALIDATION_ERROR', 'Not a group.', HttpStatus.BAD_REQUEST);
+    if (part.role !== 'ADMIN') this.fail('FORBIDDEN', 'Only group admins can do that.', HttpStatus.FORBIDDEN);
+    return conv;
+  }
+
+  async createGroup(creatorId: string, title: string, memberIds: string[], description?: string) {
+    const name = (title || '').trim().slice(0, 120);
+    if (!name) this.fail('VALIDATION_ERROR', 'Give the group a name.', HttpStatus.BAD_REQUEST);
+    const wanted = [...new Set((memberIds || []).filter((id) => id && id !== creatorId))];
+    if (wanted.length > 255) this.fail('VALIDATION_ERROR', 'A group can have up to 256 people.', HttpStatus.BAD_REQUEST);
+    const members = await this.existingUsers(wanted);
+    if (members.length === 0) this.fail('VALIDATION_ERROR', 'Add at least one person on Viro.', HttpStatus.BAD_REQUEST);
+    const conv = await this.convRepo.save(
+      this.convRepo.create({
+        isGroup: true,
+        kind: 'GROUP',
+        title: name,
+        description: description?.trim().slice(0, 300) || null,
+        createdBy: creatorId,
+      }),
+    );
+    await this.partRepo.save([
+      this.partRepo.create({ conversationId: conv.id, userId: creatorId, role: 'ADMIN' }),
+      ...members.map((userId) => this.partRepo.create({ conversationId: conv.id, userId, role: 'MEMBER' })),
+    ]);
+    await this.postSystem(conv.id, creatorId, 'group_created', `created the group “${name}”`);
+    const part = (await this.partRepo.findOne({ where: { conversationId: conv.id, userId: creatorId } }))!;
+    return this.summarize(creatorId, conv, part);
+  }
+
+  async addMembers(adminId: string, conversationId: string, userIds: string[]) {
+    await this.groupAsAdmin(adminId, conversationId);
+    const current = new Set(await this.participantIds(conversationId));
+    const fresh = await this.existingUsers([...new Set(userIds)].filter((id) => !current.has(id)));
+    if (fresh.length === 0) return this.members(adminId, conversationId);
+    if (current.size + fresh.length > 256) this.fail('VALIDATION_ERROR', 'A group can have up to 256 people.', HttpStatus.BAD_REQUEST);
+    await this.partRepo.save(fresh.map((userId) => this.partRepo.create({ conversationId, userId, role: 'MEMBER' })));
+    await this.postSystem(conversationId, adminId, 'group_added', `added ${await this.namesOf(fresh)}`);
+    return this.members(adminId, conversationId);
+  }
+
+  async removeMember(adminId: string, conversationId: string, userId: string) {
+    if (adminId === userId) return this.leaveGroup(adminId, conversationId);
+    await this.groupAsAdmin(adminId, conversationId);
+    const removed = await this.partRepo.delete({ conversationId, userId });
+    if (!removed.affected) return this.members(adminId, conversationId);
+    await this.postSystem(conversationId, adminId, 'group_removed', `removed ${await this.namesOf([userId])}`);
+    // Gone from their list at once, not at their next sync.
+    await this.emitFrame([userId], { type: 'conversation.erased', conversationId });
+    return this.members(adminId, conversationId);
+  }
+
+  async leaveGroup(userId: string, conversationId: string) {
+    const part = await this.assertMember(conversationId, userId);
+    const conv = await this.loadConversation(conversationId);
+    if (!conv.isGroup) this.fail('VALIDATION_ERROR', 'Not a group.', HttpStatus.BAD_REQUEST);
+    await this.partRepo.delete({ conversationId, userId });
+    await this.emitFrame([userId], { type: 'conversation.erased', conversationId });
+    const rest = await this.partRepo.find({ where: { conversationId }, order: { joinedAt: 'ASC' } });
+    if (rest.length === 0) {
+      await this.eraseConversation(conversationId, []);
+      return { ok: true };
+    }
+    // A group is never left without an admin.
+    if (part.role === 'ADMIN' && !rest.some((p) => p.role === 'ADMIN')) {
+      rest[0].role = 'ADMIN';
+      await this.partRepo.save(rest[0]);
+    }
+    await this.postSystem(conversationId, userId, 'group_left', 'left');
+    return { ok: true };
+  }
+
+  async updateGroup(adminId: string, conversationId: string, patch: { title?: string; description?: string | null }) {
+    const conv = await this.groupAsAdmin(adminId, conversationId);
+    const title = patch.title?.trim().slice(0, 120);
+    if (title && title !== conv.title) {
+      conv.title = title;
+      await this.convRepo.save(conv);
+      await this.postSystem(conversationId, adminId, 'group_renamed', `changed the group name to “${title}”`);
+    }
+    if (patch.description !== undefined) {
+      conv.description = patch.description?.trim().slice(0, 300) || null;
+      await this.convRepo.save(conv);
+      await this.emitFrame(await this.participantIds(conversationId), { type: 'conversation.changed', conversationId });
+    }
+    return this.conversationSummary(adminId, conversationId);
+  }
+
+  async setRole(adminId: string, conversationId: string, userId: string, role: 'ADMIN' | 'MEMBER') {
+    await this.groupAsAdmin(adminId, conversationId);
+    const part = await this.partRepo.findOne({ where: { conversationId, userId } });
+    if (!part) this.fail('NOT_FOUND', 'Not in this group.', HttpStatus.NOT_FOUND);
+    if (role === 'MEMBER') {
+      const admins = await this.partRepo.count({ where: { conversationId, role: 'ADMIN' } });
+      if (part.role === 'ADMIN' && admins <= 1) this.fail('VALIDATION_ERROR', 'A group needs at least one admin.', HttpStatus.BAD_REQUEST);
+    }
+    part.role = role;
+    await this.partRepo.save(part);
+    if (role === 'ADMIN') await this.postSystem(conversationId, adminId, 'group_admin', `made ${await this.namesOf([userId])} an admin`);
+    await this.emitFrame(await this.participantIds(conversationId), { type: 'conversation.changed', conversationId });
+    return this.members(adminId, conversationId);
+  }
+
+  async members(userId: string, conversationId: string) {
+    await this.assertMember(conversationId, userId);
+    const parts = await this.partRepo.find({ where: { conversationId }, order: { joinedAt: 'ASC' } });
+    const profiles = await this.profileRepo.find({ where: { userId: In(parts.map((p) => p.userId)) } });
+    return parts.map((p) => ({
+      userId: p.userId,
+      role: p.role,
+      displayName: profiles.find((x) => x.userId === p.userId)?.displayName ?? null,
+      joinedAt: iso(p.joinedAt),
+    }));
+  }
+
+  // --------------------------------------------------------------- polls
+
+  async vote(userId: string, messageId: string, options: number[]) {
+    const m = await this.ownMessage(userId, messageId);
+    if (m.type !== 'POLL' || m.deletedAt) this.fail('VALIDATION_ERROR', 'Not a poll.', HttpStatus.BAD_REQUEST);
+    const poll = m.metadata?.poll as { options?: string[]; multi?: boolean } | undefined;
+    const count = poll?.options?.length ?? 0;
+    const chosen = [...new Set((options || []).map((o) => Math.floor(Number(o))))];
+    if (chosen.some((i) => !(i >= 0 && i < count))) this.fail('VALIDATION_ERROR', 'Invalid option.', HttpStatus.BAD_REQUEST);
+    if (!poll?.multi && chosen.length > 1) this.fail('VALIDATION_ERROR', 'Choose one option.', HttpStatus.BAD_REQUEST);
+    await this.pollRepo.delete({ messageId: m.id, userId });
+    if (chosen.length) {
+      await this.pollRepo.save(chosen.map((optionIndex) => this.pollRepo.create({ messageId: m.id, userId, optionIndex })));
+    }
+    m.updatedAt = new Date();
+    await this.msgRepo.update({ id: m.id }, { updatedAt: m.updatedAt });
+    await this.emitMessage('message.updated', m, await this.participantIds(m.conversationId));
+    return (await this.hydrate(userId, [m]))[0];
+  }
+
+  // -------------------------------------------------------------- search
+
+  /** Text search across the user's conversations (or one), newest first. */
+  async search(userId: string, q: string, conversationId?: string) {
+    const term = (q || '').trim();
+    if (term.length < 2) return [];
+    const parts = await this.partRepo.find({ where: { userId } });
+    let ids = parts.map((p) => p.conversationId);
+    if (conversationId) ids = ids.filter((id) => id === conversationId);
+    if (ids.length === 0) return [];
+    const like = `%${term.replace(/[\\%_]/g, (c) => `\\${c}`).slice(0, 100)}%`;
+    const rows = await this.msgRepo
+      .createQueryBuilder('m')
+      .where('m.conversation_id IN (:...ids)', { ids })
+      .andWhere('m.deleted_at IS NULL')
+      .andWhere("m.type IN ('TEXT','IMAGE','POLL')")
+      .andWhere("(m.body ILIKE :like OR (m.metadata -> 'poll' ->> 'question') ILIKE :like)", { like })
+      .andWhere('(m.deliver_at IS NULL OR m.sender_user_id = :uid)', { uid: userId })
+      .andWhere('(m.view_once = FALSE)')
+      .andWhere('NOT EXISTS (SELECT 1 FROM message_hidden h WHERE h.message_id = m.id AND h.user_id = :uid)', { uid: userId })
+      .orderBy('m.created_at', 'DESC')
+      .take(60)
+      .getMany();
+    const convs = await this.convRepo.find({ where: { id: In(ids) } });
+    const visible = rows.filter((m) =>
+      this.visibleTo(m, userId, parts.find((p) => p.conversationId === m.conversationId), convs.find((c) => c.id === m.conversationId)),
+    );
+    return this.hydrate(userId, visible);
+  }
+
+  async setTranscript(mediaId: string, text: string, lang: string | null) {
+    await this.mediaRepo.update({ id: mediaId }, { transcript: text, transcriptLang: lang, transcribedAt: new Date() });
+    // Touch the messages that carry it so every device picks the text up on sync.
+    const msgs = await this.msgRepo.find({ where: { mediaId } });
+    for (const m of msgs) {
+      m.updatedAt = new Date();
+      await this.msgRepo.update({ id: m.id }, { updatedAt: m.updatedAt });
+      await this.emitMessage('message.updated', m, await this.participantIds(m.conversationId));
+    }
+  }
+
+  async media(mediaId: string) {
+    return this.mediaRepo.findOne({ where: { id: mediaId } });
   }
 
   /** Chat "typing…" / "recording voice…" relay, validated against membership. */
