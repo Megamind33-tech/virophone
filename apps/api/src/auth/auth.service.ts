@@ -26,6 +26,7 @@ import { normalizeE164, isValidE164 } from '../common/utils/phone.util';
 import { hashPhoneForStorage, hashRefreshToken } from '../common/utils/hash.util';
 import { SecurityService } from '../security/security.service';
 import { FirebaseAuthService } from './firebase-auth.service';
+import { AccountMergeService } from './account-merge.service';
 import { HttpStatus } from '@nestjs/common';
 
 @Injectable()
@@ -46,6 +47,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly securityService: SecurityService,
     private readonly firebaseAuthService: FirebaseAuthService,
+    private readonly accountMergeService: AccountMergeService,
   ) {}
 
   async requestOtp(phoneE164: string): Promise<{ challengeId: string; expiresAt: string }> {
@@ -511,50 +513,26 @@ export class AuthService {
       return { outcome: 'linked', phoneE164: phoneNumber, userId };
     }
 
-    // Belongs to another account: only safe to consolidate when the account
-    // doing the linking has nothing that a merge could destroy.
-    if (await this.accountHasHistory(userId)) {
-      throw new ViroException(
-        'VALIDATION_ERROR',
-        'That number belongs to another Viro account with call or message history. ' +
-          'Sign in with that number instead, or contact support to merge them.',
-        HttpStatus.CONFLICT,
-      );
-    }
-
+    // The number belongs to another account. Both accounts are the same person
+    // — they just proved they hold the number — so they are consolidated rather
+    // than kept apart. The phone account survives because it is the one reachable
+    // by contact discovery, which is what everyone else uses to find them.
+    //
+    // This is destructive and has no undo. It runs in a single transaction, so a
+    // failure leaves both accounts untouched rather than half-merged.
     const targetUserId = existing.userId;
-    const emailIdentity = await this.emailRepo.findOne({ where: { userId } });
-    if (emailIdentity) {
-      const clash = await this.emailRepo.findOne({ where: { userId: targetUserId } });
-      if (clash && clash.email !== emailIdentity.email) {
-        throw new ViroException(
-          'VALIDATION_ERROR',
-          'That number belongs to an account that already uses a different email address.',
-          HttpStatus.CONFLICT,
-        );
-      }
-      if (clash) {
-        await this.emailRepo.delete({ id: emailIdentity.id });
-      } else {
-        // Both sign-in methods now reach the same user.
-        emailIdentity.userId = targetUserId;
-        await this.emailRepo.save(emailIdentity);
-      }
-    }
-
-    // Remove the empty account rather than orphan it; cascades clear its
-    // profile, devices and sessions.
-    await this.userRepo.delete({ id: userId });
+    const mergeSummary = await this.accountMergeService.merge(targetUserId, userId);
     await this.securityService.logEvent({
       userId: targetUserId,
-      eventType: 'PHONE_LINKED',
-      severity: 'MEDIUM',
+      eventType: 'ACCOUNT_MERGED',
+      severity: 'HIGH',
       metadata: {
+        mergedUserId: userId,
         phone: maskPhoneForSecurityLog(phoneNumber),
-        adoptedFromUserId: userId,
+        moved: mergeSummary.moved,
+        dropped: mergeSummary.dropped,
       },
     });
-
     // A session for the account they are now signed in as. Without this the
     // client keeps a token for a user id that no longer exists.
     const device = this.deviceRepo.create({
@@ -571,6 +549,11 @@ export class AuthService {
   /**
    * Whether an account holds anything a merge could destroy. Deliberately
    * conservative: one call or one matched contact is enough to refuse.
+   */
+  /**
+   * Whether an account holds anything at all. No longer gates the merge — it
+   * decides which outcome is reported, so the client can tell the user their
+   * accounts were combined rather than silently switching them over.
    */
   private async accountHasHistory(userId: string): Promise<boolean> {
     // Reached through the EntityManager the repositories already share, rather

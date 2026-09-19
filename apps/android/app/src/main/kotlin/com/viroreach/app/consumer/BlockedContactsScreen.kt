@@ -148,6 +148,15 @@ fun BlockedContactsScreen(
                         items(blocked, key = { "b-" + it.key }) { entry ->
                             RestrictedRow(
                                 name = entry.name,
+                                // A Viro user is refused server-side: they cannot
+                                // call or message this account at all. Someone not
+                                // on Viro has nothing to be refused yet, so the
+                                // block is held ready for if they join.
+                                subtitle = if (entry.userId != null) {
+                                    "On Viro — calls and messages refused"
+                                } else {
+                                    "Not on Viro yet — will apply if they join"
+                                },
                                 actionLabel = "Unblock",
                                 onAction = {
                                     scope.launch {
@@ -178,6 +187,7 @@ fun BlockedContactsScreen(
                         items(spam, key = { "s-" + it.key }) { entry ->
                             RestrictedRow(
                                 name = entry.name,
+                                subtitle = if (entry.userId != null) "On Viro" else "Not on Viro",
                                 actionLabel = "Not spam",
                                 onAction = {
                                     scope.launch {
@@ -208,6 +218,7 @@ private fun SectionHeading(title: String, count: Int) {
 @Composable
 private fun RestrictedRow(
     name: String,
+    subtitle: String,
     actionLabel: String,
     onAction: () -> Unit,
 ) {
@@ -217,12 +228,18 @@ private fun RestrictedRow(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                name,
-                color = ViroColors.textPrimary,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.weight(1f),
-            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    name,
+                    color = ViroColors.textPrimary,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    subtitle,
+                    color = ViroColors.textSecondary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             TextButton(onClick = onAction) {
                 Text(actionLabel, color = ViroColors.accent)
             }

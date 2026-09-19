@@ -11,6 +11,7 @@ import { OtpChallenge } from '../database/entities/otp-challenge.entity';
 import { EmailIdentity } from '../database/entities/email-identity.entity';
 import { SecurityService } from '../security/security.service';
 import { FirebaseAuthService } from './firebase-auth.service';
+import { AccountMergeService } from './account-merge.service';
 import { createHmac } from 'crypto';
 
 describe('AuthService hardware-test flow', () => {
@@ -55,6 +56,7 @@ describe('AuthService hardware-test flow', () => {
           provide: FirebaseAuthService,
           useValue: { resolveUserFromIdToken: jest.fn(), isConfigured: () => false },
         },
+        { provide: AccountMergeService, useValue: { merge: jest.fn() } },
       ],
     }).compile();
 

@@ -20,11 +20,20 @@ describe('AuthService phone linking', () => {
   let deviceRepo: any;
   let sessionRepo: any;
   let counts: { calls: number; matches: number };
+  let mergeService: { merge: jest.Mock };
 
   beforeEach(() => {
     process.env.OTP_PROVIDER = 'console';
     process.env.JWT_ACCESS_SECRET = 'x'.repeat(32);
     counts = { calls: 0, matches: 0 };
+    mergeService = {
+      merge: jest.fn(async () => ({
+        survivingUserId: PHONE_USER,
+        mergedUserId: EMAIL_USER,
+        moved: {},
+        dropped: {},
+      })),
+    };
 
     otpRepo = {
       findOne: jest.fn(async () => ({
@@ -86,6 +95,7 @@ describe('AuthService phone linking', () => {
       { sign: jest.fn(() => 'signed.jwt.token') } as any,
       { logEvent: jest.fn() } as any,
       { resolveUserFromIdToken: jest.fn() } as any,
+      mergeService as any,
     );
 
     // Make the stored hash match what the service computes for CODE.
@@ -108,21 +118,20 @@ describe('AuthService phone linking', () => {
     expect(result.outcome).toBe('linked');
     expect(result.userId).toBe(EMAIL_USER);
     expect(phoneRepo.save).toHaveBeenCalled();
-    // Nothing was deleted: linking a free number must never remove an account.
-    expect(userRepo.delete).not.toHaveBeenCalled();
+    // An unclaimed number is a plain link: nothing is merged or removed.
+    expect(mergeService.merge).not.toHaveBeenCalled();
   });
 
-  it('refuses when the number belongs to another account and this one has history', async () => {
+  it('merges into the phone account when this one has history', async () => {
     phoneRepo.findOne.mockResolvedValue({ userId: PHONE_USER, phoneE164: PHONE });
     counts.calls = 3;
 
-    await expect(
-      service.verifyPhoneLink(EMAIL_USER, CHALLENGE_ID, CODE),
-    ).rejects.toMatchObject({ response: { code: 'VALIDATION_ERROR' } });
+    const result = await service.verifyPhoneLink(EMAIL_USER, CHALLENGE_ID, CODE);
 
-    // The critical assertion: nothing is destroyed on the refusal path.
-    expect(userRepo.delete).not.toHaveBeenCalled();
-    expect(emailRepo.save).not.toHaveBeenCalled();
+    // Consolidation, not refusal: one person must end up with one account.
+    expect(mergeService.merge).toHaveBeenCalledWith(PHONE_USER, EMAIL_USER);
+    expect(result.userId).toBe(PHONE_USER);
+    expect(result.accessToken).toBeDefined();
   });
 
   it('adopts the phone account when this one is empty, moving the email identity', async () => {
@@ -137,12 +146,8 @@ describe('AuthService phone linking', () => {
 
     expect(result.outcome).toBe('adopted');
     expect(result.userId).toBe(PHONE_USER);
-    // The email sign-in now reaches the phone account.
-    expect(emailRepo.save).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: PHONE_USER }),
-    );
-    expect(userRepo.delete).toHaveBeenCalledWith({ id: EMAIL_USER });
-    // A session for the account they are now signed in as.
+    // The merge owns moving identities and removing the folded account.
+    expect(mergeService.merge).toHaveBeenCalledWith(PHONE_USER, EMAIL_USER);
     expect(result.accessToken).toBeDefined();
   });
 
@@ -154,6 +159,7 @@ describe('AuthService phone linking', () => {
     ).rejects.toMatchObject({ response: { code: 'VALIDATION_ERROR' } });
 
     expect(phoneRepo.save).not.toHaveBeenCalled();
-    expect(userRepo.delete).not.toHaveBeenCalled();
+    // A wrong code must never reach the merge.
+    expect(mergeService.merge).not.toHaveBeenCalled();
   });
 });
