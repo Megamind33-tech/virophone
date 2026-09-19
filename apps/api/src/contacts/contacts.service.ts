@@ -1,3 +1,4 @@
+import { publicAvatarUrl } from '../users/avatar.util';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -125,7 +126,7 @@ export class ContactsService {
         userId: identity.userId,
         viroId: profile.viroId || '',
         displayName: profile.displayName,
-        avatarUrl: profile.avatarUrl,
+        avatarUrl: publicAvatarUrl(profile.avatarUrl),
         relationshipState,
       });
 

@@ -63,6 +63,8 @@ services:
       REDIS_URL: redis://redis:6379
       API_PORT: 3001
       API_BASE_URL: https://${CADDY_DOMAIN}
+      # Base for URLs handed to phones (avatars). Must be the public host.
+      API_PUBLIC_URL: https://${CADDY_DOMAIN}
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
       JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}

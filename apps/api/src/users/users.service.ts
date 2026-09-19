@@ -19,6 +19,7 @@ import {
   avatarFilePath,
   extensionForMime,
   publicAvatarBaseUrl,
+  publicAvatarUrl,
   validateAvatarMime,
 } from './avatar.util';
 
@@ -49,7 +50,7 @@ export class UsersService {
       userId,
       phoneE164: phone?.phoneE164 || '',
       displayName: profile.displayName,
-      avatarUrl: profile.avatarUrl,
+      avatarUrl: publicAvatarUrl(profile.avatarUrl),
       viroId: profile.viroId,
       allowCallsFromViroId: profile.allowCallsFromViroId,
     };
@@ -204,7 +205,10 @@ export class UsersService {
       }
     }
     fs.writeFileSync(targetPath, file.buffer);
-    const avatarUrl = `${publicAvatarBaseUrl()}/${userId}${ext}`;
+    // The file name is the same on every upload, and the image is served with
+    // a day of caching — so without a version the app keeps showing the old
+    // photo after a change. A new query string is a new URL to every cache.
+    const avatarUrl = `${publicAvatarBaseUrl()}/${userId}${ext}?v=${Date.now()}`;
     return this.updateMe(userId, { avatarUrl });
   }
 }

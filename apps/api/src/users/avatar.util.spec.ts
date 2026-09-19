@@ -1,18 +1,31 @@
-import { extensionForMime, validateAvatarMime } from './avatar.util';
+import { publicAvatarUrl } from './avatar.util';
 
-describe('avatar.util', () => {
-  it('accepts supported mime types', () => {
-    expect(() => validateAvatarMime('image/jpeg')).not.toThrow();
-    expect(() => validateAvatarMime('image/png')).not.toThrow();
-    expect(() => validateAvatarMime('image/webp')).not.toThrow();
+describe('publicAvatarUrl', () => {
+  const env = { ...process.env };
+  afterEach(() => {
+    process.env = { ...env };
   });
 
-  it('rejects unsupported mime types', () => {
-    expect(() => validateAvatarMime('application/pdf')).toThrow('INVALID_AVATAR_TYPE');
+  const id = 'dbdd099e-8443-4622-96fa-7e44743d291a';
+
+  it('rewrites a localhost avatar onto the public host', () => {
+    delete process.env.API_PUBLIC_URL;
+    process.env.API_BASE_URL = 'https://reach.viro3.online';
+    expect(publicAvatarUrl(`http://localhost:3001/api/v1/media/avatars/${id}.jpg`)).toBe(
+      `https://reach.viro3.online/api/v1/media/avatars/${id}.jpg`,
+    );
   });
 
-  it('maps mime to extension', () => {
-    expect(extensionForMime('image/png')).toBe('.png');
-    expect(extensionForMime('image/webp')).toBe('.webp');
+  it('keeps the cache-busting version', () => {
+    process.env.API_PUBLIC_URL = 'https://reach.viro3.online/';
+    expect(publicAvatarUrl(`http://localhost:3001/api/v1/media/avatars/${id}.jpg?v=123`)).toBe(
+      `https://reach.viro3.online/api/v1/media/avatars/${id}.jpg?v=123`,
+    );
+  });
+
+  it('leaves external URLs and empty values alone', () => {
+    expect(publicAvatarUrl('https://example.com/me.png')).toBe('https://example.com/me.png');
+    expect(publicAvatarUrl(null)).toBeNull();
+    expect(publicAvatarUrl('  ')).toBeNull();
   });
 });

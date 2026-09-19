@@ -8,8 +8,32 @@ export function avatarUploadDir(): string {
 }
 
 export function publicAvatarBaseUrl(): string {
-  const base = (process.env.API_PUBLIC_URL || `http://localhost:${process.env.API_PORT || 3001}`).replace(/\/$/, '');
+  // API_BASE_URL is the one the VPS compose file actually sets; API_PUBLIC_URL
+  // was never passed into the container, so production built every avatar URL
+  // on http://localhost:3001 — which a phone resolves to itself, so no uploaded
+  // photo could ever be displayed.
+  const base = (
+    process.env.API_PUBLIC_URL ||
+    process.env.API_BASE_URL ||
+    `http://localhost:${process.env.API_PORT || 3001}`
+  ).replace(/\/$/, '');
   return `${base}/api/v1/media/avatars`;
+}
+
+const STORED_AVATAR = /\/api\/v1\/media\/avatars\/([0-9a-f-]{36}\.(?:jpg|png|webp))(\?[^#]*)?$/i;
+
+/**
+ * The URL to hand a client for a stored avatar.
+ *
+ * Our own avatars are rebuilt on the current public base rather than returned
+ * as stored, so rows written with a wrong host (every one written before the
+ * fix above) repair themselves on read. Anything else is returned untouched.
+ */
+export function publicAvatarUrl(stored: string | null | undefined): string | null {
+  if (!stored || !stored.trim()) return null;
+  const m = STORED_AVATAR.exec(stored.trim());
+  if (!m) return stored;
+  return `${publicAvatarBaseUrl()}/${m[1]}${m[2] || ''}`;
 }
 
 export function validateAvatarMime(mimetype: string): void {

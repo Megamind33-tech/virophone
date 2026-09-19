@@ -1,3 +1,4 @@
+import { publicAvatarUrl } from '../users/avatar.util';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -52,7 +53,7 @@ export class DirectoryService {
     return {
       userId: profile.userId,
       displayName: profile.displayName,
-      avatarUrl: profile.avatarUrl,
+      avatarUrl: publicAvatarUrl(profile.avatarUrl),
       viroId: profile.viroId || formatViroId(normalized),
     };
   }
