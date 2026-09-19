@@ -242,9 +242,11 @@ class CachedContactsRepository(
                 droppedDuplicateIds += group.filter { it.id != canonical.id }.map { it.id }
             }
         }
-        if (droppedDuplicateIds.isNotEmpty()) {
-            dao.deleteByIds(droppedDuplicateIds)
-        }
+        // Deletion is deliberately deferred to the END of this function, after
+        // persist(). It used to happen here — before several seconds of network
+        // contact-discovery — so anything that cancelled this coroutine in that
+        // window (a warm-up timeout, the screen closing) left the rows deleted
+        // and never rewrote them. Each launch then ate more of the contact list.
         // Deduped — the same number commonly appears under several raw-contact
         // rows when synced across Google/WhatsApp/SIM accounts, and a phone
         // with a few hundred real contacts can easily produce several thousand
@@ -303,7 +305,13 @@ class CachedContactsRepository(
         }
         val merged = enriched.map { c -> mergeWithExisting(c, existingMap[c.id]) }
         val visible = filterHidden(merged.filter { !it.isBlocked })
-        persist(visible, existingMap)
+        // Persist BEFORE pruning duplicates, so the cache is never left with
+        // fewer rows than it started with. Both steps are cheap and local; it is
+        // only the discovery above that is slow enough to be interrupted.
+        persist(merged, existingMap)
+        if (droppedDuplicateIds.isNotEmpty()) {
+            dao.deleteByIds(droppedDuplicateIds)
+        }
         return visible
     }
 
@@ -502,6 +510,11 @@ class CachedContactsRepository(
                     isReachable = c.isReachable,
                     isFavorite = c.isFavorite || prev?.isFavorite == true,
                     isBlocked = c.isBlocked || prev?.isBlocked == true,
+                    // isSpam was missing here, so it fell back to its default of
+                    // false on every contact refresh: a spam mark survived only
+                    // until the next contact load, which is why nothing ever
+                    // appeared in the spam list.
+                    isSpam = c.isSpam || prev?.isSpam == true,
                     updatedAt = System.currentTimeMillis(),
                 )
             },

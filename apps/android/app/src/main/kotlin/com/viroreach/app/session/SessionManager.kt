@@ -337,18 +337,38 @@ class SessionManager private constructor(context: Context) {
      * strand the user on a loading screen. Whatever is ready by then is shown,
      * and the rest continues in the background.
      */
-    suspend fun warmUpForSession(): Boolean = withTimeoutOrNull(WARMUP_TIMEOUT_MS) {
-        runCatching { profileRepository.refreshFromServer() }
-        runCatching { contactsRepository.loadContacts() }
-        runCatching { preferenceSync.pull() }
-        runCatching {
-            callHistoryStore.syncFromServer(api, tokenStore.getUserId()) { peerUserId ->
-                contactsRepository.displayNameForUserId(peerUserId)
+    suspend fun warmUpForSession(): Boolean {
+        // The work runs in the SESSION's own scope, and the timeout applies only
+        // to how long the UI waits for it. The previous version wrapped the work
+        // itself in withTimeoutOrNull, which CANCELLED it part-done — and
+        // loadContacts() deletes duplicate rows before a slow network step, so a
+        // cancellation there wiped contacts out of the cache without rewriting
+        // them. Waiting less is fine; interrupting a half-written cache is not.
+        val job = scope.launch {
+            runCatching { profileRepository.refreshFromServer() }
+            runCatching { contactsRepository.loadContacts() }
+            runCatching { preferenceSync.pull() }
+            runCatching {
+                callHistoryStore.syncFromServer(api, tokenStore.getUserId()) { peerUserId ->
+                    contactsRepository.displayNameForUserId(peerUserId)
+                }
             }
+            runCatching { registerPushToken() }
         }
-        runCatching { registerPushToken() }
-        true
-    } ?: false
+        // A cold first sync on a phone with hundreds of contacts genuinely takes
+        // longer than this. When that happens the app opens on whatever is
+        // cached and the sync finishes behind it, rather than holding the user
+        // on a spinner — the contacts list is observed from Room, so it fills in
+        // as soon as the write lands.
+        val finished = withTimeoutOrNull(WARMUP_TIMEOUT_MS) { job.join() } != null
+        if (!finished) {
+            android.util.Log.i(
+                "ViroSession",
+                "WARMUP_STILL_RUNNING after ${WARMUP_TIMEOUT_MS}ms — continuing in background",
+            )
+        }
+        return finished
+    }
     suspend fun connectSignalingAuto() {
         if (isAuthenticated) {
             callManager.ensureSignalingReady()
