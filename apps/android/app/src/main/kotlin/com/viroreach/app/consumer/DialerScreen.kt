@@ -105,11 +105,10 @@ fun DialerScreen(
                     .padding(horizontal = ViroSpacing.md),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
                     if (onBack != null) ViroBackButton(onClick = onBack) else Spacer(Modifier.width(48.dp))
-                    ViroCallBrand(compact = true)
                 }
-                Spacer(Modifier.height(ViroSpacing.md))
+                Spacer(Modifier.height(ViroSpacing.sm))
                 Text(
                     text = if (dialInput.isEmpty()) "Enter number" else displayNumber,
                     style = MaterialTheme.typography.headlineMedium,

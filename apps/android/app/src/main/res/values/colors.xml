@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#121212</color>
+    <!-- The mark is drawn on white in the brand artwork, so the adaptive
+         icon's background layer matches it rather than showing a dark edge
+         behind the logo under the launcher's mask. -->
+    <color name="ic_launcher_background">#FFFFFF</color>
     <color name="ic_launcher_foreground">#4FC3F7</color>
 </resources>

@@ -9,6 +9,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.style.TextAlign
@@ -127,39 +129,24 @@ fun ViroStatusIndicator(
     state: ViroReachabilityVisual,
     modifier: Modifier = Modifier,
 ) {
+    // A bare dot rather than a labelled pill: green when calls can go through,
+    // orange while the network is degraded or still coming up, red when there
+    // is no connection at all. The label stays as a content description so the
+    // state is still announced to a screen reader.
     val (label, color) = when (state) {
-        ViroReachabilityVisual.READY -> "Calls available" to ViroColors.GreenAvailable
-        ViroReachabilityVisual.CONNECTING -> "Connecting…" to ViroColors.ElectricBlue
+        ViroReachabilityVisual.READY -> "Connected" to ViroColors.GreenAvailable
+        ViroReachabilityVisual.CONNECTING -> "Connecting" to ViroColors.Warning
         ViroReachabilityVisual.LIMITED -> "Weak network" to ViroColors.Warning
-        ViroReachabilityVisual.OFFLINE -> "Offline" to ViroColors.Error
-        ViroReachabilityVisual.RECONNECTING -> "Reconnecting…" to ViroColors.ElectricBlue
+        ViroReachabilityVisual.RECONNECTING -> "Reconnecting" to ViroColors.Warning
+        ViroReachabilityVisual.OFFLINE -> "No connection" to ViroColors.Error
     }
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(20.dp),
-        color = ViroColors.NavySurfaceElevated.copy(alpha = 0.92f),
-        shadowElevation = 2.dp,
-        tonalElevation = 0.dp,
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(color),
-            )
-            Text(
-                label,
-                style = MaterialTheme.typography.labelSmall,
-                color = ViroColors.textPrimary,
-                fontWeight = FontWeight.Medium,
-            )
-        }
-    }
+    Box(
+        modifier = modifier
+            .size(10.dp)
+            .clip(CircleShape)
+            .background(color)
+            .semantics { contentDescription = label },
+    )
 }
 
 @Composable

@@ -12,7 +12,9 @@ import com.viroreach.app.consumer.ConsumerNav
 import com.viroreach.app.developer.DeveloperAccess
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.designsystem.ViroSpacing
+import androidx.compose.ui.unit.dp
 import com.viroreach.core.designsystem.components.ViroLoadingIndicator
+import com.viroreach.core.designsystem.components.ViroLogoMark
 
 @Composable
 fun ViroReachRoot() {
@@ -70,7 +72,9 @@ private fun StartupLoadingScreen(message: String = "Restoring secure session…"
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Viro Call", style = MaterialTheme.typography.displayLarge)
+        ViroLogoMark(size = 112.dp)
+        Spacer(Modifier.height(ViroSpacing.md))
+        Text("Viro Call", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(ViroSpacing.lg))
         ViroLoadingIndicator(message = message)
     }

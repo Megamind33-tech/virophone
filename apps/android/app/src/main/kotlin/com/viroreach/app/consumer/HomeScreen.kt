@@ -88,16 +88,17 @@ fun HomeScreen(
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = ViroSpacing.md),
             ) {
-                Spacer(Modifier.height(ViroSpacing.sm))
+                Spacer(Modifier.height(ViroSpacing.xs))
+                // No in-app branding here; the only thing in the top corner is
+                // the connection dot.
                 Row(
                     Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    ViroCallBrand(compact = true)
                     ViroStatusIndicator(state = ReachabilityMapper.toVisual(reachability))
                 }
-                Spacer(Modifier.height(ViroSpacing.md))
+                Spacer(Modifier.height(ViroSpacing.sm))
                 ViroSearchBar(
                     query = searchQuery,
                     onQueryChange = { searchQuery = it },

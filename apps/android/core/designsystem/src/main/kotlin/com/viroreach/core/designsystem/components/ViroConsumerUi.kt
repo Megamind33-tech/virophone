@@ -1,5 +1,8 @@
 package com.viroreach.core.designsystem.components
 
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import com.viroreach.core.designsystem.R
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -52,6 +55,18 @@ data class ViroWallpaperConfig(
 
 val LocalViroWallpaper = staticCompositionLocalOf { ViroWallpaperConfig() }
 
+/**
+ * The Viro mark.
+ *
+ * This drew a blue rounded square containing the letter "V" — a stand-in from
+ * before there was artwork. The real logo now ships in the design system module
+ * under drawable-<density>, which is where it has to live for this component
+ * to reach it: it was added under the app module, and a drawable there is not
+ * visible to code in core:designsystem.
+ *
+ * [compact] drops the wordmark and tagline and shows the mark alone, for places
+ * where the brand sits in a corner rather than introducing a screen.
+ */
 @Composable
 fun ViroCallBrand(
     modifier: Modifier = Modifier,
@@ -65,15 +80,15 @@ fun ViroCallBrand(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Box(
-                modifier = Modifier
-                    .size(if (compact) 28.dp else 36.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(ViroColors.ElectricBlue),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("V", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            }
+            Image(
+                painter = painterResource(R.drawable.viro_logo),
+                // Named rather than decorative: on the auth screens this mark is
+                // the only thing identifying which app is asking for a phone
+                // number, which a screen reader user needs told.
+                contentDescription = "Viro",
+                modifier = Modifier.size(if (compact) 28.dp else 40.dp),
+                contentScale = ContentScale.Fit,
+            )
             if (!compact) {
                 Column {
                     Text(
@@ -92,6 +107,23 @@ fun ViroCallBrand(
             }
         }
     }
+}
+
+/**
+ * The mark on its own at a chosen size, for the startup screen — where a small
+ * corner badge would be lost and the wordmark is already rendered as text.
+ */
+@Composable
+fun ViroLogoMark(
+    modifier: Modifier = Modifier,
+    size: androidx.compose.ui.unit.Dp = 96.dp,
+) {
+    Image(
+        painter = painterResource(R.drawable.viro_logo),
+        contentDescription = "Viro",
+        modifier = modifier.size(size),
+        contentScale = ContentScale.Fit,
+    )
 }
 
 @Composable
