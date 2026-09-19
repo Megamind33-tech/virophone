@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { Client } from 'pg';
 
@@ -19,15 +19,19 @@ async function runMigrations() {
     `);
 
     const migrationsDir = join(__dirname, 'migrations');
-    const migrationFiles = [
-      '001_initial_schema.sql',
-      '002_offline_trust.sql',
-      '003_push.sql',
-      '004_messaging.sql',
-      '005_email_identity.sql',
-      '006_admin_role.sql',
-      '007_seed_plans.sql',
-    ];
+    // Discovered from disk rather than hardcoded. The previous list had to be
+    // edited by hand for every new migration, and forgetting to do so skipped
+    // it in silence — the deploy reported "All migrations applied successfully"
+    // while the new tables did not exist.
+    //
+    // Filenames are zero-padded (001_, 002_, …) so a lexicographic sort is the
+    // intended execution order.
+    const migrationFiles = readdirSync(migrationsDir)
+      .filter((f) => f.endsWith('.sql'))
+      .sort();
+    if (migrationFiles.length === 0) {
+      throw new Error(`No migrations found in ${migrationsDir}`);
+    }
 
     for (const file of migrationFiles) {
       const version = file.replace('.sql', '');

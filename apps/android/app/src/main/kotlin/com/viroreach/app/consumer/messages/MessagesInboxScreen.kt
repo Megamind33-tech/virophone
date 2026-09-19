@@ -35,7 +35,15 @@ fun MessagesInboxScreen(
         val userId = session.tokenStore.getUserId()
         runCatching { session.serverMessagesRepository.listConversations(userId) }
             .onSuccess { list ->
-                session.messagesStore.replaceConversations(list)
+                // The server has no idea what you've named this person locally —
+                // it can only fall back to a raw id fragment for an untitled DM.
+                // Prefer the saved contact's name whenever one is known, same as
+                // every other screen that shows a peer identity.
+                val enriched = list.map { conv ->
+                    val contact = conv.peerUserId?.let { session.contactsRepository.findByUserId(it) }
+                    if (contact != null) conv.copy(peerName = contact.effectiveDisplayName) else conv
+                }
+                session.messagesStore.replaceConversations(enriched)
                 error = null
             }
             .onFailure { error = "Couldn't load conversations" }

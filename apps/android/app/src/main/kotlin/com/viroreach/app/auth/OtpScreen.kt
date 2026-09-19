@@ -73,7 +73,7 @@ fun OtpScreen(
 }
 
 @Composable
-private fun OtpDigitRow(otp: String) {
+internal fun OtpDigitRow(otp: String) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(ViroSpacing.sm),
         modifier = Modifier.fillMaxWidth(),

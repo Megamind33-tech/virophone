@@ -62,6 +62,16 @@ fun ChatScreen(
     var resolvedName by remember(activeConversationId, peerName) { mutableStateOf(peerName) }
     var resolvedPeerUserId by remember(activeConversationId, peerUserId) { mutableStateOf(peerUserId) }
     var sendError by remember { mutableStateOf<String?>(null) }
+    var peerPresence by remember(resolvedPeerUserId) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(resolvedPeerUserId) {
+        val targetUserId = resolvedPeerUserId ?: return@LaunchedEffect
+        while (true) {
+            runCatching { session.api.getPresence(targetUserId) }
+                .onSuccess { peerPresence = it.state }
+            kotlinx.coroutines.delay(20_000)
+        }
+    }
 
     LaunchedEffect(conversationId, resolvedPeerUserId) {
         val userId = currentUserId
@@ -99,8 +109,15 @@ fun ChatScreen(
         // early here (as this used to) skipped the one lookup that could
         // populate resolvedPeerUserId, silently leaving "isn't on Viro yet"
         // showing for someone who actually is.
+        // A call-log entry that predates peerUserId/phoneE164 being stamped
+        // onto it (or a call type the mapper never covered) leaves both nav
+        // params null — the display name is the only thing tying it back to
+        // a real contact in that case, so it's the last thing tried, not the
+        // first: this is exactly how Home/Calls/Contacts ended up opening
+        // three different, unlinked blank threads for the same real person.
         val contact = conversationPhone?.let { session.contactsRepository.findByPhone(it) }
             ?: peerUserId?.let { session.contactsRepository.findByUserId(it) }
+            ?: session.contactsRepository.findByExactName(peerName)
         resolvedAvatarUrl = peerAvatarUrl?.takeIf { it.isNotBlank() } ?: contact?.resolveAvatarUrl()
         resolvedName = contact?.effectiveDisplayName ?: peerName
         resolvedPeerUserId = peerUserId ?: contact?.userId
@@ -127,12 +144,20 @@ fun ChatScreen(
                         size = ViroAvatarSize.Small,
                     )
                     Spacer(Modifier.width(12.dp))
-                    Text(
-                        resolvedName,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Color.White,
-                        modifier = Modifier.weight(1f),
-                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            resolvedName,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Color.White,
+                        )
+                        presenceLabel(peerPresence)?.let { label ->
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (peerPresence == "ONLINE") ViroColors.ElectricBlue else ViroColors.MutedBlue,
+                            )
+                        }
+                    }
                 }
                 LazyColumn(
                     modifier = Modifier
@@ -186,6 +211,11 @@ fun ChatScreen(
                                 // transport to deliver a message (the call-signaling channel
                                 // this used to fall back to always fails with call_not_found,
                                 // since a conversation is never a real call session).
+                                android.util.Log.w(
+                                    "ViroMessages",
+                                    "SEND_BLOCKED_NO_PEER_ID resolvedName=$resolvedName navPeerUserId=$peerUserId " +
+                                        "activeConversationId=$activeConversationId",
+                                )
                                 sendError = "$resolvedName isn't on Viro yet — invite them to message."
                                 return@FilledIconButton
                             }
@@ -194,6 +224,11 @@ fun ChatScreen(
                             draft = ""
                             store.sendMessage(activeConversationId, outgoing)
                             scope.launch {
+                                android.util.Log.i(
+                                    "ViroMessages",
+                                    "SEND_ATTEMPT toUserId=$toUserId serverConversationId=$serverConversationId " +
+                                        "activeConversationId=$activeConversationId",
+                                )
                                 runCatching {
                                     val serverConvId = session.serverMessagesRepository.send(
                                         toUserId = toUserId,
@@ -210,7 +245,8 @@ fun ChatScreen(
                                         currentUserId,
                                     )
                                     store.replaceMessages(serverConvId, history)
-                                }.onFailure {
+                                }.onFailure { err ->
+                                    android.util.Log.w("ViroMessages", "SEND_FAILED: ${err.message}", err)
                                     sendError = "Couldn't send — try again."
                                 }
                                 if (messages.isNotEmpty()) {
@@ -226,6 +262,15 @@ fun ChatScreen(
             }
         }
     }
+}
+
+/** null hides the subtitle entirely — no point showing "Offline" before the first poll lands. */
+private fun presenceLabel(state: String?): String? = when (state) {
+    "ONLINE" -> "Online"
+    "BUSY" -> "On another call"
+    "LOCAL" -> "Nearby"
+    "OFFLINE" -> "Offline"
+    else -> null
 }
 
 @Composable

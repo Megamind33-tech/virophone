@@ -8,7 +8,7 @@ import {
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { OnModuleInit } from '@nestjs/common';
+import { Logger, OnModuleInit } from '@nestjs/common';
 import { RealtimeRegistry } from '../realtime/realtime.registry';
 import { SignalingDeliveryService } from './signaling-delivery.service';
 import { Server } from 'ws';
@@ -47,6 +47,8 @@ export type SignalingEventType =
   | 'call.reject'
   | 'call.end'
   | 'call.busy'
+  | 'call.hold'
+  | 'call.unhold'
   | 'call.error';
 
 export interface SignalingEnvelope {
@@ -56,12 +58,17 @@ export interface SignalingEnvelope {
   payload?: unknown;
 }
 
+/** TTL for the ws:* presence keys, re-armed on every inbound frame. */
+const PRESENCE_TTL_SECONDS = 3600;
+
 @WebSocketGateway({ path: '/api/v1/signaling/ws' })
 export class SignalingGateway
   implements OnGatewayConnection, OnGatewayDisconnect, OnModuleInit
 {
   @WebSocketServer()
   server!: Server;
+
+  private readonly logger = new Logger('Signaling');
 
   constructor(
     private readonly jwtService: JwtService,
@@ -159,10 +166,19 @@ export class SignalingGateway
     }
     this.metrics.wsMessages += 1;
 
+    // Traffic from a device proves its socket is alive. Without this the
+    // presence keys — written once on connect with a 1h TTL — silently
+    // expire under any call or session that outlives the TTL, and the
+    // device stops being deliverable while still able to send.
+    await this.touchPresence(client.userId, client.deviceId);
+
     const { type, callId, targetDeviceId, payload } = envelope;
     if (!callId || !type) {
       return { error: 'invalid_envelope' };
     }
+    this.logger.log(
+      `RECV type=${type} callId=${callId} from=${client.deviceId} target=${targetDeviceId ?? '(none)'}`,
+    );
 
     const session = await this.callSessionService.getSession(callId);
     if (!session) {
@@ -181,7 +197,9 @@ export class SignalingGateway
     const calleeDevices = this.callSessionService.calleeDevicesOf(session);
 
     const allowedRecipient = (deviceId: string) =>
-      deviceId === session.callerDeviceId || calleeDevices.includes(deviceId);
+      deviceId === session.callerDeviceId ||
+      calleeDevices.includes(deviceId) ||
+      (session.invitedDeviceIds ?? []).includes(deviceId);
 
     if (targetDeviceId && !allowedRecipient(targetDeviceId)) {
       return { error: 'invalid_target' };
@@ -230,6 +248,9 @@ export class SignalingGateway
     }
 
     const recipients = this.ringAllRecipients(session, client.deviceId, type, targetDeviceId);
+    if (recipients.length === 0) {
+      this.logger.warn(`NO_RECIPIENTS type=${type} callId=${callId} from=${client.deviceId}`);
+    }
     let delivered = false;
     for (const recipientDeviceId of recipients) {
       const ok = await this.realtimeRegistry.deliverToDevice(recipientDeviceId, {
@@ -239,12 +260,16 @@ export class SignalingGateway
         fromDeviceId: client.deviceId,
         payload,
       });
+      this.logger.log(
+        `SEND type=${type} callId=${callId} to=${recipientDeviceId} delivered=${ok}`,
+      );
       if (ok) delivered = true;
     }
 
     if (!delivered) {
       // The peer's socket is gone (app closed / lost connection). Tell the
       // sender explicitly instead of leaving the call hanging in "connecting".
+      this.logger.warn(`UNDELIVERED type=${type} callId=${callId} from=${client.deviceId}`);
       return { delivered: false, reason: 'peer_unreachable' };
     }
 
@@ -260,6 +285,7 @@ export class SignalingGateway
       callerDeviceId: string;
       calleeDeviceId: string;
       calleeDeviceIds?: string[];
+      invitedDeviceIds?: string[];
       answeredDeviceId?: string;
     },
     senderDeviceId: string,
@@ -267,8 +293,22 @@ export class SignalingGateway
     targetDeviceId?: string,
   ): string[] {
     const calleeDevices = this.callSessionService.calleeDevicesOf(session as any);
+    const invited = session.invitedDeviceIds ?? [];
     if (session.answeredDeviceId) {
       if (targetDeviceId) return [targetDeviceId];
+      // Once a third party has been added the call is no longer two-sided, so
+      // an untargeted frame has to reach every other participant rather than
+      // the single "other end" — otherwise hanging up or muting is invisible
+      // to everyone except one of them.
+      if (invited.length > 0) {
+        const everyone = new Set([
+          session.callerDeviceId,
+          session.answeredDeviceId,
+          ...invited,
+        ]);
+        everyone.delete(senderDeviceId);
+        return Array.from(everyone);
+      }
       return senderDeviceId === session.callerDeviceId
         ? [session.answeredDeviceId]
         : [session.callerDeviceId];
@@ -294,6 +334,12 @@ export class SignalingGateway
   ) {
     if (!client.userId || !client.deviceId) return { error: 'unauthorized' };
     this.metrics.wsMessages += 1;
+
+    // Traffic from a device proves its socket is alive. Without this the
+    // presence keys — written once on connect with a 1h TTL — silently
+    // expire under any call or session that outlives the TTL, and the
+    // device stops being deliverable while still able to send.
+    await this.touchPresence(client.userId, client.deviceId);
     const type = envelope.type as string;
     const roomId = (envelope as { roomId?: string }).roomId;
     const { targetDeviceId, payload } = envelope;
@@ -384,6 +430,13 @@ export class SignalingGateway
   }
 
   /** Delivers a message to every live socket for a device; returns the count. */
+  /** Re-arms the presence keys that gate cross-instance delivery. */
+  private async touchPresence(userId: string, deviceId: string): Promise<void> {
+    await this.redis.expire(`ws:device:${deviceId}`, PRESENCE_TTL_SECONDS);
+    await this.redis.expire(`ws:user:${userId}`, PRESENCE_TTL_SECONDS);
+    await this.redis.expire(`ws:userdevices:${userId}`, PRESENCE_TTL_SECONDS);
+  }
+
   private deliverToDevice(
     deviceId: string,
     message: Record<string, unknown>,

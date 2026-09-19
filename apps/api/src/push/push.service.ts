@@ -54,7 +54,8 @@ export class PushService {
     try {
       const tokens = await this.tokensForUser(userId);
       if (tokens.length === 0) return;
-      await this.sender.send(tokens, payload);
+      const result = await this.sender.send(tokens, payload);
+      await this.pruneDeadTokens(result.invalidTokens);
     } catch (e) {
       this.logger.warn(`push to user ${userId} failed: ${(e as Error).message}`);
     }
@@ -64,9 +65,24 @@ export class PushService {
     try {
       const tokens = await this.tokensForUsers(userIds);
       if (tokens.length === 0) return;
-      await this.sender.send(tokens, payload);
+      const result = await this.sender.send(tokens, payload);
+      await this.pruneDeadTokens(result.invalidTokens);
     } catch (e) {
       this.logger.warn(`push to users failed: ${(e as Error).message}`);
     }
+  }
+
+  /**
+   * Deletes tokens FCM has told us are permanently dead. Without this they are
+   * retried on every send forever, and a user who has reinstalled a few times
+   * accumulates rows that can never be delivered to — the same slow rot that
+   * left stale device ids fanning out call invites to nothing.
+   */
+  private async pruneDeadTokens(tokens: string[]): Promise<void> {
+    if (tokens.length === 0) return;
+    for (const token of tokens) {
+      await this.tokenRepo.delete({ token }).catch(() => undefined);
+    }
+    this.logger.log(`pruned ${tokens.length} dead push token(s)`);
   }
 }

@@ -6,6 +6,8 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,7 +20,12 @@ import com.viroreach.core.designsystem.components.*
 import kotlinx.coroutines.launch
 
 @Composable
-fun EditProfileScreen(session: SessionManager, onBack: () -> Unit) {
+fun EditProfileScreen(
+    session: SessionManager,
+    onBack: () -> Unit,
+    onAddPhone: () -> Unit = {},
+    onAddEmail: () -> Unit = {},
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val profile by session.profileRepository.profile.collectAsState(initial = UserProfile())
@@ -95,10 +102,15 @@ fun EditProfileScreen(session: SessionManager, onBack: () -> Unit) {
     }
 
     ViroScreenBackground {
-        ViroSafeScreen {
+        // Scrolls, and applies IME padding: this screen now carries the photo,
+        // the name field, Save AND the linked numbers and emails, which does not
+        // fit a short screen with the keyboard open. Without this the identities
+        // section was simply unreachable on smaller handsets.
+        ViroSafeScreen(applyImePadding = true) {
             Column(
                 Modifier
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(ViroSpacing.md),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -167,6 +179,13 @@ fun EditProfileScreen(session: SessionManager, onBack: () -> Unit) {
                         }
                     },
                 )
+                Spacer(Modifier.height(ViroSpacing.xl))
+                ProfileIdentitiesSection(
+                    session = session,
+                    onAddPhone = onAddPhone,
+                    onAddEmail = onAddEmail,
+                )
+                Spacer(Modifier.height(ViroSpacing.xl))
             }
         }
     }

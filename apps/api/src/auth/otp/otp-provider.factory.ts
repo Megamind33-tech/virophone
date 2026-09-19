@@ -5,11 +5,13 @@ import { TestOtpProvider } from './test-otp.provider';
 import { HttpSmsOtpProvider } from './http-sms-otp.provider';
 import { TwilioOtpProvider } from './twilio-otp.provider';
 import { HardwareTestOtpProvider } from './hardware-test-otp.provider';
+import { BeemOtpProvider } from './beem-otp.provider';
 
 /**
  * Selects the OTP delivery provider from the OTP_PROVIDER env var:
  *   test           - fixed-code provider for automated tests
  *   hardware-test  - fixed code for allowlisted field-test phones
+ *   beem           - Beem Africa SMS (African coverage, incl. Zambia)
  *   twilio         - Twilio Programmable Messaging
  *   http           - generic HTTP JSON SMS gateway
  *   console        - (default) logs the code; development only
@@ -23,6 +25,9 @@ export function createOtpProvider(): OtpProvider {
     case 'hardware-test':
       logger.log('Using hardware-test OTP provider');
       return new HardwareTestOtpProvider();
+    case 'beem':
+      logger.log('Using Beem Africa OTP provider');
+      return new BeemOtpProvider();
     case 'twilio':
       logger.log('Using Twilio OTP provider');
       return new TwilioOtpProvider();

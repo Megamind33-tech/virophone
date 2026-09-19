@@ -237,4 +237,69 @@ describe('Conference (mesh) signaling end-to-end', () => {
     const denied = await waitFor(x, (m) => JSON.stringify(m).includes('not_allowed'));
     expect(JSON.stringify(denied)).toContain('not_allowed');
   });
+
+  describe('LiveKit token for group-call media', () => {
+    it('issues a room-scoped token to an invited member, with the secret never in the response', async () => {
+      if (skip()) return;
+      const owner = await registerUser(app, '+260977000031', 'ka');
+      const invitee = await registerUser(app, '+260977000032', 'kb');
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/conferences')
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .send({ inviteeUserIds: [invitee.userId] });
+      const roomId = created.body.roomId;
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/conferences/${roomId}/livekit-token`)
+        .set('Authorization', `Bearer ${invitee.accessToken}`);
+      expect([200, 201]).toContain(res.status);
+      expect(res.body.roomName).toBe(`viro-conf-${roomId}`);
+      expect(res.body.token).toBeTruthy();
+      expect(JSON.stringify(res.body)).not.toContain('test_livekit_secret');
+    });
+
+    it('gives every invited member a token for the same room', async () => {
+      if (skip()) return;
+      const owner = await registerUser(app, '+260977000033', 'kc');
+      const bob = await registerUser(app, '+260977000034', 'kd');
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/conferences')
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .send({ inviteeUserIds: [bob.userId] });
+      const roomId = created.body.roomId;
+
+      const ownerToken = await request(app.getHttpServer())
+        .post(`/api/v1/conferences/${roomId}/livekit-token`)
+        .set('Authorization', `Bearer ${owner.accessToken}`);
+      const bobToken = await request(app.getHttpServer())
+        .post(`/api/v1/conferences/${roomId}/livekit-token`)
+        .set('Authorization', `Bearer ${bob.accessToken}`);
+      expect(ownerToken.body.roomName).toBe(bobToken.body.roomName);
+    });
+
+    it('refuses a token to someone not invited to the room', async () => {
+      if (skip()) return;
+      const owner = await registerUser(app, '+260977000035', 'ke');
+      const outsider = await registerUser(app, '+260977000036', 'kf');
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/conferences')
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .send({ inviteeUserIds: [] });
+      const roomId = created.body.roomId;
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/conferences/${roomId}/livekit-token`)
+        .set('Authorization', `Bearer ${outsider.accessToken}`);
+      expect(res.status).toBe(403);
+    });
+
+    it('404s for a room that does not exist', async () => {
+      if (skip()) return;
+      const user = await registerUser(app, '+260977000037', 'kg');
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/conferences/00000000-0000-0000-0000-000000000000/livekit-token')
+        .set('Authorization', `Bearer ${user.accessToken}`);
+      expect(res.status).toBe(404);
+    });
+  });
 });

@@ -77,6 +77,12 @@ services:
       LIVEKIT_URL: ${LIVEKIT_URL:-}
       EPHEMERAL_SIGNING_SECRET: ${EPHEMERAL_SIGNING_SECRET}
       OTP_PROVIDER: ${OTP_PROVIDER:-console}
+      # Beem Africa SMS — the OTP path for real users. Empty by default so a
+      # deployment without credentials falls back rather than failing to boot.
+      BEEM_API_KEY: ${BEEM_API_KEY:-}
+      BEEM_SECRET_KEY: ${BEEM_SECRET_KEY:-}
+      BEEM_SOURCE_ADDR: ${BEEM_SOURCE_ADDR:-INFO}
+      SMS_BODY_TEMPLATE: ${SMS_BODY_TEMPLATE:-}
       OTP_PROVIDER_TEST_CODE: ${OTP_PROVIDER_TEST_CODE:-}
       TEST_OTP_CODE: ${TEST_OTP_CODE:-}
       HARDWARE_TEST_PHONES_E164: ${HARDWARE_TEST_PHONES_E164:-}
@@ -89,10 +95,17 @@ services:
       OTP_DELIVERY_EMAIL: ${OTP_DELIVERY_EMAIL:-}
       OTP_EMAIL_MAP: ${OTP_EMAIL_MAP:-}
       AVATAR_UPLOAD_DIR: /app/uploads/avatars
+      # Push. The service-account key is MOUNTED rather than inlined as JSON:
+      # a key with embedded newlines in an env file that is both sourced by bash
+      # and parsed by compose is a reliable way to ship a subtly corrupt secret.
+      PUSH_PROVIDER: ${PUSH_PROVIDER:-log}
+      GOOGLE_APPLICATION_CREDENTIALS: /app/secrets/firebase-admin.json
     volumes:
       # Without this, every container rebuild/redeploy silently wipes every
       # uploaded profile photo — the container filesystem is ephemeral.
       - viro_reach_avatars:/app/uploads/avatars
+      # Read-only, and never part of the image or the synced tree.
+      - ./secrets/firebase-admin.json:/app/secrets/firebase-admin.json:ro
     ports:
       - "${VIRO_API_BIND:-127.0.0.1:13001}:3001"
     healthcheck:
@@ -127,22 +140,31 @@ services:
   # Isolated LiveKit instance for Viro Reach's own voice calls — separate
   # container, ports, and API key/secret from any other LiveKit deployment
   # that may exist on this shared host for other apps.
+  #
+  # Config comes from a mounted YAML file (not individual env vars) because
+  # TURN (see infra/livekit/livekit.vps.yaml) needs a mounted TLS cert/key
+  # pair, which the env-var interface doesn't expose. TURNS on 5349 is the
+  # fallback for networks that block direct UDP media entirely — without it,
+  # calls connected (signaling isn't affected) but carried no audio.
   livekit:
     image: livekit/livekit-server:latest
     container_name: viro-reach-livekit
     restart: unless-stopped
-    command: --node-ip=${EXTERNAL_IP}
-    environment:
-      LIVEKIT_PORT: "7980"
-      LIVEKIT_RTC_TCP_PORT: "7981"
-      LIVEKIT_RTC_PORT_RANGE_START: "51000"
-      LIVEKIT_RTC_PORT_RANGE_END: "51100"
-      LIVEKIT_RTC_USE_EXTERNAL_IP: "true"
-      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    command: --config /etc/livekit/livekit.yaml --node-ip=${EXTERNAL_IP}
+    volumes:
+      - ./infra/livekit/livekit.vps.yaml:/etc/livekit/livekit.yaml:ro
+      - ./livekit-tls:/etc/livekit/tls:ro
     ports:
       - "127.0.0.1:7980:7980"
       - "${VIRO_LIVEKIT_TCP_BIND:-0.0.0.0}:7981:7981"
       - "${VIRO_LIVEKIT_UDP_BIND:-0.0.0.0}:51000-51100:51000-51100/udp"
+      - "${VIRO_LIVEKIT_TURNS_BIND:-0.0.0.0}:5349:5349"
+      - "${VIRO_LIVEKIT_TURN_RELAY_BIND:-0.0.0.0}:30000-30100:30000-30100/udp"
+    # Without this the container lands on the default compose network and
+    # the container-mode Caddy cannot resolve "livekit" to proxy its
+    # signaling — the call then rings but never carries audio.
+    networks:
+      - viro_reach_internal
 
   coturn:
     image: coturn/coturn:latest

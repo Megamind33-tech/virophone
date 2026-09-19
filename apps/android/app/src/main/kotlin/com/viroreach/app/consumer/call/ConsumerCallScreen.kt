@@ -2,6 +2,7 @@ package com.viroreach.app.consumer.call
 
 
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 
 import androidx.compose.material.icons.Icons
@@ -82,13 +83,24 @@ fun ConsumerCallScreen(
     val isCaller by callManager.isCallerRole.collectAsState()
 
     val route by callManager.routeLabel.collectAsState()
+    val remotePeerUnstable by callManager.remotePeerUnstable.collectAsState()
+    val muted by callManager.isMuted.collectAsState()
+    val onHold by callManager.isOnHold.collectAsState()
+    val peerOnHold by callManager.peerOnHold.collectAsState()
 
     var elapsed by remember { mutableIntStateOf(0) }
-
-    var muted by remember { mutableStateOf(false) }
+    // LaunchedEffect(state) re-runs its whole body on every state change,
+    // including a RECONNECTING dip back to ACTIVE mid-call — without this
+    // gate, elapsed got reset to 0 on every single reconnect instead of only
+    // when the call first became active.
+    var hasBeenActive by remember { mutableStateOf(false) }
 
     var speaker by remember { mutableStateOf(false) }
     var showKeypad by remember { mutableStateOf(false) }
+
+    var showAddCaller by remember { mutableStateOf(false) }
+    var addCallerBusy by remember { mutableStateOf(false) }
+    val participants by callManager.callParticipants.collectAsState()
     var keypadDigits by remember { mutableStateOf("") }
     var resolvedPresentation by remember { mutableStateOf(presentation) }
 
@@ -118,7 +130,10 @@ fun ConsumerCallScreen(
 
             CallStateMachineState.ACTIVE -> {
 
-                elapsed = 0
+                if (!hasBeenActive) {
+                    elapsed = 0
+                    hasBeenActive = true
+                }
 
                 while (true) {
 
@@ -131,6 +146,8 @@ fun ConsumerCallScreen(
             }
 
             CallStateMachineState.ENDED, CallStateMachineState.IDLE -> {
+
+                hasBeenActive = false
 
                 delay(1500)
 
@@ -290,6 +307,38 @@ fun ConsumerCallScreen(
 
                 }
 
+                // callState's own RECONNECTING only ever reflects this
+                // device's own connection — without this, the other party's
+                // audio just went silent with nothing on screen to explain
+                // why, since their reconnect is invisible from here.
+                if (state == CallStateMachineState.ACTIVE && remotePeerUnstable) {
+
+                    Text(
+
+                        "Their connection is unstable…",
+
+                        style = MaterialTheme.typography.labelSmall,
+
+                        color = ViroColors.consumerError,
+
+                    )
+
+                }
+
+                if (state == CallStateMachineState.ACTIVE && peerOnHold) {
+
+                    Text(
+
+                        "${resolvedPresentation.displayName} put you on hold",
+
+                        style = MaterialTheme.typography.labelSmall,
+
+                        color = ViroColors.textMuted,
+
+                    )
+
+                }
+
                 consumerRouteLabel(route)?.let {
 
                     Text(it, style = MaterialTheme.typography.labelSmall, color = ViroColors.textMuted)
@@ -351,6 +400,30 @@ fun ConsumerCallScreen(
 
                                 ViroCallControl(
 
+                                    id = "add",
+
+                                    label = "Add caller",
+
+                                    icon = Icons.Default.PersonAdd,
+
+                                ),
+
+                                ViroCallControl(
+
+                                    id = "hold",
+
+                                    label = if (onHold) "Resume" else "Hold",
+
+                                    icon = Icons.Default.Pause,
+
+                                    activeIcon = Icons.Default.PlayArrow,
+
+                                    isActive = onHold,
+
+                                ),
+
+                                ViroCallControl(
+
                                     id = "keypad",
 
                                     label = "Keypad",
@@ -375,19 +448,21 @@ fun ConsumerCallScreen(
 
                                 when (id) {
 
-                                    "mute" -> {
-
-                                        muted = !muted
-
-                                        callManager.setMuted(muted)
-
-                                    }
+                                    "mute" -> callManager.setMuted(!muted)
 
                                     "speaker" -> {
 
                                         speaker = !speaker
 
                                         callManager.setSpeaker(speaker)
+
+                                    }
+
+                                    "add" -> showAddCaller = true
+
+                                    "hold" -> {
+
+                                        if (onHold) callManager.resumeCall() else callManager.holdCall()
 
                                     }
 
@@ -427,6 +502,24 @@ fun ConsumerCallScreen(
 
             }
 
+
+            if (showAddCaller) {
+                AddCallerSheet(
+                    contacts = session.contactsCoordinator.uiState.contacts,
+                    alreadyOnCall = participants.map { it.identity }.toSet(),
+                    busy = addCallerBusy,
+                    onPick = { contact ->
+                        val userId = contact.userId ?: return@AddCallerSheet
+                        addCallerBusy = true
+                        scope.launch {
+                            callManager.addParticipant(userId)
+                            addCallerBusy = false
+                            showAddCaller = false
+                        }
+                    },
+                    onDismiss = { if (!addCallerBusy) showAddCaller = false },
+                )
+            }
             if (showKeypad) {
                 InCallKeypadOverlay(
                     digits = keypadDigits,
@@ -507,3 +600,92 @@ private fun formatElapsed(seconds: Int): String {
 
 }
 
+
+/**
+ * Contact picker for adding someone to a call already in progress.
+ *
+ * Only contacts that are reachable on Viro can be listed: adding a person
+ * means ringing them into this call's existing LiveKit room, which a plain
+ * phone number cannot join. Anyone already in the room is shown as such
+ * rather than hidden, so the list doesn't silently lose people.
+ */
+@Composable
+private fun AddCallerSheet(
+    contacts: List<com.viroreach.app.consumer.ContactListItem>,
+    alreadyOnCall: Set<String>,
+    busy: Boolean,
+    onPick: (com.viroreach.app.consumer.ContactListItem) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val candidates = remember(contacts) {
+        contacts
+            .filter { it.userId != null && it.isReachable && !it.isBlocked }
+            .sortedBy { it.effectiveDisplayName.lowercase() }
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(ViroSpacing.md),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        Surface(
+            shape = MaterialTheme.shapes.extraLarge,
+            color = ViroColors.NavySurfaceElevated.copy(alpha = 0.96f),
+            tonalElevation = 6.dp,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(ViroSpacing.md),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Add to call",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onDismiss, enabled = !busy) { Text("Close") }
+                }
+                if (busy) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(ViroSpacing.sm))
+                }
+                if (candidates.isEmpty()) {
+                    Text(
+                        "No contacts on Viro to add yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ViroColors.textMuted,
+                        modifier = Modifier.padding(vertical = ViroSpacing.md),
+                    )
+                } else {
+                    androidx.compose.foundation.lazy.LazyColumn(
+                        modifier = Modifier.heightIn(max = 320.dp),
+                    ) {
+                        items(candidates.size) { index ->
+                            val contact = candidates[index]
+                            val onCall = contact.userId in alreadyOnCall
+                            ListItem(
+                                headlineContent = { Text(contact.effectiveDisplayName) },
+                                supportingContent = {
+                                    Text(
+                                        if (onCall) "Already on this call"
+                                        else contact.phoneE164.orEmpty(),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                },
+                                modifier = Modifier.then(
+                                    if (onCall || busy) Modifier
+                                    else Modifier.clickable { onPick(contact) },
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

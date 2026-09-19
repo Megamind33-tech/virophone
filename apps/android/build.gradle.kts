@@ -1,3 +1,17 @@
+// google-services is pulled as a buildscript classpath dependency rather than
+// through the plugins DSL: the plugin-marker coordinate does not resolve in
+// this environment, while the plain artifact does. The app module applies it
+// by id, conditionally on google-services.json being present.
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("com.google.gms:google-services:4.4.2")
+    }
+}
+
 plugins {
     id("com.android.application") version "8.2.2" apply false
     id("com.android.library") version "8.2.2" apply false

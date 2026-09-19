@@ -24,6 +24,7 @@ data class ContactListItem(
     val customPhotoUri: String? = null,
     val isFavorite: Boolean = false,
     val isBlocked: Boolean = false,
+    val isSpam: Boolean = false,
 ) {
     val effectiveDisplayName: String
         get() = customDisplayName?.trim()?.takeIf { it.isNotEmpty() } ?: displayName

@@ -65,3 +65,10 @@ infra/docker/data/
 *.orig
 .cache/
 tmp/
+
+# Rendered configs containing secrets (see scripts/vps-render-config.sh)
+infra/coturn/turnserver.vps.conf
+infra/livekit/livekit.vps.yaml
+livekit-tls/
+apps/android/app/google-services.json
+secrets/

@@ -81,6 +81,24 @@ class CallManager(
     private val _callQuality = MutableStateFlow<CallStatistics?>(null)
     val callQuality: StateFlow<CallStatistics?> = _callQuality.asStateFlow()
 
+    /** True while the *other* party's connection is reported poor/lost on an internet call. */
+    val remotePeerUnstable: StateFlow<Boolean> = liveKitEngine.remotePeerUnstable
+
+    private val _isMuted = MutableStateFlow(false)
+    val isMuted: StateFlow<Boolean> = _isMuted.asStateFlow()
+
+    // Hold has to remember whatever the mute state was *before* it muted for
+    // the hold itself, so resuming restores it exactly rather than always
+    // unmuting — someone who had muted themselves before putting the call on
+    // hold should still be muted afterward.
+    private var mutedBeforeHold = false
+    private val _isOnHold = MutableStateFlow(false)
+    val isOnHold: StateFlow<Boolean> = _isOnHold.asStateFlow()
+
+    /** True while the *peer* has put the call on hold (told to us via call.hold/call.unhold). */
+    private val _peerOnHold = MutableStateFlow(false)
+    val peerOnHold: StateFlow<Boolean> = _peerOnHold.asStateFlow()
+
     private val _lastError = MutableStateFlow<String?>(null)
     val lastError: StateFlow<String?> = _lastError.asStateFlow()
 
@@ -211,6 +229,39 @@ class CallManager(
         }.launchIn(scope)
     }
 
+
+    /**
+     * Everyone currently in this call's LiveKit room besides us. A 1:1 call
+     * has one entry; adding people (see [addParticipant]) grows it, which is
+     * what lets the in-call UI show a roster instead of a single name.
+     */
+    val callParticipants: StateFlow<List<com.viroreach.voice.webrtc.LiveKitParticipant>> =
+        liveKitEngine.participants
+
+    /**
+     * Adds another person to the call already in progress. They ring as a
+     * normal incoming call and join this same room on accept, so nobody's
+     * audio is interrupted — see CallsService.inviteToCall.
+     */
+    suspend fun addParticipant(targetUserId: String): Result<Unit> {
+        val callId = activeCallId
+            ?: return Result.failure(IllegalStateException("No active call"))
+        if (_signalingRoute.value == SignalingRoute.LOCAL_LAN) {
+            return Result.failure(
+                IllegalStateException("Adding people isn't available on a LAN call"),
+            )
+        }
+        return runCatching {
+            api.inviteToCall(
+                callId,
+                com.viroreach.core.network.InviteToCallBody(targetUserId),
+            )
+            log("CALL_INVITE_SENT callId=$callId target=$targetUserId")
+            Unit
+        }.onFailure { e ->
+            _lastError.value = "Couldn't add them to the call: ${e.message}"
+        }
+    }
     private fun sendIceRestartSdp(callId: String, sdp: SessionDescription) {
         activeTransport.send(
             "call.iceRestart",
@@ -532,9 +583,21 @@ class CallManager(
      */
     private suspend fun connectLiveKitMedia(callId: String) {
         try {
-            val creds = api.getLiveKitToken(callId)
-            log("LIVEKIT_TOKEN_RECEIVED callId=$callId")
-            liveKitEngine.connect(creds.url, creds.token, forceRelay = relayMode != RelayMode.AUTO)
+            // Neither the token fetch nor Room.connect() had a bound here —
+            // a stalled network call (no response, not even a failure) left
+            // the call sitting at CONNECTING forever with nothing on screen
+            // to explain why or any way to retry.
+            val connected = withTimeoutOrNull(LIVEKIT_CONNECT_TIMEOUT_MS) {
+                val creds = api.getLiveKitToken(callId)
+                log("LIVEKIT_TOKEN_RECEIVED callId=$callId")
+                liveKitEngine.connect(creds.url, creds.token, forceRelay = relayMode != RelayMode.AUTO)
+                true
+            }
+            if (connected == null) {
+                log("LIVEKIT_CONNECT_TIMEOUT callId=$callId")
+                _lastError.value = "Couldn't connect the call — check your connection and try again."
+                _state.value = CallStateMachineState.MEDIA_FAILED
+            }
         } catch (e: Exception) {
             _lastError.value = "Media connect failed: ${e.message}"
             _state.value = CallStateMachineState.MEDIA_FAILED
@@ -583,8 +646,31 @@ class CallManager(
     }
 
     fun setMuted(muted: Boolean) {
+        _isMuted.value = muted
         if (_signalingRoute.value == SignalingRoute.LOCAL_LAN) voiceEngine.setMuted(muted)
         else liveKitEngine.setMuted(muted)
+    }
+
+    /**
+     * Puts the call on hold: mutes local audio and tells the peer, so their
+     * screen shows they've been put on hold rather than just going silent
+     * with no explanation.
+     */
+    fun holdCall() {
+        if (_state.value != CallStateMachineState.ACTIVE || _isOnHold.value) return
+        mutedBeforeHold = _isMuted.value
+        _isOnHold.value = true
+        setMuted(true)
+        val id = activeCallId ?: return
+        activeTransport.send("call.hold", id, remotePeerDeviceId())
+    }
+
+    fun resumeCall() {
+        if (!_isOnHold.value) return
+        _isOnHold.value = false
+        setMuted(mutedBeforeHold)
+        val id = activeCallId ?: return
+        activeTransport.send("call.unhold", id, remotePeerDeviceId())
     }
 
     fun setSpeaker(on: Boolean) {
@@ -650,6 +736,27 @@ class CallManager(
             }
         } finally {
             _state.value = CallStateMachineState.ENDED
+            clearIncomingState()
+        }
+    }
+
+    /**
+     * Caller-side auto-cancel after ringing too long with no answer — same
+     * teardown as hangUp(), but lands on TIMEOUT ("No answer") instead of a
+     * generic ENDED, and is what stops the caller's screen sitting on
+     * "Calling…" forever when the other side never picks up.
+     */
+    suspend fun cancelUnanswered() {
+        try {
+            activeCallId?.let { id ->
+                runCatching { activeTransport.send("call.end", id, remotePeerDeviceId()) }
+                runCatching { endActiveMedia() }
+                if (_signalingRoute.value == SignalingRoute.WSS) {
+                    runCatching { api.endCall(id) }
+                }
+            }
+        } finally {
+            _state.value = CallStateMachineState.TIMEOUT
             clearIncomingState()
         }
     }
@@ -792,13 +899,42 @@ class CallManager(
             "call.iceRestart" -> {
                 if (_signalingRoute.value == SignalingRoute.LOCAL_LAN) handleIceRestart(msg)
             }
+            "call.hold" -> _peerOnHold.value = true
+            "call.unhold" -> _peerOnHold.value = false
             // Distinct terminal states so the UI can show the right reason
             // ("Call declined" / "Line busy") instead of a generic end — the
             // labels already existed in consumerFailureMessage but nothing
             // was ever setting these states to trigger them.
-            "call.reject" -> _state.value = CallStateMachineState.PEER_REJECTED
-            "call.busy" -> _state.value = CallStateMachineState.BUSY
-            "call.end" -> _state.value = CallStateMachineState.ENDED
+            // The side that presses hang-up tears its own media down explicitly
+            // (see hangUp()) — but the OTHER side only ever learns about it
+            // through this signaling message, and until now this just flipped
+            // the state flag without ever disconnecting LiveKit/WebRTC. Their
+            // audio engine kept running — media never actually stopped on
+            // that side, even though the screen said the call had ended.
+            "call.reject" -> {
+                _state.value = CallStateMachineState.PEER_REJECTED
+                // endActiveMedia() must run (and read activeCallId) before
+                // clearIncomingState() nulls it out — both belong in the same
+                // coroutine so that ordering is guaranteed.
+                scope.launch {
+                    runCatching { endActiveMedia() }
+                    clearIncomingState()
+                }
+            }
+            "call.busy" -> {
+                _state.value = CallStateMachineState.BUSY
+                scope.launch {
+                    runCatching { endActiveMedia() }
+                    clearIncomingState()
+                }
+            }
+            "call.end" -> {
+                _state.value = CallStateMachineState.ENDED
+                scope.launch {
+                    runCatching { endActiveMedia() }
+                    clearIncomingState()
+                }
+            }
             "call.error" -> {
                 val code = msg.payload?.optString("code", msg.payload?.optString("reason"))
                 _lastError.value = code?.let { "Signaling error: $it" } ?: "Signaling error"
@@ -857,9 +993,14 @@ class CallManager(
         _isCallerRole.value = false
         _incomingCall.value = null
         _callQuality.value = null
+        _isMuted.value = false
+        _isOnHold.value = false
+        _peerOnHold.value = false
+        mutedBeforeHold = false
     }
 
     companion object {
+        private const val LIVEKIT_CONNECT_TIMEOUT_MS = 20_000L
         private val CALLER_PREACTIVE_STATES = setOf(
             CallStateMachineState.INVITING,
             CallStateMachineState.RINGING,

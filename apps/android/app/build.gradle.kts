@@ -3,6 +3,19 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
+// google-services reads app/google-services.json and fails the build outright
+// when it is missing. Applying it conditionally keeps the module buildable for
+// anyone who has not pulled the Firebase config yet (it is gitignored), and it
+// switches itself on the moment the file appears — no build-file edit needed.
+val googleServicesConfig = file("google-services.json")
+if (googleServicesConfig.exists()) {
+    apply(plugin = "com.google.gms.google-services")
+} else {
+    logger.lifecycle(
+        "Firebase: app/google-services.json not found — Auth, Firestore and push are inert in this build.",
+    )
+}
+
 val gitCommitAbbrev: String = providers.exec {
     commandLine("git", "rev-parse", "--short", "HEAD")
     isIgnoreExitValue = true
@@ -50,6 +63,15 @@ android {
 }
 
 dependencies {
+    // Firebase — BoM pins every Firebase artifact to one compatible set,
+    // so the individual dependencies below intentionally carry no version.
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.auth)
+    implementation(libs.firebase.firestore)
+    implementation(libs.firebase.messaging)
+    // Gives Task<T>.await(), so the FCM token read is a plain suspend call.
+    implementation(libs.kotlinx.coroutines.play.services)
+
     implementation(project(":core:model"))
     implementation(project(":core:network"))
     implementation(project(":core:database"))

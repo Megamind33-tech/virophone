@@ -3,6 +3,8 @@ package com.viroreach.app.root
 enum class AppStartupState {
     RestoringSession,
     Unauthenticated,
+    /** Signed in, loading contacts and history before the app is shown. */
+    Preparing,
     Authenticated,
 }
 

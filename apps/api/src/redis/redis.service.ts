@@ -28,6 +28,11 @@ export class RedisService implements OnModuleDestroy {
     if (ttlSeconds) await this.client.expire(key, ttlSeconds);
   }
 
+  /** Refreshes a key's TTL without rewriting its value. */
+  async expire(key: string, ttlSeconds: number): Promise<void> {
+    await this.client.expire(key, ttlSeconds);
+  }
+
   async sRem(key: string, member: string): Promise<void> {
     await this.client.srem(key, member);
   }

@@ -17,6 +17,7 @@ import { RedisService } from '../redis/redis.service';
 import { PushService } from '../push/push.service';
 import { OfflineTrustService } from '../offline-trust/offline-trust.service';
 import { isUserUuid } from './call-target.util';
+import { SignalingDeliveryService } from '../signaling/signaling-delivery.service';
 
 export interface CallQualityInput {
   latency?: number;
@@ -43,6 +44,7 @@ export class CallsService {
     private readonly redis: RedisService,
     private readonly pushService: PushService,
     private readonly offlineTrustService: OfflineTrustService,
+    private readonly signalingDelivery: SignalingDeliveryService,
   ) {}
 
   async authorize(
@@ -160,6 +162,110 @@ export class CallsService {
     };
   }
 
+
+  /**
+   * Adds a third party to a call that is already under way ("add caller").
+   *
+   * The invitee joins the SAME LiveKit room as the existing two — a Room has
+   * always supported any number of participants — so no one's audio is
+   * interrupted and the original pair need do nothing at all. Ringing is
+   * delivered server-side because the signaling gateway only lets the
+   * session's own callerDeviceId originate a call.invite.
+   */
+  async inviteToCall(
+    inviterUserId: string,
+    inviterDeviceId: string,
+    callId: string,
+    targetUserId: string,
+  ): Promise<{ invited: boolean; deviceIds: string[] }> {
+    const session = await this.callSessionService.getSession(callId);
+    if (!session) {
+      throw new ViroException(
+        'NOT_FOUND',
+        'Call not found or already ended.',
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    const isParticipant = await this.callSessionService.isParticipant(
+      callId,
+      inviterUserId,
+      inviterDeviceId,
+    );
+    if (!isParticipant) {
+      throw new ViroException(
+        'FORBIDDEN',
+        'Not a participant on this call.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    if (
+      targetUserId === session.callerUserId ||
+      targetUserId === session.calleeUserId ||
+      (session.invitedUserIds ?? []).includes(targetUserId)
+    ) {
+      throw new ViroException(
+        'VALIDATION_ERROR',
+        'That person is already on this call.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    // Being on a call is not a way around who the inviter is allowed to ring:
+    // the same contact/connection and block checks apply as when placing one.
+    if (await this.blocksService.isBlocked(inviterUserId, targetUserId)) {
+      throw new ViroException(
+        'CALL_NOT_AUTHORIZED',
+        'Not allowed to call that user.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    if (!(await this.isCallAllowed(inviterUserId, targetUserId))) {
+      throw new ViroException(
+        'CALL_NOT_AUTHORIZED',
+        'Not allowed to call that user.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
+    const deviceIds = await this.resolveCalleeDeviceIds(targetUserId);
+    if (!deviceIds.length) {
+      throw new ViroException(
+        'CALL_TARGET_UNAVAILABLE',
+        'That person has no reachable device.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    await this.callSessionService.addInvitee(callId, targetUserId, deviceIds);
+
+    const inviterName = await this.callerDisplayName(inviterUserId);
+    let delivered = false;
+    for (const deviceId of deviceIds) {
+      const ok = this.signalingDelivery.notifyIncomingCall({
+        calleeDeviceId: deviceId,
+        callId,
+        callerUserId: inviterUserId,
+        callerDeviceId: inviterDeviceId,
+        callerDisplayName: inviterName ?? undefined,
+      });
+      delivered = delivered || ok;
+    }
+
+    // Same push wake-up as a normal incoming call, so being added reaches a
+    // backgrounded app rather than depending on a live socket.
+    await this.pushService.sendToUser(targetUserId, {
+      title: 'Added to a Viro call',
+      body: inviterName ? `${inviterName} added you to a call` : 'You were added to a call',
+      highPriority: true,
+      data: {
+        type: 'incoming_call',
+        callId,
+        callerUserId: inviterUserId,
+        callerDeviceId: inviterDeviceId,
+        addedToActiveCall: 'true',
+      },
+    });
+
+    return { invited: delivered, deviceIds };
+  }
   /** Marks the call as ringing (callee alerted) — driven from the signaling gateway. */
   async markRinging(callId: string): Promise<void> {
     await this.callRepo.update(
@@ -213,6 +319,17 @@ export class CallsService {
             .where('p.user_id IN (:...ids)', { ids: peerIds })
             .getMany();
     const nameByUser = new Map(profiles.map((p) => [p.userId, p.displayName]));
+    // The peer's number, so the client can show who called even when the peer
+    // never set a display name — which is every account by default. Without it
+    // the call log had nothing to fall back to but the raw user id.
+    const phones =
+      peerIds.length === 0
+        ? []
+        : await this.phoneRepo
+            .createQueryBuilder('ph')
+            .where('ph.user_id IN (:...ids)', { ids: peerIds })
+            .getMany();
+    const phoneByUser = new Map(phones.map((ph) => [ph.userId, ph.phoneE164]));
     return rows.map((c) => {
       const peerUserId = c.callerUserId === userId ? c.calleeUserId : c.callerUserId;
       const direction = c.callerUserId === userId ? 'OUTGOING' : 'INCOMING';
@@ -221,7 +338,10 @@ export class CallsService {
         callerUserId: c.callerUserId,
         calleeUserId: c.calleeUserId,
         peerUserId,
-        peerDisplayName: nameByUser.get(peerUserId) ?? null,
+        // Empty string is as useless as null here — normalise so the client
+        // does not have to treat '' as a name.
+        peerDisplayName: nameByUser.get(peerUserId)?.trim() || null,
+        peerPhoneE164: phoneByUser.get(peerUserId) ?? null,
         direction,
         status: c.status,
         routeType: c.routeType,

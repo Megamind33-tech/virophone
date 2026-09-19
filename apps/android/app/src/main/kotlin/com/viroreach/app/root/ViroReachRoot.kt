@@ -23,21 +23,33 @@ fun ViroReachRoot() {
     LaunchedEffect(session) {
         startupState = runCatching {
             if (session.restoreSessionIfAuthenticated()) {
-                AppStartupState.Authenticated
+                AppStartupState.Preparing
             } else {
                 AppStartupState.Unauthenticated
             }
         }.getOrElse {
-            if (session.isAuthenticated) AppStartupState.Authenticated
+            if (session.isAuthenticated) AppStartupState.Preparing
             else AppStartupState.Unauthenticated
+        }
+    }
+
+    // Both entry paths — a fresh sign-in and a restored session — pass through
+    // Preparing, so neither one can show a half-loaded app.
+    LaunchedEffect(startupState) {
+        if (startupState == AppStartupState.Preparing) {
+            runCatching { session.warmUpForSession() }
+            startupState = AppStartupState.Authenticated
         }
     }
 
     when (startupState) {
         AppStartupState.RestoringSession -> StartupLoadingScreen()
+        AppStartupState.Preparing -> StartupLoadingScreen(
+            message = "Getting your contacts and calls ready…",
+        )
         AppStartupState.Unauthenticated -> AuthFlow(
             session = session,
-            onAuthenticated = { startupState = AppStartupState.Authenticated },
+            onAuthenticated = { startupState = AppStartupState.Preparing },
         )
         AppStartupState.Authenticated -> CallEventCoordinator(session = session) {
             ConsumerNav(
@@ -50,7 +62,7 @@ fun ViroReachRoot() {
 }
 
 @Composable
-private fun StartupLoadingScreen() {
+private fun StartupLoadingScreen(message: String = "Restoring secure session…") {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -60,6 +72,6 @@ private fun StartupLoadingScreen() {
     ) {
         Text("Viro Call", style = MaterialTheme.typography.displayLarge)
         Spacer(Modifier.height(ViroSpacing.lg))
-        ViroLoadingIndicator(message = "Restoring secure session…")
+        ViroLoadingIndicator(message = message)
     }
 }

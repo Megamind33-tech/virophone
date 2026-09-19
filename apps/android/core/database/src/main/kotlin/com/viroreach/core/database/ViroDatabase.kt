@@ -19,10 +19,13 @@ data class KnownContactEntity(
     val isReachable: Boolean,
     val isFavorite: Boolean,
     val isBlocked: Boolean = false,
+    val isSpam: Boolean = false,
     val updatedAt: Long,
 )
 
-@Database(entities = [KnownContactEntity::class], version = 4, exportSchema = false)
+// v5 adds isSpam. fallbackToDestructiveMigration is acceptable here because
+// every row is a cache rebuilt from the address book and the server.
+@Database(entities = [KnownContactEntity::class], version = 5, exportSchema = false)
 abstract class ViroDatabase : RoomDatabase() {
     abstract fun knownContactDao(): KnownContactDao
 }

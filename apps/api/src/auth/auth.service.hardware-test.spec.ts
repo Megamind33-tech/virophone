@@ -8,7 +8,9 @@ import { Profile } from '../database/entities/profile.entity';
 import { Device } from '../database/entities/device.entity';
 import { Session } from '../database/entities/session.entity';
 import { OtpChallenge } from '../database/entities/otp-challenge.entity';
+import { EmailIdentity } from '../database/entities/email-identity.entity';
 import { SecurityService } from '../security/security.service';
+import { FirebaseAuthService } from './firebase-auth.service';
 import { createHmac } from 'crypto';
 
 describe('AuthService hardware-test flow', () => {
@@ -43,8 +45,16 @@ describe('AuthService hardware-test flow', () => {
         { provide: getRepositoryToken(Device), useValue: { create: jest.fn(), save: jest.fn() } },
         { provide: getRepositoryToken(Session), useValue: { create: jest.fn(), save: jest.fn() } },
         { provide: getRepositoryToken(OtpChallenge), useValue: otpRepo },
+        {
+          provide: getRepositoryToken(EmailIdentity),
+          useValue: { findOne: jest.fn(), create: jest.fn(), save: jest.fn() },
+        },
         { provide: JwtService, useValue: { sign: jest.fn(() => 'access-token') } },
         { provide: SecurityService, useValue: securityService },
+        {
+          provide: FirebaseAuthService,
+          useValue: { resolveUserFromIdToken: jest.fn(), isConfigured: () => false },
+        },
       ],
     }).compile();
 
@@ -64,9 +74,9 @@ describe('AuthService hardware-test flow', () => {
   }
 
   it('rejects non-allowlisted phone on request OTP', async () => {
-    await expect(authService.requestOtp('+260971100001')).rejects.toMatchObject({
+    await expect(authService.requestOtp('+260971100001')).rejects.toMatchObject({ response: {
       code: 'FORBIDDEN',
-    });
+    } });
     expect(securityService.logEvent).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: 'HARDWARE_TEST_AUTH_FAILURE' }),
     );
@@ -89,7 +99,7 @@ describe('AuthService hardware-test flow', () => {
     });
     await expect(
       authService.verifyOtp('challenge-1', 'wrong1', 'pubkey', 'ANDROID', '0.1.0'),
-    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    ).rejects.toMatchObject({ response: { code: 'VALIDATION_ERROR' } });
     expect(securityService.logEvent).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: 'HARDWARE_TEST_AUTH_FAILURE' }),
     );
@@ -105,6 +115,6 @@ describe('AuthService hardware-test flow', () => {
     });
     await expect(
       authService.verifyOtp('challenge-1', CREDENTIAL, 'pubkey', 'ANDROID', '0.1.0'),
-    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    ).rejects.toMatchObject({ response: { code: 'VALIDATION_ERROR' } });
   });
 });

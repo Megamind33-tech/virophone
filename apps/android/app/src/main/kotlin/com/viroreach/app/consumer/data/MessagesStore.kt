@@ -29,6 +29,17 @@ class MessagesStore {
 
     private val messagesByConversation = mutableMapOf<String, MutableStateFlow<List<ChatMessage>>>()
 
+
+    /**
+     * Drops every conversation and message held in memory. MessagesStore lives
+     * as long as the process, so without this a second account signing in saw
+     * the first account's inbox until the app was force-stopped.
+     */
+    fun clearAll() {
+        _conversations.value = emptyList()
+        messagesByConversation.values.forEach { it.value = emptyList() }
+        messagesByConversation.clear()
+    }
     fun conversationMessages(conversationId: String): StateFlow<List<ChatMessage>> =
         messagesByConversation.getOrPut(conversationId) {
             MutableStateFlow(emptyList())

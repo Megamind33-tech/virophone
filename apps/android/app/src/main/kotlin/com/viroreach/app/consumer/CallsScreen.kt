@@ -51,7 +51,10 @@ fun CallsScreen(
         log.phoneE164?.let { contactsByPhone[it] } ?: log.peerUserId?.let { contactsByUserId[it] }
 
     LaunchedEffect(Unit) {
-        session.callHistoryStore.syncFromServer(session.api, session.tokenStore.getUserId())
+        session.callHistoryStore.syncFromServer(
+            session.api,
+            session.tokenStore.getUserId(),
+        ) { peerUserId -> session.contactsRepository.displayNameForUserId(peerUserId) }
     }
 
     val filtered = entries.filter { entry ->

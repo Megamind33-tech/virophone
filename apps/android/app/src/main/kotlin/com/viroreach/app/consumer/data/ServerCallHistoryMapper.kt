@@ -5,7 +5,17 @@ import com.viroreach.core.network.ViroApiService
 import java.time.Instant
 
 object ServerCallHistoryMapper {
-    fun toLogEntry(entry: CallHistoryEntry, currentUserId: String?): CallLogEntry {
+    /**
+     * [localNameFor] resolves a peer's Viro user id against the contacts already
+     * on this phone. Checked FIRST: the name someone saved in their own address
+     * book is the name they expect to see, ahead of whatever display name the
+     * peer set on the platform.
+     */
+    fun toLogEntry(
+        entry: CallHistoryEntry,
+        currentUserId: String?,
+        localNameFor: (String) -> String? = { null },
+    ): CallLogEntry {
         val outgoing = when {
             entry.direction.equals("OUTGOING", true) -> true
             entry.direction.equals("INCOMING", true) -> false
@@ -32,14 +42,18 @@ object ServerCallHistoryMapper {
         }
         val peerUserId = entry.peerUserId
             ?: if (outgoing) entry.calleeUserId else entry.callerUserId
-        val name = entry.peerDisplayName?.takeIf { it.isNotBlank() }
-            ?: peerUserId.take(8)
+        // Never fall back to a user id. Showing "a5b4413b" where a name belongs
+        // is unreadable and unsearchable, and tells the user their contact is a
+        // stranger. Profiles are created with an empty display name, so this
+        // fallback was the common case rather than the rare one.
+        val name = localNameFor(peerUserId)?.takeIf { it.isNotBlank() }
+            ?: entry.peerDisplayName?.takeIf { it.isNotBlank() }
+            ?: entry.peerPhoneE164?.takeIf { it.isNotBlank() }
+            ?: "Unknown caller"
         return CallLogEntry(
             id = entry.id,
             name = name,
-            // The server doesn't return a phone number for history entries — call-back
-            // and message-back fall back to peerUserId instead (see HomeScreen/ConsumerNav).
-            phoneE164 = null,
+            phoneE164 = entry.peerPhoneE164,
             type = type,
             timestampMs = startMs,
             durationSeconds = duration,
@@ -55,7 +69,13 @@ object ServerCallHistoryMapper {
     }
 }
 
-suspend fun CallHistoryStore.syncFromServer(api: ViroApiService, currentUserId: String?) {
+suspend fun CallHistoryStore.syncFromServer(
+    api: ViroApiService,
+    currentUserId: String?,
+    localNameFor: (String) -> String? = { null },
+) {
     val remote = runCatching { api.getCallHistory() }.getOrElse { return }
-    mergeServerHistory(remote.map { ServerCallHistoryMapper.toLogEntry(it, currentUserId) })
+    mergeServerHistory(
+        remote.map { ServerCallHistoryMapper.toLogEntry(it, currentUserId, localNameFor) },
+    )
 }

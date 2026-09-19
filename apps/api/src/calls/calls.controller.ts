@@ -31,6 +31,12 @@ class AuthorizeCallDto {
   offlineTicket?: string;
 }
 
+class InviteToCallDto {
+  @IsString()
+  @IsNotEmpty()
+  userId!: string;
+}
+
 class CallQualityDto {
   @IsNumber()
   @IsOptional()
@@ -135,6 +141,24 @@ export class CallsController {
       throw new ForbiddenException('Not a participant on this call.');
     }
     return this.liveKitService.generateToken(id, req.user.sub);
+  }
+
+  /**
+   * Adds another person to a call in progress. Any current participant may
+   * add someone, subject to the same block/contact checks as placing a call.
+   */
+  @Post(':id/invite')
+  async invite(
+    @Req() req: { user: { sub: string; deviceId: string } },
+    @Param('id') id: string,
+    @Body() body: InviteToCallDto,
+  ) {
+    return this.callsService.inviteToCall(
+      req.user.sub,
+      req.user.deviceId,
+      id,
+      body.userId,
+    );
   }
 
   @Post(':id/events')

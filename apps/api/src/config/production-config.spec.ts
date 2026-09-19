@@ -5,6 +5,10 @@ describe('Production fail-closed config', () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv };
+    // The shell/.env the suite inherits sets OTP_PROVIDER, which leaked
+    // into the "proper secrets" case and made it fail for a reason that
+    // test is not about. Each case sets what it needs explicitly.
+    delete process.env.OTP_PROVIDER;
   });
 
   afterAll(() => {
@@ -43,6 +47,9 @@ describe('Production fail-closed config', () => {
     process.env.CONTACT_HASH_SALT = 'c'.repeat(32);
     process.env.TURN_SECRET = 'd'.repeat(32);
     process.env.EPHEMERAL_SIGNING_SECRET = 'e'.repeat(32);
+    process.env.LIVEKIT_API_KEY = 'viroabc123';
+    process.env.LIVEKIT_API_SECRET = 'f'.repeat(40);
+    process.env.LIVEKIT_URL = 'wss://example.test/livekit-rtc';
     expect(() => validateProductionConfig()).not.toThrow();
   });
 
@@ -55,6 +62,9 @@ describe('Production fail-closed config', () => {
     process.env.CONTACT_HASH_SALT = 'c'.repeat(32);
     process.env.TURN_SECRET = 'd'.repeat(32);
     process.env.EPHEMERAL_SIGNING_SECRET = 'e'.repeat(32);
+    process.env.LIVEKIT_API_KEY = 'viroabc123';
+    process.env.LIVEKIT_API_SECRET = 'f'.repeat(40);
+    process.env.LIVEKIT_URL = 'wss://example.test/livekit-rtc';
     process.env.OTP_PROVIDER = 'test';
     expect(() => validateProductionConfig()).toThrow(/OTP_PROVIDER=test is forbidden/);
   });
@@ -68,6 +78,9 @@ describe('Production fail-closed config', () => {
     process.env.CONTACT_HASH_SALT = 'c'.repeat(32);
     process.env.TURN_SECRET = 'd'.repeat(32);
     process.env.EPHEMERAL_SIGNING_SECRET = 'e'.repeat(32);
+    process.env.LIVEKIT_API_KEY = 'viroabc123';
+    process.env.LIVEKIT_API_SECRET = 'f'.repeat(40);
+    process.env.LIVEKIT_URL = 'wss://example.test/livekit-rtc';
     process.env.OTP_PROVIDER = 'hardware-test';
     process.env.HARDWARE_TEST_PHONES_E164 = '*';
     process.env.HARDWARE_TEST_OTP_CODE = 'Hw7k9m';
@@ -83,6 +96,9 @@ describe('Production fail-closed config', () => {
     process.env.CONTACT_HASH_SALT = 'c'.repeat(32);
     process.env.TURN_SECRET = 'd'.repeat(32);
     process.env.EPHEMERAL_SIGNING_SECRET = 'e'.repeat(32);
+    process.env.LIVEKIT_API_KEY = 'viroabc123';
+    process.env.LIVEKIT_API_SECRET = 'f'.repeat(40);
+    process.env.LIVEKIT_URL = 'wss://example.test/livekit-rtc';
     process.env.OTP_PROVIDER = 'hardware-test';
     process.env.HARDWARE_TEST_PHONES_E164 = '+260961582985,+260977426940';
     process.env.HARDWARE_TEST_OTP_CODE = 'Hw7k9m';

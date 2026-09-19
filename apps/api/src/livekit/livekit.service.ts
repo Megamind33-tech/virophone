@@ -27,6 +27,11 @@ export class LiveKitService {
     return `viro-call-${callId}`;
   }
 
+  /** Room name derived from a conference roomId — kept distinct from 1:1 call rooms. */
+  roomNameForConference(conferenceId: string): string {
+    return `viro-conf-${conferenceId}`;
+  }
+
   isConfigured(): boolean {
     return !!(this.apiKey && this.apiSecret && this.url);
   }
@@ -35,10 +40,17 @@ export class LiveKitService {
     callId: string,
     userId: string,
   ): Promise<LiveKitCredentials> {
+    return this.generateTokenForRoom(this.roomNameFor(callId), userId);
+  }
+
+  /** Same audio-only grant, for a caller-supplied room name (e.g. a conference room). */
+  async generateTokenForRoom(
+    roomName: string,
+    userId: string,
+  ): Promise<LiveKitCredentials> {
     if (!this.isConfigured()) {
       throw new Error('LiveKit is not configured (LIVEKIT_API_KEY/SECRET/URL).');
     }
-    const roomName = this.roomNameFor(callId);
     const at = new AccessToken(this.apiKey, this.apiSecret, {
       identity: userId,
       ttl: this.ttlSeconds,

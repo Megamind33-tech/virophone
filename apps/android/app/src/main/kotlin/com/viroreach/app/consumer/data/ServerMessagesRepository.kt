@@ -19,7 +19,7 @@ class ServerMessagesRepository(
             val peer = summary.participants.firstOrNull { it != currentUserId }
             Conversation(
                 id = summary.id,
-                peerName = summary.title ?: peer?.take(8) ?: "Conversation",
+                peerName = summary.title?.takeIf { it.isNotBlank() } ?: "Conversation",
                 peerUserId = peer,
                 phoneE164 = null,
                 lastMessage = summary.lastMessage?.body.orEmpty(),

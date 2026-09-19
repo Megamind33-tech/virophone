@@ -1,0 +1,12 @@
+# Shell scripts and container entrypoints are executed by Linux. A CRLF
+# checkout on Windows makes the shebang `#!/bin/sh\r`, which the kernel
+# reports as "no such file or directory" — the container then crash-loops
+# with an error that names the file it just successfully copied.
+*.sh            text eol=lf
+Dockerfile*     text eol=lf
+*.yaml          text eol=lf
+*.yml           text eol=lf
+*.conf          text eol=lf
+*.conf.template text eol=lf
+Makefile        text eol=lf
+Caddyfile*      text eol=lf

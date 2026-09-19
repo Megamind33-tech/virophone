@@ -30,6 +30,8 @@ import com.viroreach.app.session.SessionManager
 
 import com.viroreach.core.model.CallStateMachineState
 
+import kotlinx.coroutines.delay
+
 
 
 
@@ -126,7 +128,47 @@ fun CallEventCoordinator(
 
             session.incomingCallRinger.stop()
 
+            session.callerRingbackPlayer.stop()
+
             session.incomingCallNotifier.dismiss()
+
+        }
+
+    }
+
+
+
+    // Caller-side: audible ringback while the other phone is ringing —
+    // previously the caller heard nothing at all and had no way to tell
+    // whether the call was going through until it either connected or
+    // failed outright.
+    LaunchedEffect(callState, isCaller) {
+
+        if (callState == CallStateMachineState.RINGING && isCaller) {
+
+            runCatching { session.callerRingbackPlayer.start() }
+
+        } else {
+
+            session.callerRingbackPlayer.stop()
+
+        }
+
+    }
+
+
+
+    // No answer within 10s of the other phone actually ringing — cancel
+    // outright instead of leaving the caller's screen stuck on "Calling…"
+    // indefinitely. Cancelled automatically if callState/isCaller change
+    // before the delay elapses (call answered, rejected, or ended).
+    LaunchedEffect(callState, isCaller) {
+
+        if (callState == CallStateMachineState.RINGING && isCaller) {
+
+            delay(10_000)
+
+            runCatching { session.callManager.cancelUnanswered() }
 
         }
 

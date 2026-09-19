@@ -22,6 +22,9 @@ COPY --from=builder /app/apps/api/node_modules ./node_modules
 COPY --from=builder /app/apps/api/package.json ./
 COPY apps/api/src/database/migrations ./dist/database/migrations
 COPY infra/docker/docker-entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Strip CR defensively: a Windows checkout can reintroduce CRLF regardless of
+# .gitattributes (an existing clone keeps its line endings), and the resulting
+# failure is the misleading "exec /entrypoint.sh: no such file or directory".
+RUN sed -i "s/\r$//" /entrypoint.sh && chmod +x /entrypoint.sh
 EXPOSE 3001
 ENTRYPOINT ["/entrypoint.sh"]

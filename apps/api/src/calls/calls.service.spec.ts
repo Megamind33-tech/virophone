@@ -26,6 +26,10 @@ describe('CallsService - Authorization', () => {
     getJson: jest.fn().mockResolvedValue({ deviceId: CALLEE_DEVICE }),
     sMembers: jest.fn().mockResolvedValue([CALLEE_DEVICE]),
   } as unknown as RedisService;
+  const mockSignalingDelivery = {
+    notifyIncomingCall: jest.fn().mockReturnValue(true),
+    deliverToDevice: jest.fn().mockReturnValue(true),
+  } as any;
   const mockOfflineTrust = { verifyOfflineCallTicket: jest.fn().mockReturnValue(false) } as any;
 
   beforeEach(() => {
@@ -48,6 +52,7 @@ describe('CallsService - Authorization', () => {
       mockRedis,
       mockPush,
       mockOfflineTrust,
+      mockSignalingDelivery as any,
     );
   });
 

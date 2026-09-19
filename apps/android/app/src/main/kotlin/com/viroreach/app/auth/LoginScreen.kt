@@ -27,6 +27,7 @@ fun LoginScreen(
     onPhoneDigitsChange: (String) -> Unit,
     onCountryChange: (CountryOption) -> Unit,
     onContinue: () -> Unit,
+    onUseEmail: () -> Unit = {},
 ) {
     var pickingCountry by remember { mutableStateOf(false) }
     if (pickingCountry) {
@@ -99,6 +100,9 @@ fun LoginScreen(
                     onClick = onContinue,
                     enabled = !loading && phoneDigits.isNotBlank(),
                 )
+                androidx.compose.material3.TextButton(onClick = onUseEmail, enabled = !loading) {
+                    Text("Use an email address instead")
+                }
                 Spacer(Modifier.weight(1f))
                 ViroNumericKeypad(
                     onDigit = { d ->

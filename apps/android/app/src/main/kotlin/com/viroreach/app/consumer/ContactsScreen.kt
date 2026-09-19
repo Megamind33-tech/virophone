@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
@@ -70,7 +71,39 @@ fun ContactsScreen(
                                 color = ViroColors.textSecondary,
                             )
                         }
-                        Box {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            // The only path to a group call used to be inside this
+                            // overflow menu, several taps deep with no visible hint
+                            // it existed — a single always-visible button makes the
+                            // whole flow discoverable at a glance: tap to start
+                            // selecting, tap again once you've picked people to call.
+                            IconButton(
+                                onClick = {
+                                    if (selectionMode && selectedIds.isNotEmpty()) {
+                                        val selected = state.contacts.filter { it.id in selectedIds }
+                                        onStartGroupCall(selected)
+                                        selectionMode = false
+                                        selectedIds = emptySet()
+                                    } else {
+                                        selectionMode = true
+                                    }
+                                },
+                            ) {
+                                Icon(
+                                    Icons.Default.Group,
+                                    contentDescription = if (selectionMode && selectedIds.isNotEmpty()) {
+                                        "Start group call with ${selectedIds.size} selected"
+                                    } else {
+                                        "New group call"
+                                    },
+                                    tint = if (selectionMode && selectedIds.isNotEmpty()) {
+                                        ViroColors.ElectricBlue
+                                    } else {
+                                        ViroColors.textPrimary
+                                    },
+                                )
+                            }
+                            Box {
                             IconButton(onClick = { menuExpanded = true }) {
                                 Icon(Icons.Default.MoreVert, contentDescription = "Contact options", tint = ViroColors.textPrimary)
                             }
@@ -95,6 +128,7 @@ fun ContactsScreen(
                                         },
                                     )
                                 }
+                            }
                             }
                         }
                     }

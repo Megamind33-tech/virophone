@@ -4,6 +4,7 @@ import com.viroreach.app.consumer.call.CallPresentation
 import com.viroreach.app.session.SessionManager
 import com.viroreach.feature.calling.IncomingCallInfo
 import com.viroreach.feature.contacts.PhoneNumberFormatter
+import com.viroreach.app.consumer.PeerNameResolver
 
 suspend fun resolveIncomingCallerPresentation(
     session: SessionManager,
@@ -17,8 +18,9 @@ suspend fun resolveIncomingCallerPresentation(
     val displayName = cached?.effectiveDisplayName
         ?: serverName
         ?: phone?.let { PhoneNumberFormatter.formatE164International(it) }
-        ?: info.callerUserId?.take(8)?.let { "Viro user $it" }
-        ?: "Unknown caller"
+        // Deliberately no id fallback: "Viro user a5b4413b" is not a name, and
+        // it is what replaced saved contacts' names on the incoming-call screen.
+        ?: PeerNameResolver.UNKNOWN
     CallPresentation(
         displayName = displayName,
         avatarUrl = cached?.resolveAvatarUrl(),

@@ -39,6 +39,39 @@ fun AuthFlow(
             onPhoneDigitsChange = viewModel::updatePhoneDigits,
             onCountryChange = viewModel::selectCountry,
             onContinue = viewModel::requestOtp,
+            onUseEmail = viewModel::showEmailAuth,
+        )
+        AuthStep.Email -> EmailAuthScreen(
+            email = state.email,
+            password = state.password,
+            registerMode = state.registerMode,
+            loading = state.loading,
+            errorMessage = state.errorMessage,
+            onEmailChange = viewModel::updateEmail,
+            onPasswordChange = viewModel::updatePassword,
+            onToggleMode = viewModel::toggleEmailRegisterMode,
+            onSubmit = { viewModel.submitEmailAuth(onAuthenticated) },
+            onUsePhone = viewModel::showPhoneAuth,
+        )
+        AuthStep.LinkPhone -> LinkPhoneScreen(
+            phoneDigits = state.linkDigits,
+            country = state.country,
+            loading = state.loading,
+            errorMessage = state.errorMessage,
+            onPhoneDigitsChange = viewModel::updateLinkDigits,
+            onCountryChange = viewModel::selectCountry,
+            onContinue = viewModel::requestLinkOtp,
+            onSkip = onAuthenticated,
+        )
+        AuthStep.LinkPhoneOtp -> LinkPhoneOtpScreen(
+            phoneE164 = state.linkPhoneE164.orEmpty(),
+            otp = state.linkOtp,
+            loading = state.loading,
+            errorMessage = state.errorMessage,
+            onOtpChange = viewModel::updateLinkOtp,
+            onVerify = { viewModel.verifyLinkOtp(onAuthenticated) },
+            onChangeNumber = viewModel::changeLinkNumber,
+            onSkip = onAuthenticated,
         )
         AuthStep.Otp -> {
             val phone = state.normalizedPhone

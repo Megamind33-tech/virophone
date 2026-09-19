@@ -48,7 +48,10 @@ class SignalingClient {
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.SECONDS)
-        .pingInterval(30, TimeUnit.SECONDS)
+        // Some restrictive Wi-Fi routers NAT-time-out an idle connection well
+        // under 30s — a shorter ping both detects a dead socket sooner and
+        // keeps the NAT mapping alive longer in the first place.
+        .pingInterval(15, TimeUnit.SECONDS)
         .build()
 
     /**

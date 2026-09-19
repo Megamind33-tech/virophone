@@ -1,0 +1,35 @@
+rules_version = '2';
+
+// Viro Reach — Firestore security rules.
+//
+// Postgres remains the system of record for users, calls, contacts, messages
+// and subscriptions. Firestore is deliberately NOT a second copy of any of
+// that: two writable stores for the same fact is how they drift apart, and
+// nothing here is authoritative for authorisation — call and contact access is
+// decided by the API, which Firestore rules cannot see.
+//
+// The default is deny. Anything not matched below is unreachable from a client,
+// so adding a collection is an explicit decision rather than an accident.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Each signed-in user owns exactly one private subtree, addressed by their
+    // Firebase UID. Suitable for per-account state the client benefits from
+    // syncing directly — draft text, UI preferences, device-local settings that
+    // should survive a reinstall.
+    //
+    // Note this is the FIREBASE uid, not the Viro user id. They are different
+    // identifiers for the same person, and only accounts that signed in with
+    // email have one at all.
+    match /users/{uid}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Everything else: no client access at all. Server-side access through the
+    // Admin SDK bypasses these rules, so backend features do not need an
+    // exception added here.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

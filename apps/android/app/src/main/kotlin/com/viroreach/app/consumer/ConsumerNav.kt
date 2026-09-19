@@ -86,6 +86,10 @@ enum class ConsumerOverlay {
 
     None,
 
+    AddPhone,
+
+    AddEmail,
+
     Developer,
 
     Dialer,
@@ -263,10 +267,19 @@ fun ConsumerNav(
             // userId) so they appear regardless of the server-side conversation id.
             val peerUserId = event.fromUserId
             val convId = if (peerUserId != null) {
+                // A raw id fragment as the name (as this used to do) is exactly
+                // what showed up in place of a saved contact's name whenever
+                // this fired before the inbox had a chance to sync — look the
+                // sender up locally first, same as every other screen does.
+                val contact = session.contactsRepository.findByUserId(peerUserId)
                 session.messagesStore.openOrCreateConversation(
-                    peerName = peerUserId.take(8),
+                    peerName = PeerNameResolver.resolve(
+                        session = session,
+                        userId = peerUserId,
+                        phoneE164 = contact?.phoneE164,
+                    ),
                     peerUserId = peerUserId,
-                    phoneE164 = null,
+                    phoneE164 = contact?.phoneE164,
                 )
             } else {
                 event.conversationId
@@ -373,26 +386,13 @@ fun ConsumerNav(
 
     fun handleBackNavigation() {
         when (overlay) {
-            ConsumerOverlay.Call -> {
-                session.incomingCallRinger.stop()
-                scope.launch {
-                    runCatching {
-                        when {
-                            CallNavigationPolicy.isIncomingRinging(callState, isCaller) ->
-                                session.callManager.rejectCall()
-                            CallNavigationPolicy.isCallOverlayState(callState) ->
-                                session.callManager.hangUp()
-                        }
-                    }
-                }
-                overlay = ConsumerOverlay.None
-                userInitiatedCall = false
-                callPresentation = null
-            }
-            ConsumerOverlay.GroupCall -> {
-                session.conferenceManager.endConference()
-                overlay = ConsumerOverlay.None
-            }
+            // A phone call can't be accidentally ended by a stray back-press —
+            // this used to reject/hang up unconditionally, so navigating back
+            // (even by habit, or an accidental gesture) silently ended a real
+            // call with no confirmation. Ending a call is now only ever what
+            // the explicit End Call / Decline buttons on the call screen do.
+            ConsumerOverlay.Call -> Unit
+            ConsumerOverlay.GroupCall -> Unit
             ConsumerOverlay.None -> {
                 if (tab != ViroConsumerTab.Home) {
                     tab = ViroConsumerTab.Home
@@ -478,9 +478,30 @@ fun ConsumerNav(
 
         }
 
+        ConsumerOverlay.AddPhone -> {
+
+            AddPhoneOverlay(session = session, onDone = { overlay = ConsumerOverlay.None })
+
+            return
+
+        }
+
+        ConsumerOverlay.AddEmail -> {
+
+            AddEmailOverlay(session = session, onDone = { overlay = ConsumerOverlay.None })
+
+            return
+
+        }
+
         ConsumerOverlay.EditProfile -> {
 
-            EditProfileScreen(session = session, onBack = { overlay = ConsumerOverlay.None })
+            EditProfileScreen(
+                session = session,
+                onBack = { overlay = ConsumerOverlay.None },
+                onAddPhone = { overlay = ConsumerOverlay.AddPhone },
+                onAddEmail = { overlay = ConsumerOverlay.AddEmail },
+            )
 
             return
 
@@ -1010,6 +1031,8 @@ fun ConsumerNav(
                     onAppearance = { overlay = ConsumerOverlay.Appearance },
 
                     onEditProfile = { overlay = ConsumerOverlay.EditProfile },
+
+                    onAddPhone = { overlay = ConsumerOverlay.AddPhone },
 
                     onBlockedContacts = { overlay = ConsumerOverlay.BlockedContacts },
 

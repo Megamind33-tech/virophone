@@ -30,6 +30,7 @@ fun YouScreen(
     onDeveloper: () -> Unit,
     onAppearance: () -> Unit,
     onEditProfile: () -> Unit,
+    onAddPhone: () -> Unit,
     onBlockedContacts: () -> Unit,
     onConnections: () -> Unit,
     onDevices: () -> Unit,
@@ -97,10 +98,18 @@ fun YouScreen(
                 }
                 SettingsSection(title = "Account") {
                     SettingsNavRow("Profile", onEditProfile)
-                    SettingsRow(
-                        label = "Phone",
-                        value = state.phoneE164?.let { PhoneNumberFormatter.formatE164International(it) } ?: "—",
-                    )
+                    // An account with no number is invisible to contact
+                    // discovery, so the row is an action rather than a dash:
+                    // someone who skipped the step at sign-up had no way back
+                    // to it short of signing out.
+                    if (state.phoneE164.isNullOrBlank()) {
+                        SettingsNavRow("Add phone number", onAddPhone)
+                    } else {
+                        SettingsRow(
+                            label = "Phone",
+                            value = PhoneNumberFormatter.formatE164International(state.phoneE164),
+                        )
+                    }
                     SettingsNavRow("Subscription", onSubscription)
                 }
                 SettingsSection(title = "Preferences") {

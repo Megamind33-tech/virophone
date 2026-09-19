@@ -1,0 +1,20 @@
+# Self-hosted LiveKit config for Viro Reach's own voice calls (isolated from
+# any other LiveKit deployment on this shared host).
+#
+# RENDERED FILE — do not edit livekit.vps.yaml directly. Edit this template
+# and re-run scripts/vps-render-config.sh. The API key/secret come from
+# .env.vps so the same pair signs join tokens in the API and validates them
+# here; a mismatch is invisible until a call silently carries no audio.
+#
+# The TURNS (TURN-over-TLS) block is appended by the render script ONLY when
+# a cert/key pair is present in ./livekit-tls. LiveKit refuses to start if
+# turn.enabled is true and the cert files are missing, so it is never
+# written unconditionally.
+port: 7980
+rtc:
+  tcp_port: 7981
+  port_range_start: 51000
+  port_range_end: 51100
+  use_external_ip: true
+keys:
+  __LIVEKIT_API_KEY__: __LIVEKIT_API_SECRET__

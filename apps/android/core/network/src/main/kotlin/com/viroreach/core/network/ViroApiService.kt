@@ -9,6 +9,43 @@ interface ViroApiService {
     @POST("api/v1/auth/otp/request")
     suspend fun requestOtp(@Body body: OtpRequestBody): OtpRequestResponse
 
+    // --- Preferences that follow the account to a new device ---
+    @GET("api/v1/preferences")
+    suspend fun getPreferences(): PreferencesResponse
+
+    @PUT("api/v1/preferences/contacts")
+    suspend fun putContactPreferences(@Body body: ContactPreferencesBody)
+
+    @PUT("api/v1/preferences/appearance")
+    suspend fun putAppearancePreferences(@Body body: AppearancePreferencesBody)
+
+    // Connects a phone number to the signed-in account, so an account made
+    // with email becomes findable by people who only know the number.
+    // Numbers and emails on this account, for the profile page.
+    @GET("api/v1/auth/identities")
+    suspend fun listIdentities(): IdentitiesResponse
+
+    @HTTP(method = "DELETE", path = "api/v1/auth/identities/{kind}/{id}")
+    suspend fun removeIdentity(
+        @Path("kind") kind: String,
+        @Path("id") id: String,
+    ): IdentitiesResponse
+
+    @POST("api/v1/auth/link/email/request")
+    suspend fun requestEmailLink(@Body body: EmailLinkRequestBody): PhoneLinkRequestResponse
+
+    @POST("api/v1/auth/link/email/verify")
+    suspend fun verifyEmailLink(@Body body: EmailLinkVerifyBody): IdentitiesResponse
+
+    @POST("api/v1/auth/link/phone/request")
+    suspend fun requestPhoneLink(@Body body: PhoneLinkRequestBody): PhoneLinkRequestResponse
+
+    @POST("api/v1/auth/link/phone/verify")
+    suspend fun verifyPhoneLink(@Body body: PhoneLinkVerifyBody): PhoneLinkVerifyResponse
+
+    @POST("api/v1/auth/firebase/signin")
+    suspend fun firebaseSignIn(@Body body: FirebaseSignInBody): FirebaseSignInResponse
+
     @POST("api/v1/auth/otp/verify")
     suspend fun verifyOtp(@Body body: OtpVerifyBody): OtpVerifyResponse
 
@@ -78,6 +115,12 @@ interface ViroApiService {
     @POST("api/v1/calls/{callId}/end")
     suspend fun endCall(@Path("callId") callId: String)
 
+    @POST("api/v1/calls/{callId}/invite")
+    suspend fun inviteToCall(
+        @Path("callId") callId: String,
+        @Body body: InviteToCallBody,
+    ): InviteToCallResponse
+
     @POST("api/v1/calls/{callId}/livekit-token")
     suspend fun getLiveKitToken(@Path("callId") callId: String): LiveKitTokenResponse
 
@@ -129,12 +172,91 @@ interface ViroApiService {
 
     @GET("api/v1/conferences/{id}/participants")
     suspend fun conferenceParticipants(@Path("id") id: String): List<ConferenceParticipantDto>
+
+    @POST("api/v1/conferences/{id}/livekit-token")
+    suspend fun getConferenceLiveKitToken(@Path("id") id: String): LiveKitTokenResponse
+
+    // --- Presence ---
+    @POST("api/v1/presence")
+    suspend fun updatePresence(@Body body: UpdatePresenceBody)
+
+    @GET("api/v1/presence/{userId}")
+    suspend fun getPresence(@Path("userId") userId: String): PresenceResponse
 }
 
 data class OtpRequestBody(val phoneE164: String)
 data class OtpRequestResponse(val challengeId: String, val expiresAt: String)
 data class OtpVerifyBody(val challengeId: String, val code: String, val devicePublicKey: String, val platform: String, val appVersion: String)
 data class OtpVerifyResponse(val accessToken: String, val refreshToken: String, val expiresIn: Int, val userId: String, val deviceId: String, val isNewUser: Boolean)
+data class ContactPreferenceDto(
+    val phoneE164: String,
+    val isFavorite: Boolean = false,
+    val customDisplayName: String? = null,
+    val isHidden: Boolean = false,
+    /** Block/spam for contacts with no Viro account — see migration 009. */
+    val isBlocked: Boolean = false,
+    val isSpam: Boolean = false,
+)
+data class ContactPreferencesBody(val contacts: List<ContactPreferenceDto>)
+data class AppearancePreferencesDto(
+    val themeMode: String = "SYSTEM",
+    val fontSize: String = "STANDARD",
+    val density: String = "COMFORTABLE",
+)
+data class AppearancePreferencesBody(
+    val themeMode: String? = null,
+    val fontSize: String? = null,
+    val density: String? = null,
+)
+data class PreferencesResponse(
+    val contacts: List<ContactPreferenceDto> = emptyList(),
+    val appearance: AppearancePreferencesDto = AppearancePreferencesDto(),
+)
+
+data class PhoneIdentityDto(val id: String, val phoneE164: String, val verified: Boolean)
+data class EmailIdentityDto(val id: String, val email: String, val verified: Boolean)
+data class IdentitiesResponse(
+    val phones: List<PhoneIdentityDto> = emptyList(),
+    val emails: List<EmailIdentityDto> = emptyList(),
+)
+data class EmailLinkRequestBody(val email: String)
+data class EmailLinkVerifyBody(val challengeId: String, val code: String)
+
+data class PhoneLinkRequestBody(val phoneE164: String)
+data class PhoneLinkRequestResponse(val challengeId: String, val expiresAt: String)
+data class PhoneLinkVerifyBody(val challengeId: String, val code: String)
+
+/**
+ * outcome "linked": the number was free and is now on this account.
+ * outcome "adopted": the number already had an account and this (empty) one was
+ * folded into it — accessToken/refreshToken are then present and the client MUST
+ * switch to them, because the user id it was holding no longer exists.
+ */
+data class PhoneLinkVerifyResponse(
+    val outcome: String,
+    val phoneE164: String,
+    val userId: String,
+    val accessToken: String? = null,
+    val refreshToken: String? = null,
+    val expiresIn: Int? = null,
+)
+
+data class FirebaseSignInBody(
+    val idToken: String,
+    val devicePublicKey: String,
+    val platform: String,
+    val appVersion: String,
+)
+data class FirebaseSignInResponse(
+    val accessToken: String,
+    val refreshToken: String,
+    val expiresIn: Int,
+    val userId: String,
+    val deviceId: String,
+    val email: String,
+    val isNewUser: Boolean,
+)
+
 data class RefreshBody(val refreshToken: String)
 data class RefreshResponse(val accessToken: String, val refreshToken: String, val expiresIn: Int)
 data class MeResponse(val userId: String, val phoneE164: String, val displayName: String, val avatarUrl: String?, val viroId: String?, val allowCallsFromViroId: String)
@@ -208,6 +330,10 @@ data class ResolveEphemeralBody(val ephemeralId: String, val authorizedUserIds: 
 data class ResolveEphemeralResponse(val authorized: Boolean, val userId: String? = null)
 data class TurnCredentialsResponse(val urls: List<String>, val username: String, val credential: String, val ttlSeconds: Int)
 data class LiveKitTokenResponse(val url: String, val token: String, val roomName: String)
+
+data class InviteToCallBody(val userId: String)
+
+data class InviteToCallResponse(val invited: Boolean, val deviceIds: List<String> = emptyList())
 data class OfflineTrustMaterialResponse(val material: List<OfflineTrustEntry>, val syncedAt: String)
 data class OfflineTrustEntry(
     val peerUserId: String,
@@ -236,6 +362,7 @@ data class CallHistoryEntry(
     val endedAt: String?,
     val peerUserId: String? = null,
     val peerDisplayName: String? = null,
+    val peerPhoneE164: String? = null,
     val direction: String? = null,
 )
 data class CallQualityBody(
@@ -282,3 +409,7 @@ data class CreateConferenceBody(
 )
 data class CreateConferenceResponse(val roomId: String, val allowed: List<String>)
 data class ConferenceParticipantDto(val userId: String, val deviceId: String)
+
+// Presence
+data class UpdatePresenceBody(val state: String)
+data class PresenceResponse(val state: String)

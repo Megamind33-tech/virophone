@@ -5,8 +5,7 @@ import com.viroreach.app.consumer.ContactListItem
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.network.CreateConferenceBody
 import com.viroreach.feature.calling.SignalingMessage
-import com.viroreach.voice.webrtc.MeshOfferPolicy
-import com.viroreach.voice.webrtc.MeshVoiceEngine
+import com.viroreach.voice.webrtc.LiveKitCallEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -48,15 +47,17 @@ data class ConferenceState(
 )
 
 /**
- * Multi-party mesh conference: REST create/join + WSS conf.* signaling +
- * one WebRTC PeerConnection per remote device.
+ * Multi-party group call: REST create/join + WSS conf.* signaling for the
+ * invite/roster (who's in the room, by name), with LiveKit carrying the
+ * actual audio — one Room per conference, every participant connects to the
+ * same room instead of meshing a WebRTC connection to each other peer.
  */
 class ConferenceManager(
     private val session: SessionManager,
     context: Context,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val mesh = MeshVoiceEngine(context)
+    private val liveKit = LiveKitCallEngine(context)
     private val _state = MutableStateFlow(ConferenceState())
     val state: StateFlow<ConferenceState> = _state.asStateFlow()
 
@@ -66,24 +67,20 @@ class ConferenceManager(
         session.callManager.conferenceEvents
             .onEach { handleFrame(it) }
             .launchIn(scope)
-        mesh.onLocalIceCandidate = sendIce@{ remoteDeviceId, sdpMid, sdpMLineIndex, candidate ->
-            val roomId = _state.value.conferenceId ?: return@sendIce
-            session.callManager.sendConferenceEvent(
-                type = "conf.ice",
-                roomId = roomId,
-                targetDeviceId = remoteDeviceId,
-                payload = JSONObject()
-                    .put("candidate", candidate)
-                    .put("sdpMid", sdpMid)
-                    .put("sdpMLineIndex", sdpMLineIndex),
-            )
-        }
-        mesh.onPeerConnected = { deviceId ->
-            updateParticipant(deviceId) { it.copy(connected = true) }
-        }
-        mesh.onPeerDisconnected = { deviceId ->
-            updateParticipant(deviceId) { it.copy(connected = false, speaking = false) }
-        }
+        // LiveKit's roster is keyed by identity == userId (see
+        // LiveKitService.generateTokenForRoom) — merge it onto the
+        // WSS-populated roster (which has display names) by userId.
+        liveKit.participants
+            .onEach { livekitRoster ->
+                val connectedIds = livekitRoster.associateBy { it.identity }
+                _state.value = _state.value.copy(
+                    participants = _state.value.participants.map { p ->
+                        val live = p.userId?.let { connectedIds[it] }
+                        p.copy(connected = live != null, speaking = live?.isSpeaking == true)
+                    },
+                )
+            }
+            .launchIn(scope)
     }
 
     fun startConference(contacts: List<ContactListItem>) {
@@ -149,14 +146,14 @@ class ConferenceManager(
         )
         if (participantId == LOCAL_ID) {
             val muted = _state.value.participants.firstOrNull { it.id == LOCAL_ID }?.muted == true
-            mesh.setMuted(muted)
+            liveKit.setMuted(muted)
             _state.value = _state.value.copy(localMuted = muted)
         }
     }
 
     fun toggleSpeaker() {
         val next = !_state.value.speakerOn
-        mesh.setSpeaker(next)
+        liveKit.setSpeaker(next)
         _state.value = _state.value.copy(speakerOn = next)
     }
 
@@ -177,30 +174,23 @@ class ConferenceManager(
         _state.value.conferenceId?.let { id ->
             session.callManager.sendConferenceEvent("conf.leave", id)
         }
-        mesh.shutdown()
+        scope.launch { liveKit.disconnect() }
         pendingNames.clear()
         _state.value = ConferenceState()
     }
 
     private suspend fun prepareMedia(roomId: String) {
-        val turn = runCatching { session.api.getTurnCredentials() }.getOrNull()
-        val material = if (turn != null) {
-            mapOf(
-                "callId" to roomId,
-                "iceServers" to turn.urls.joinToString(","),
-                "iceUsername" to turn.username,
-                "iceCredential" to turn.credential,
-            )
-        } else {
-            mapOf(
-                "callId" to roomId,
-                "iceServers" to "stun:stun.l.google.com:19302",
-            )
-        }
-        mesh.initialize()
-        mesh.applyIceServers(material)
-        mesh.setSpeaker(_state.value.speakerOn)
-        mesh.setMuted(_state.value.localMuted)
+        val creds = runCatching { session.api.getConferenceLiveKitToken(roomId) }
+            .getOrElse { err ->
+                _state.value = _state.value.copy(error = "Couldn't connect audio: ${err.message}")
+                return
+            }
+        runCatching { liveKit.connect(creds.url, creds.token) }
+            .onFailure { err ->
+                _state.value = _state.value.copy(error = "Couldn't connect audio: ${err.message}")
+            }
+        liveKit.setSpeaker(_state.value.speakerOn)
+        liveKit.setMuted(_state.value.localMuted)
     }
 
     private fun handleFrame(msg: SignalingMessage) {
@@ -218,95 +208,41 @@ class ConferenceManager(
                 )
             }
             "conf.joined" -> {
-                val others = parseParticipants(msg.payload)
-                others.forEach { connectTo(it.userId, it.deviceId) }
+                parseParticipants(msg.payload).forEach { upsertRemote(it.userId, it.deviceId) }
             }
             "conf.peer-joined" -> {
-                val deviceId = msg.fromDeviceId ?: return
-                connectTo(msg.fromUserId, deviceId)
+                upsertRemote(msg.fromUserId, msg.fromDeviceId ?: return)
             }
             "conf.peer-left" -> {
+                val userId = msg.fromUserId
                 val deviceId = msg.fromDeviceId ?: return
-                mesh.removePeer(deviceId)
                 _state.value = _state.value.copy(
-                    participants = _state.value.participants.filter { it.id != deviceId },
+                    participants = _state.value.participants.filter {
+                        it.id != (userId ?: deviceId)
+                    },
                 )
             }
-            "conf.offer" -> {
-                val from = msg.fromDeviceId ?: return
-                val sdp = msg.payload?.optString("sdp") ?: return
-                mesh.setRemoteSdp(from, "offer", sdp) {
-                    mesh.createAnswer(from) { answer, type ->
-                        val roomId = _state.value.conferenceId ?: return@createAnswer
-                        session.callManager.sendConferenceEvent(
-                            "conf.answer",
-                            roomId,
-                            from,
-                            JSONObject().put("sdp", answer).put("type", type),
-                        )
-                    }
-                }
-            }
-            "conf.answer" -> {
-                val from = msg.fromDeviceId ?: return
-                val sdp = msg.payload?.optString("sdp") ?: return
-                mesh.setRemoteSdp(from, "answer", sdp)
-            }
-            "conf.ice" -> {
-                val from = msg.fromDeviceId ?: return
-                val payload = msg.payload ?: return
-                mesh.addRemoteIce(
-                    from,
-                    payload.optString("sdpMid"),
-                    payload.optInt("sdpMLineIndex"),
-                    payload.optString("candidate"),
-                )
-            }
-        }
-    }
-
-    private fun connectTo(userId: String?, deviceId: String) {
-        val localDeviceId = session.tokenStore.getDeviceId() ?: return
-        if (deviceId == localDeviceId) return
-        upsertRemote(userId, deviceId)
-        if (!_state.value.isActive) return
-        if (MeshOfferPolicy.localCreatesOffer(localDeviceId, deviceId)) {
-            mesh.createOffer(deviceId) { offer, type ->
-                val roomId = _state.value.conferenceId ?: return@createOffer
-                session.callManager.sendConferenceEvent(
-                    "conf.offer",
-                    roomId,
-                    deviceId,
-                    JSONObject().put("sdp", offer).put("type", type),
-                )
-            }
-        } else {
-            mesh.ensurePeer(deviceId)
+            // conf.offer / conf.answer / conf.ice no longer apply — LiveKit
+            // handles all SDP/ICE internally once everyone's in the room.
         }
     }
 
     private fun upsertRemote(userId: String?, deviceId: String) {
+        val localDeviceId = session.tokenStore.getDeviceId()
+        if (deviceId == localDeviceId) return
+        val id = userId ?: deviceId
         val name = userId?.let { pendingNames[it] }
             ?: _state.value.participants.firstOrNull { it.userId == userId }?.name
-            ?: userId?.take(8)
+            // No id fallback — an unnamed participant is "Participant", not a
+            // UUID fragment nobody can match to a person.
             ?: "Participant"
-        val existing = _state.value.participants
-        if (existing.any { it.id == deviceId }) return
+        if (_state.value.participants.any { it.id == id }) return
         _state.value = _state.value.copy(
-            participants = existing + ConferenceParticipant(
-                id = deviceId,
+            participants = _state.value.participants + ConferenceParticipant(
+                id = id,
                 userId = userId,
                 name = name,
             ),
-        )
-    }
-
-    private fun updateParticipant(
-        id: String,
-        transform: (ConferenceParticipant) -> ConferenceParticipant,
-    ) {
-        _state.value = _state.value.copy(
-            participants = _state.value.participants.map { if (it.id == id) transform(it) else it },
         )
     }
 

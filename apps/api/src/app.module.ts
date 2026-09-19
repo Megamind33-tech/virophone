@@ -29,6 +29,7 @@ import { MetricsModule } from './metrics/metrics.module';
 import { MetricsInterceptor } from './metrics/metrics.interceptor';
 import { AdminModule } from './admin/admin.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
+import { PreferencesModule } from './preferences/preferences.module';
 import { MediaModule } from './media/media.module';
 
 @Module({
@@ -71,6 +72,7 @@ import { MediaModule } from './media/media.module';
     MetricsModule,
     AdminModule,
     SubscriptionsModule,
+    PreferencesModule,
     MediaModule,
   ],
   providers: [

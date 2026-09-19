@@ -11,6 +11,8 @@ import { Device } from '../database/entities/device.entity';
 import { Session } from '../database/entities/session.entity';
 import { OtpChallenge } from '../database/entities/otp-challenge.entity';
 import { EmailIdentity } from '../database/entities/email-identity.entity';
+import { Call } from '../database/entities/call.entity';
+import { ContactMatch } from '../database/entities/contact-match.entity';
 import { createOtpProvider } from './otp/otp-provider.factory';
 import { createEmailOtpProvider } from './email/email-otp.factory';
 import {
@@ -23,6 +25,7 @@ import { ViroException } from '../common/exceptions/viro.exception';
 import { normalizeE164, isValidE164 } from '../common/utils/phone.util';
 import { hashPhoneForStorage, hashRefreshToken } from '../common/utils/hash.util';
 import { SecurityService } from '../security/security.service';
+import { FirebaseAuthService } from './firebase-auth.service';
 import { HttpStatus } from '@nestjs/common';
 
 @Injectable()
@@ -42,6 +45,7 @@ export class AuthService {
     @InjectRepository(EmailIdentity) private readonly emailRepo: Repository<EmailIdentity>,
     private readonly jwtService: JwtService,
     private readonly securityService: SecurityService,
+    private readonly firebaseAuthService: FirebaseAuthService,
   ) {}
 
   async requestOtp(phoneE164: string): Promise<{ challengeId: string; expiresAt: string }> {
@@ -344,6 +348,395 @@ export class AuthService {
     );
   }
 
+
+  /**
+   * Exchanges a verified Firebase ID token for a Viro session. Runs the same
+   * device registration and session issue as phone-OTP, so callers downstream
+   * cannot tell which sign-in method was used.
+   */
+  async signInWithFirebase(
+    idToken: string,
+    devicePublicKey: string,
+    platform: string,
+    appVersion: string,
+  ) {
+    const { userId, email, isNewUser } =
+      await this.firebaseAuthService.resolveUserFromIdToken(idToken);
+
+    const device = this.deviceRepo.create({
+      userId,
+      publicKey: devicePublicKey,
+      platform,
+      appVersion,
+    });
+    await this.deviceRepo.save(device);
+
+    const tokens = await this.createSession(userId, device.id);
+    return {
+      ...tokens,
+      userId,
+      deviceId: device.id,
+      email,
+      isNewUser,
+    };
+  }
+
+  // --- Linking a phone number to an account that signed in another way -------
+
+  /**
+   * Sends an OTP so a signed-in user can attach a phone number to their account.
+   * Reuses the sign-in challenge machinery on purpose: accepting a typed number
+   * on trust would let anyone claim any number, and claiming a number that
+   * already has an account is account takeover.
+   */
+  async requestPhoneLink(
+    userId: string,
+    phoneE164: string,
+  ): Promise<{ challengeId: string; expiresAt: string }> {
+    const normalized = normalizeE164(phoneE164);
+    if (!normalized) {
+      throw new ViroException('INVALID_E164', 'Invalid phone number format.', HttpStatus.BAD_REQUEST);
+    }
+    // findOne would only ever see one of the user's numbers; an account may now
+    // hold several, and re-adding any of them must be caught.
+    const mine = await this.phoneRepo.find({ where: { userId } });
+    if (mine.some((p) => p.phoneE164 === normalized)) {
+      throw new ViroException(
+        'VALIDATION_ERROR',
+        'That number is already on your account.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (isHardwareTestMode() && !isPhoneHardwareTestAllowed(normalized)) {
+      throw new ViroException(
+        'FORBIDDEN',
+        'Phone not authorized for hardware test OTP.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    const otpCode = this.resolveOtpCode(normalized);
+    const challenge = this.otpRepo.create({
+      phoneE164: normalized,
+      codeHash: this.hashOtp(otpCode),
+      expiresAt: new Date(Date.now() + this.otpExpiresSeconds * 1000),
+    });
+    await this.otpRepo.save(challenge);
+    await this.otpProvider.sendOtp(normalized, otpCode);
+    return { challengeId: challenge.id, expiresAt: challenge.expiresAt.toISOString() };
+  }
+
+  /**
+   * Verifies the OTP and connects the number to the account.
+   *
+   * Three outcomes, because the number may already belong to someone:
+   *  - unclaimed: attached to this account ("linked").
+   *  - claimed, and THIS account has no history: the phone account wins and this
+   *    account's email identity moves onto it ("adopted"). The client must swap
+   *    to the returned session — it is now signed in as the phone account.
+   *  - claimed, and both sides have history: refused. A true two-way merge means
+   *    rewriting 20 user columns across 15 tables and resolving conflicting
+   *    profiles, subscriptions and blocks, with no undo. Refusing loudly beats
+   *    destroying one side of someone's history silently.
+   */
+  async verifyPhoneLink(
+    userId: string,
+    challengeId: string,
+    code: string,
+  ): Promise<{
+    outcome: 'linked' | 'adopted';
+    phoneE164: string;
+    userId: string;
+    accessToken?: string;
+    refreshToken?: string;
+    expiresIn?: number;
+  }> {
+    const challenge = await this.otpRepo.findOne({ where: { id: challengeId } });
+    if (!challenge || challenge.verifiedAt || !challenge.phoneE164) {
+      throw new ViroException(
+        'VALIDATION_ERROR',
+        'Invalid or expired challenge.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (new Date() > challenge.expiresAt) {
+      throw new ViroException('VALIDATION_ERROR', 'OTP has expired.', HttpStatus.BAD_REQUEST);
+    }
+    if (challenge.attempts >= this.maxOtpAttempts) {
+      throw new ViroException('VALIDATION_ERROR', 'Too many attempts.', HttpStatus.BAD_REQUEST);
+    }
+    challenge.attempts += 1;
+    await this.otpRepo.save(challenge);
+    if (challenge.codeHash !== this.hashOtp(code)) {
+      await this.securityService.logEvent({
+        userId,
+        eventType: 'INVALID_OTP_ATTEMPT',
+        severity: 'LOW',
+        metadata: {
+          challengeId,
+          reason: 'phone_link_invalid_code',
+          phone: maskPhoneForSecurityLog(challenge.phoneE164),
+        },
+      });
+      throw new ViroException('VALIDATION_ERROR', 'Invalid OTP code.', HttpStatus.BAD_REQUEST);
+    }
+    challenge.verifiedAt = new Date();
+    await this.otpRepo.save(challenge);
+
+    const phoneNumber = challenge.phoneE164;
+    const salt = process.env.CONTACT_HASH_SALT || 'dev_contact_salt';
+    const existing = await this.phoneRepo.findOne({ where: { phoneE164: phoneNumber } });
+
+    // Unclaimed: attach it. The account becomes reachable by phone-number
+    // contact discovery, which is the entire point of linking.
+    if (!existing) {
+      await this.phoneRepo.save(
+        this.phoneRepo.create({
+          userId,
+          phoneE164: phoneNumber,
+          phoneHash: hashPhoneForStorage(phoneNumber, salt),
+          verifiedAt: new Date(),
+          status: 'VERIFIED',
+        }),
+      );
+      await this.securityService.logEvent({
+        userId,
+        eventType: 'PHONE_LINKED',
+        severity: 'LOW',
+        metadata: { phone: maskPhoneForSecurityLog(phoneNumber) },
+      });
+      return { outcome: 'linked', phoneE164: phoneNumber, userId };
+    }
+
+    if (existing.userId === userId) {
+      return { outcome: 'linked', phoneE164: phoneNumber, userId };
+    }
+
+    // Belongs to another account: only safe to consolidate when the account
+    // doing the linking has nothing that a merge could destroy.
+    if (await this.accountHasHistory(userId)) {
+      throw new ViroException(
+        'VALIDATION_ERROR',
+        'That number belongs to another Viro account with call or message history. ' +
+          'Sign in with that number instead, or contact support to merge them.',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const targetUserId = existing.userId;
+    const emailIdentity = await this.emailRepo.findOne({ where: { userId } });
+    if (emailIdentity) {
+      const clash = await this.emailRepo.findOne({ where: { userId: targetUserId } });
+      if (clash && clash.email !== emailIdentity.email) {
+        throw new ViroException(
+          'VALIDATION_ERROR',
+          'That number belongs to an account that already uses a different email address.',
+          HttpStatus.CONFLICT,
+        );
+      }
+      if (clash) {
+        await this.emailRepo.delete({ id: emailIdentity.id });
+      } else {
+        // Both sign-in methods now reach the same user.
+        emailIdentity.userId = targetUserId;
+        await this.emailRepo.save(emailIdentity);
+      }
+    }
+
+    // Remove the empty account rather than orphan it; cascades clear its
+    // profile, devices and sessions.
+    await this.userRepo.delete({ id: userId });
+    await this.securityService.logEvent({
+      userId: targetUserId,
+      eventType: 'PHONE_LINKED',
+      severity: 'MEDIUM',
+      metadata: {
+        phone: maskPhoneForSecurityLog(phoneNumber),
+        adoptedFromUserId: userId,
+      },
+    });
+
+    // A session for the account they are now signed in as. Without this the
+    // client keeps a token for a user id that no longer exists.
+    const device = this.deviceRepo.create({
+      userId: targetUserId,
+      publicKey: 'phone-link-' + uuidv4(),
+      platform: 'ANDROID',
+      appVersion: 'link',
+    });
+    await this.deviceRepo.save(device);
+    const tokens = await this.createSession(targetUserId, device.id);
+    return { outcome: 'adopted', phoneE164: phoneNumber, userId: targetUserId, ...tokens };
+  }
+
+  /**
+   * Whether an account holds anything a merge could destroy. Deliberately
+   * conservative: one call or one matched contact is enough to refuse.
+   */
+  private async accountHasHistory(userId: string): Promise<boolean> {
+    // Reached through the EntityManager the repositories already share, rather
+    // than injecting two more repositories: AuthService's constructor is
+    // positional in several specs, and widening it there is churn for one count.
+    const em = this.userRepo.manager;
+    const calls = await em.count(Call, {
+      where: [{ callerUserId: userId }, { calleeUserId: userId }],
+    });
+    if (calls > 0) return true;
+    return (await em.count(ContactMatch, { where: { userId } })) > 0;
+  }
+
+  // --- Identities on an account (several numbers, several emails) -----------
+
+  /**
+   * Every way this account can be reached or signed in to.
+   *
+   * One number belongs to exactly one account — the database enforces it with a
+   * UNIQUE constraint on phone_e164, so a number cannot be attached to fifteen
+   * accounts even by a client that tries. Emails are unique the same way.
+   */
+  async listIdentities(userId: string) {
+    const [phones, emails] = await Promise.all([
+      this.phoneRepo.find({ where: { userId } }),
+      this.emailRepo.find({ where: { userId } }),
+    ]);
+    return {
+      phones: phones.map((p) => ({
+        id: p.id,
+        phoneE164: p.phoneE164,
+        verified: p.status === 'VERIFIED' && p.verifiedAt != null,
+      })),
+      emails: emails.map((e) => ({
+        id: e.id,
+        email: e.email,
+        verified: e.status === 'VERIFIED' && e.verifiedAt != null,
+      })),
+    };
+  }
+
+  /**
+   * Removes a number or email from the account.
+   *
+   * Refuses to remove the last one: an account with no phone and no email has
+   * no way to sign in again, and the user would have locked themselves out with
+   * a single tap.
+   */
+  async removeIdentity(userId: string, kind: 'phone' | 'email', id: string) {
+    const [phones, emails] = await Promise.all([
+      this.phoneRepo.find({ where: { userId } }),
+      this.emailRepo.find({ where: { userId } }),
+    ]);
+    if (phones.length + emails.length <= 1) {
+      throw new ViroException(
+        'VALIDATION_ERROR',
+        'This is the only way to sign in to your account — add another before removing it.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (kind === 'phone') {
+      const row = phones.find((p) => p.id === id);
+      if (!row) {
+        throw new ViroException('NOT_FOUND', 'Number not found on this account.', HttpStatus.NOT_FOUND);
+      }
+      await this.phoneRepo.delete({ id });
+    } else {
+      const row = emails.find((e) => e.id === id);
+      if (!row) {
+        throw new ViroException('NOT_FOUND', 'Email not found on this account.', HttpStatus.NOT_FOUND);
+      }
+      await this.emailRepo.delete({ id });
+    }
+    await this.securityService.logEvent({
+      userId,
+      eventType: 'IDENTITY_REMOVED',
+      severity: 'MEDIUM',
+      metadata: { kind },
+    });
+    return this.listIdentities(userId);
+  }
+
+  /**
+   * Sends a code to an email address so it can be added to this account.
+   * Unverified addresses are never attached: otherwise anyone could claim
+   * someone else's address simply by typing it.
+   */
+  async requestEmailLink(
+    userId: string,
+    email: string,
+  ): Promise<{ challengeId: string; expiresAt: string }> {
+    const normalized = (email || '').trim().toLowerCase();
+    if (!this.isValidEmail(normalized)) {
+      throw new ViroException('VALIDATION_ERROR', 'Invalid email address.', HttpStatus.BAD_REQUEST);
+    }
+    const existing = await this.emailRepo.findOne({ where: { email: normalized } });
+    if (existing) {
+      throw new ViroException(
+        'VALIDATION_ERROR',
+        existing.userId === userId
+          ? 'That email is already on your account.'
+          : 'That email is already used by another Viro account.',
+        HttpStatus.CONFLICT,
+      );
+    }
+    const code =
+      process.env.OTP_PROVIDER === 'test' && process.env.TEST_OTP_CODE
+        ? process.env.TEST_OTP_CODE
+        : String(randomInt(100000, 999999));
+    const challenge = this.otpRepo.create({
+      email: normalized,
+      channel: 'email',
+      codeHash: this.hashOtp(code),
+      expiresAt: new Date(Date.now() + this.otpExpiresSeconds * 1000),
+    });
+    await this.otpRepo.save(challenge);
+    await this.emailProvider.sendOtp(normalized, code);
+    return { challengeId: challenge.id, expiresAt: challenge.expiresAt.toISOString() };
+  }
+
+  /** Confirms the code and attaches the email to this account. */
+  async verifyEmailLink(userId: string, challengeId: string, code: string) {
+    const challenge = await this.otpRepo.findOne({ where: { id: challengeId } });
+    if (!challenge || challenge.channel !== 'email' || challenge.verifiedAt || !challenge.email) {
+      throw new ViroException('VALIDATION_ERROR', 'Invalid or expired challenge.', HttpStatus.BAD_REQUEST);
+    }
+    if (new Date() > challenge.expiresAt) {
+      throw new ViroException('VALIDATION_ERROR', 'OTP has expired.', HttpStatus.BAD_REQUEST);
+    }
+    if (challenge.attempts >= this.maxOtpAttempts) {
+      throw new ViroException('VALIDATION_ERROR', 'Too many attempts.', HttpStatus.BAD_REQUEST);
+    }
+    challenge.attempts += 1;
+    await this.otpRepo.save(challenge);
+    if (challenge.codeHash !== this.hashOtp(code)) {
+      throw new ViroException('VALIDATION_ERROR', 'Invalid OTP code.', HttpStatus.BAD_REQUEST);
+    }
+    challenge.verifiedAt = new Date();
+    await this.otpRepo.save(challenge);
+
+    // Re-checked after the code was sent: another account could have claimed
+    // the address in between.
+    const taken = await this.emailRepo.findOne({ where: { email: challenge.email } });
+    if (taken) {
+      throw new ViroException(
+        'VALIDATION_ERROR',
+        'That email is already used by another Viro account.',
+        HttpStatus.CONFLICT,
+      );
+    }
+    await this.emailRepo.save(
+      this.emailRepo.create({
+        userId,
+        email: challenge.email,
+        verifiedAt: new Date(),
+        status: 'VERIFIED',
+      }),
+    );
+    await this.securityService.logEvent({
+      userId,
+      eventType: 'EMAIL_LINKED',
+      severity: 'LOW',
+      metadata: {},
+    });
+    return this.listIdentities(userId);
+  }
   private async createSession(userId: string, deviceId: string, familyId?: string) {
     const family = familyId || uuidv4();
     const refreshToken = uuidv4() + '.' + uuidv4();

@@ -5,6 +5,17 @@
 reach.example.com {
     encode gzip
 
+    # LiveKit signaling (call media negotiation). The Android SDK is given
+    # LIVEKIT_URL=wss://<domain>/livekit-rtc and appends its own /rtc path,
+    # so the prefix MUST be stripped here — LiveKit does not serve
+    # /livekit-rtc/rtc and the room join fails with no audio if it isn't.
+    # This is signaling only; the actual audio never passes through Caddy
+    # (it goes direct to UDP 51000-51100 / TCP 7981 / TURNS 5349).
+    handle /livekit-rtc/* {
+        uri strip_prefix /livekit-rtc
+        reverse_proxy 127.0.0.1:7980
+    }
+
     handle /api/v1/signaling/* {
         reverse_proxy 127.0.0.1:13001
     }

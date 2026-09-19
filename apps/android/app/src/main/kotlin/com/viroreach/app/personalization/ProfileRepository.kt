@@ -32,6 +32,14 @@ class ProfileRepository(
     private val api: ViroApiService,
     private val photoUploader: ProfilePhotoUploader,
 ) {
+    /**
+     * Drops the cached profile so the next account does not briefly show the
+     * previous one's name and photo.
+     */
+    suspend fun clearCachedProfile() {
+        runCatching { store.edit { it.clear() } }
+    }
+
     private val appContext = context.applicationContext
     private val store = appContext.profileDataStore
 
@@ -54,8 +62,18 @@ class ProfileRepository(
 
     suspend fun uploadPhoto(uri: Uri): Result<UserProfile> = runCatching {
         ProfilePhotoCapture.takePersistableReadPermission(appContext, uri)
+        // Shown immediately so the picker feels responsive, but rolled back if
+        // the upload fails. Leaving it set made a failed upload look like a
+        // saved photo: the image rendered from this local URI while the server
+        // never received it, so it vanished on the next reinstall or new phone
+        // and the user had no idea it was never stored.
         store.edit { prefs -> prefs[KEY_LOCAL_PHOTO] = uri.toString() }
-        val me = photoUploader.upload(uri)
+        val me = try {
+            photoUploader.upload(uri)
+        } catch (e: Throwable) {
+            store.edit { prefs -> prefs.remove(KEY_LOCAL_PHOTO) }
+            throw e
+        }
         applyMeResponse(me)
         store.edit { prefs -> prefs.remove(KEY_LOCAL_PHOTO) }
         profile.first()

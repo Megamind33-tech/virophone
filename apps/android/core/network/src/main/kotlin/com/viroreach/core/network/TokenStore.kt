@@ -52,6 +52,17 @@ class TokenStore(context: Context) {
     fun getDeviceId(): String? = prefs.getString(KEY_DEVICE_ID, null)
 
     /** Clears session tokens only — preserves authenticated phone for engineering re-login. */
+    /**
+     * The last account to hold a session on this device. Survives clearSession()
+     * on purpose: it is how the app notices that the account signing in now is
+     * not the one whose cached contacts, history and messages are still on disk.
+     */
+    fun getLastUserId(): String? = prefs.getString(KEY_LAST_USER_ID, null)
+
+    fun setLastUserId(userId: String) {
+        prefs.edit().putString(KEY_LAST_USER_ID, userId).apply()
+    }
+
     fun clearSession() {
         prefs.edit()
             .remove(KEY_ACCESS)
@@ -73,5 +84,6 @@ class TokenStore(context: Context) {
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_PHONE = "authenticated_phone_e164"
         private const val KEY_ACCESS_EXPIRY = "access_token_expiry_ms"
+        private const val KEY_LAST_USER_ID = "last_user_id"
     }
 }

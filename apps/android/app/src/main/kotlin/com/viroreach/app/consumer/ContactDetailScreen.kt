@@ -324,6 +324,22 @@ fun ContactDetailScreen(
                         }
                     }
                 }
+                // Spam sits above Block deliberately: it is the lighter action
+                // and the one people reach for first, before they are sure
+                // enough to cut someone off entirely.
+                ProfileMenuRow(
+                    if (profile.isSpam) "Not spam" else "Mark as spam",
+                    Icons.Default.Warning,
+                ) {
+                    scope.launch {
+                        session.contactsRepository.setSpam(profile.id, !profile.isSpam)
+                        val nowSpam = !profile.isSpam
+                        statusMessage = if (nowSpam) "Marked as spam" else "Removed spam mark"
+                        // Local state drives the row label, so flip it here
+                        // rather than waiting for a reload.
+                        profile = profile.copy(isSpam = nowSpam)
+                    }
+                }
                 ProfileMenuRow("Block", Icons.Default.Close) { showBlockConfirm = true }
                 ProfileMenuRow("Delete", Icons.Default.Delete, destructive = true) {
                     showDeleteConfirm = true

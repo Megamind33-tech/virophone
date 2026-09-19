@@ -12,6 +12,7 @@ import { Device } from '../database/entities/device.entity';
 import { Session } from '../database/entities/session.entity';
 import { OtpChallenge } from '../database/entities/otp-challenge.entity';
 import { EmailIdentity } from '../database/entities/email-identity.entity';
+import { FirebaseAuthService } from './firebase-auth.service';
 import { SecurityModule } from '../security/security.module';
 
 @Module({
@@ -27,7 +28,7 @@ import { SecurityModule } from '../security/security.module';
     SecurityModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
+  providers: [AuthService, JwtStrategy, FirebaseAuthService],
   exports: [AuthService, JwtModule],
 })
 export class AuthModule {}

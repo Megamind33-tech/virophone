@@ -112,6 +112,18 @@
 
             android:foregroundServiceType="phoneCall" />
 
+        <!-- Wakes the app for an incoming call when the signaling socket is
+             not connected. Must be exported="false"; FCM delivers through the
+             Play services binding, not an outside caller. -->
+        <service
+            android:name=".push.ViroFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+
 
 
         <provider

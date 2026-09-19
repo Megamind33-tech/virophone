@@ -4,6 +4,13 @@
 {$CADDY_DOMAIN} {
     encode gzip
 
+    # LiveKit signaling — see the note in Caddyfile.host-snippet. The prefix
+    # must be stripped because the Android SDK appends /rtc to LIVEKIT_URL.
+    handle /livekit-rtc/* {
+        uri strip_prefix /livekit-rtc
+        reverse_proxy livekit:7980
+    }
+
     handle /api/v1/signaling/* {
         reverse_proxy api:3001
     }

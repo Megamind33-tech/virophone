@@ -100,6 +100,79 @@ class CachedContactsRepository(
         }
     }
 
+
+    /**
+     * Empties the cached contact table and the hidden-contact set for an
+     * account handover. The Room rows are not scoped per user, so leaving them
+     * shows one account the other's discovered Viro contacts.
+     */
+    suspend fun clearCache() {
+        runCatching { dao.clearAll() }
+        runCatching { hiddenStore.edit { it.clear() } }
+    }
+
+    /**
+     * Every locally-set preference, for upload. Contacts with nothing set are
+     * skipped — there is no value in a server row saying "not a favourite".
+     */
+    suspend fun localPreferencesForSync(): List<com.viroreach.core.network.ContactPreferenceDto> {
+        val hidden = hiddenStore.data.first()[KEY_HIDDEN_IDS] ?: emptySet()
+        return dao.getAll()
+            .filter { it.phoneE164 != null }
+            .filter {
+                it.isFavorite || it.customDisplayName != null || it.id in hidden ||
+                    it.isBlocked || it.isSpam
+            }
+            .map {
+                com.viroreach.core.network.ContactPreferenceDto(
+                    phoneE164 = it.phoneE164!!,
+                    isFavorite = it.isFavorite,
+                    customDisplayName = it.customDisplayName,
+                    isHidden = it.id in hidden,
+                    isBlocked = it.isBlocked,
+                    isSpam = it.isSpam,
+                )
+            }
+    }
+
+    /**
+     * Applies server preferences onto the local rows, matching by phone number.
+     * A contact the server knows about but this device has never seen is
+     * skipped rather than invented: the row would have no name or photo.
+     */
+    suspend fun applyRemotePreferences(
+        byPhone: Map<String, com.viroreach.core.network.ContactPreferenceDto>,
+    ): Int {
+        if (byPhone.isEmpty()) return 0
+        val updates = dao.getAll().mapNotNull { row ->
+            val pref = row.phoneE164?.let { byPhone[it] } ?: return@mapNotNull null
+            row.copy(
+                isFavorite = pref.isFavorite,
+                // Blocks and spam marks must survive a new phone: restoring
+                // someone you blocked as unblocked is a real-world problem.
+                isBlocked = row.isBlocked || pref.isBlocked,
+                isSpam = row.isSpam || pref.isSpam,
+                // A local rename the user just made is not overwritten by an
+                // older server value; only fill in what is missing locally.
+                customDisplayName = row.customDisplayName ?: pref.customDisplayName,
+                updatedAt = System.currentTimeMillis(),
+            )
+        }
+        if (updates.isNotEmpty()) dao.upsertAll(updates)
+        return updates.size
+    }
+
+    /**
+     * The name this phone has for a Viro user, if they are in the address book.
+     * Blocking by design: the call-history mapper is synchronous, and this is a
+     * single indexed lookup against a local table.
+     */
+    fun displayNameForUserId(userId: String): String? = runCatching {
+        kotlinx.coroutines.runBlocking {
+            dao.findByUserId(userId)?.let { it.customDisplayName ?: it.displayName }
+        }
+    }.getOrNull()
+
     fun observeContacts(): Flow<List<ContactListItem>> =
         hiddenStore.data.combine(dao.observeAll()) { prefs, entities ->
             val hidden = prefs[KEY_HIDDEN_IDS] ?: emptySet()
@@ -117,6 +190,19 @@ class CachedContactsRepository(
 
     suspend fun findByUserId(userId: String): ContactListItem? =
         dao.findByUserId(userId)?.toListItem()?.takeUnless { isHidden(it.id) }
+
+    /**
+     * Last-resort lookup for a call-log entry that has neither a phone number
+     * nor a userId of its own (an older entry, or a call type the mapper
+     * never stamped one onto) — the display name is the only thing left to
+     * go on. Exact match only: a name collision routing someone to the wrong
+     * person's chat is worse than occasionally failing to find a match.
+     */
+    suspend fun findByExactName(name: String): ContactListItem? {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return null
+        return loadCachedContacts().firstOrNull { it.effectiveDisplayName.equals(trimmed, ignoreCase = true) }
+    }
 
     suspend fun findById(id: String): ContactListItem? =
         dao.findById(id)?.toListItem()?.takeUnless { isHidden(it.id) }
@@ -236,6 +322,7 @@ class CachedContactsRepository(
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return
         upsertPatch(contactId) { it.copy(customDisplayName = trimmed, updatedAt = System.currentTimeMillis()) }
+        syncPreference(contactId)
     }
 
     suspend fun setCustomPhoto(contactId: String, uri: Uri?) {
@@ -249,6 +336,7 @@ class CachedContactsRepository(
 
     suspend fun setFavorite(contactId: String, favorite: Boolean) {
         upsertPatch(contactId) { it.copy(isFavorite = favorite, updatedAt = System.currentTimeMillis()) }
+        syncPreference(contactId)
     }
 
     suspend fun setFavorites(contactIds: Set<String>, favorite: Boolean) {
@@ -257,14 +345,78 @@ class CachedContactsRepository(
             all[id]?.copy(isFavorite = favorite, updatedAt = System.currentTimeMillis())
         }
         if (updates.isNotEmpty()) dao.upsertAll(updates)
+        contactIds.forEach { syncPreference(it) }
     }
 
+    /**
+     * Mirrors one contact's preference to the server so it survives this
+     * device. Best-effort and silent: failing to sync a favourite must never
+     * make the toggle itself appear to fail.
+     */
+    private suspend fun syncPreference(contactId: String) {
+        val row = dao.findById(contactId) ?: return
+        val phone = row.phoneE164 ?: return
+        val hidden = hiddenStore.data.first()[KEY_HIDDEN_IDS] ?: emptySet()
+        runCatching {
+            session.preferenceSync.pushOne(
+                phoneE164 = phone,
+                isFavorite = row.isFavorite,
+                customDisplayName = row.customDisplayName,
+                isHidden = row.id in hidden,
+                isBlocked = row.isBlocked,
+                isSpam = row.isSpam,
+            )
+        }
+    }
+
+    /**
+     * Blocks a contact whether or not they are on Viro.
+     *
+     * Previously the server was only told when the contact had a Viro user id,
+     * so blocking someone who had not joined was written to this handset alone —
+     * and since the blocked list is read from the server, the block simply never
+     * appeared. Both records are written now: the user-id block, which is what
+     * actually refuses their calls server-side, and a phone-number block, which
+     * is what makes it visible and carries it to a new phone.
+     */
     suspend fun blockContact(contactId: String): Result<Unit> = runCatching {
         val entity = dao.findById(contactId) ?: error("Contact not found")
         entity.userId?.let { userId ->
             session.api.blockUser(BlockUserBody(userId))
         }
         upsertPatch(contactId) { it.copy(isBlocked = true, updatedAt = System.currentTimeMillis()) }
+        syncPreference(contactId)
+    }
+
+    /**
+     * Marks a contact as spam. Distinct from blocking: a blocked contact cannot
+     * reach the user at all, while spam is a label that lets calls through but
+     * flags them, which is what people want before they are certain.
+     */
+    /**
+     * Lifts a block. Clears the server-side user block when the contact has a
+     * Viro account, and the phone-number block either way — leaving one of the
+     * two set is how a contact ends up half-blocked and impossible to reason
+     * about.
+     */
+    suspend fun unblockContact(contactId: String): Result<Unit> = runCatching {
+        val entity = dao.findById(contactId) ?: error("Contact not found")
+        entity.userId?.let { userId ->
+            runCatching { session.api.unblockUser(userId) }
+        }
+        upsertPatch(contactId) { it.copy(isBlocked = false, updatedAt = System.currentTimeMillis()) }
+        syncPreference(contactId)
+    }
+
+    /** Contacts this device knows are blocked, Viro user or not. */
+    suspend fun blockedContacts(): List<ContactListItem> =
+        loadCachedContacts().filter { it.isBlocked }
+
+    suspend fun spamContacts(): List<ContactListItem> =
+        loadCachedContacts().filter { it.isSpam }
+    suspend fun setSpam(contactId: String, spam: Boolean): Result<Unit> = runCatching {
+        upsertPatch(contactId) { it.copy(isSpam = spam, updatedAt = System.currentTimeMillis()) }
+        syncPreference(contactId)
     }
 
     suspend fun inviteContact(contactId: String): Result<String> = runCatching {
@@ -318,6 +470,7 @@ class CachedContactsRepository(
             customDisplayName = existing.customDisplayName,
             customPhotoUri = existing.customPhotoUri,
             isBlocked = existing.isBlocked,
+            isSpam = existing.isSpam,
             deviceContactId = contact.deviceContactId ?: existing.deviceContactId,
             localPhotoUri = contact.localPhotoUri ?: existing.localPhotoUri,
         )

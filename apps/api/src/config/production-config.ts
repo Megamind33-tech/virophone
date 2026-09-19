@@ -12,6 +12,14 @@ const REQUIRED_IN_PRODUCTION = [
   'CONTACT_HASH_SALT',
   'TURN_SECRET',
   'EPHEMERAL_SIGNING_SECRET',
+  // Internet call media runs entirely on LiveKit. With any of these
+  // missing the API starts and reports healthy, calls ring, connect and
+  // end normally, and carry no audio at all — the join-token endpoint is
+  // the only thing that fails, and only at call time. Fail closed here
+  // instead, where it is visible at deploy.
+  'LIVEKIT_API_KEY',
+  'LIVEKIT_API_SECRET',
+  'LIVEKIT_URL',
 ] as const;
 
 const DEV_FALLBACK_PATTERNS = [
