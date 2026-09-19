@@ -84,6 +84,8 @@ fun ChatScreen(
     onCall: (peerUserId: String?, phone: String?, name: String) -> Unit,
     onOpenRelationship: (peerUserId: String?, phone: String?, name: String) -> Unit,
     onOpenConversation: (ChatRoute) -> Unit,
+    onOpenGroupInfo: (conversationId: String) -> Unit = {},
+    onGroupCall: (memberIds: List<String>) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -140,8 +142,19 @@ fun ChatScreen(
     val overview by session.relationships.overview.collectAsState()
     val player by session.voicePlayer.state.collectAsState()
     val relationship = remember(overview, peerUserId, phone) { session.relationships.relationshipFor(peerUserId, phone) }
-    val vibe = Vibe.of(relationship?.vibe)
     val isPrivate = conversation?.kind == "PRIVATE"
+    val isGroup = conversation?.kind == "GROUP"
+    val vibe = if (isGroup) Vibe.DEFAULT else Vibe.of(relationship?.vibe)
+    val features by repo.features.collectAsState()
+    var memberNames by remember(cid) { mutableStateOf<Map<String, String>>(emptyMap()) }
+    LaunchedEffect(cid, conversation?.participantsCsv) {
+        val c = conversation ?: return@LaunchedEffect
+        if (c.kind != "GROUP") return@LaunchedEffect
+        val server = repo.members(c.id).associate { it.userId to it.displayName }
+        memberNames = c.participantsCsv.split(',').filter { it.isNotBlank() }.associateWith { id ->
+            session.contactsRepository.displayNameForUserId(id) ?: server[id] ?: "Viro user"
+        }
+    }
 
     LaunchedEffect(Unit) { session.relationships.refresh() }
 
@@ -183,6 +196,14 @@ fun ChatScreen(
     var suggestion by remember { mutableStateOf<CommitmentDetector.Suggestion?>(null) }
     var suggestionMsgId by remember { mutableStateOf<String?>(null) }
     var photoPreview by remember { mutableStateOf<File?>(null) }
+    var stickersOpen by remember { mutableStateOf(false) }
+    var draftPreview by remember { mutableStateOf<com.viroreach.core.network.LinkPreviewDto?>(null) }
+    var dismissedPreviewUrl by remember { mutableStateOf<String?>(null) }
+    var draftUrl by remember { mutableStateOf<String?>(null) }
+    var searchOpen by remember { mutableStateOf(false) }
+    var searchTerm by remember { mutableStateOf("") }
+    var searchIndex by remember { mutableIntStateOf(0) }
+    var focusDone by remember(route.focusMessageId) { mutableStateOf(false) }
     val recorder = remember { VoiceRecorder(context, repo.media) }
     val effectsPlayed = remember { mutableSetOf<String>() }
     val openedAt = remember(cid) { System.currentTimeMillis() }
@@ -238,7 +259,7 @@ fun ChatScreen(
     fun nameOf(userId: String): String = when {
         userId == me -> "You"
         userId == peerUserId -> peerName
-        else -> "Someone"
+        else -> memberNames[userId] ?: "Someone"
     }
 
     // ---- sending ------------------------------------------------------------
@@ -287,15 +308,98 @@ fun ChatScreen(
         }
     }
 
+    // A link in the draft gets a preview card before it is sent.
+    LaunchedEffect(draftUrl) {
+        val url = draftUrl
+        if (url == null || url == dismissedPreviewUrl) {
+            draftPreview = null
+            return@LaunchedEffect
+        }
+        delay(500)
+        draftPreview = repo.linkPreview(url)
+    }
+    // Arriving from search: jump to the message once it is loaded.
+    LaunchedEffect(messages.size, route.focusMessageId) {
+        val target = route.focusMessageId ?: return@LaunchedEffect
+        if (focusDone) return@LaunchedEffect
+        val idx = messages.indexOfFirst { it.id == target }
+        if (idx >= 0) {
+            delay(150)
+            highlightId = target
+            listState.scrollToItem(itemIndexOf(messages, idx))
+            focusDone = true
+        }
+    }
+    val searchMatches = remember(messages, searchTerm) {
+        if (searchTerm.trim().length < 2) emptyList()
+        else messages.filter { !it.deleted && (it.body?.contains(searchTerm.trim(), true) == true || it.poll?.question?.contains(searchTerm.trim(), true) == true) }
+    }
+    fun jumpToMatch(i: Int) {
+        if (searchMatches.isEmpty()) return
+        searchIndex = ((i % searchMatches.size) + searchMatches.size) % searchMatches.size
+        val m = searchMatches[searchMatches.size - 1 - searchIndex]
+        highlightId = m.id
+        val idx = messages.indexOfFirst { it.id == m.id }
+        if (idx >= 0) scope.launch { listState.animateScrollToItem(itemIndexOf(messages, idx)) }
+    }
+    LaunchedEffect(searchMatches) { if (searchMatches.isNotEmpty()) jumpToMatch(0) }
+
+    val pickGif = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val mime = context.contentResolver.getType(uri) ?: ""
+            if (mime == "image/gif") {
+                val f = repo.media.newOutgoingFile("gif")
+                val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openInputStream(uri)!!.use { input -> f.outputStream().use { input.copyTo(it) } }
+                        f.length() in 1..(5L * 1024 * 1024)
+                    }.getOrDefault(false)
+                }
+                if (!ok) {
+                    f.delete()
+                    Toast.makeText(context, "That GIF is too large (5 MB at most).", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val dims = imageSize(f)
+                sendOut(MessagingRepository.Outgoing(type = "IMAGE", localFile = f, mime = "image/gif", width = dims.first, height = dims.second))
+                stickersOpen = false
+            } else {
+                prepareImage(context, repo, uri)?.let { photoPreview = it }
+            }
+        }
+    }
+
     // ---- layout -------------------------------------------------------------
-    BackHandler { onBack() }
+    BackHandler {
+        when {
+            stickersOpen -> stickersOpen = false
+            searchOpen -> { searchOpen = false; searchTerm = "" }
+            else -> onBack()
+        }
+    }
     Box(Modifier.fillMaxSize().background(ViroColors.NavyBackground)) {
         Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
-            ChatHeader(
-                name = peerName,
+            if (searchOpen) {
+                Row(Modifier.fillMaxWidth().background(ViroColors.NavySurface).padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { searchOpen = false; searchTerm = "" }) { Icon(Icons.Default.ArrowBack, "Close search", tint = Color.White) }
+                    OutlinedTextField(
+                        value = searchTerm, onValueChange = { searchTerm = it.take(100) }, singleLine = true,
+                        placeholder = { Text("Search in this chat") }, modifier = Modifier.weight(1f),
+                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White),
+                    )
+                    Text(if (searchMatches.isEmpty()) "0" else "${searchIndex + 1}/${searchMatches.size}", color = ViroColors.textSecondary, modifier = Modifier.padding(horizontal = 6.dp))
+                    IconButton(onClick = { jumpToMatch(searchIndex + 1) }) { Icon(Icons.Default.KeyboardArrowUp, "Older match", tint = Color.White) }
+                    IconButton(onClick = { jumpToMatch(searchIndex - 1) }) { Icon(Icons.Default.KeyboardArrowDown, "Newer match", tint = Color.White) }
+                }
+            } else ChatHeader(
+                name = if (isGroup) conversation?.title ?: peerName else peerName,
                 avatarUrl = avatarUrl,
                 vibe = vibe,
+                isGroup = isGroup,
                 subtitle = when {
+                    isGroup && cid != null && typing[cid] != null -> "${nameOf(typing[cid]!!.userId)} is ${if (typing[cid]!!.state == "recording") "recording…" else "typing…"}"
+                    isGroup -> memberNames.values.filter { it != "You" }.take(4).joinToString(", ").ifBlank { null } ?: "${memberNames.size} members"
                     cid != null && typing[cid]?.state == "recording" -> "recording voice…"
                     cid != null && typing[cid]?.state == "typing" -> "typing…"
                     isPrivate -> "Private · ends ${remaining(conversation?.expiresAt)}"
@@ -306,9 +410,13 @@ fun ChatScreen(
                 },
                 subtitleActive = cid != null && (typing.containsKey(cid) || present.containsKey(cid)),
                 onBack = onBack,
-                onTitle = { onOpenRelationship(peerUserId, phone, peerName) },
-                onCall = if (peerUserId != null) ({ onCall(peerUserId, phone, peerName) }) else null,
-                onHeartbeat = if (vibe.heartbeat && peerUserId != null) ({
+                onTitle = { if (isGroup) cid?.let(onOpenGroupInfo) else onOpenRelationship(peerUserId, phone, peerName) },
+                onCall = when {
+                    isGroup -> ({ onGroupCall(memberNames.keys.filter { it != me }) })
+                    peerUserId != null -> ({ onCall(peerUserId, phone, peerName) })
+                    else -> null
+                },
+                onHeartbeat = if (!isGroup && vibe.heartbeat && peerUserId != null) ({
                     heartbeatVibration(context)
                     sendOut(MessagingRepository.Outgoing(body = "💓 Thinking of you", effect = "heartbeat"))
                 }) else null,
@@ -316,13 +424,14 @@ fun ChatScreen(
                 onMenu = { menuOpen = it },
                 menu = {
                     ChatMenu(
+                        isGroup = isGroup,
                         isPrivate = isPrivate,
                         locked = conversation?.locked == true,
                         hidden = conversation?.hidden == true,
                         muted = (conversation?.mutedUntil ?: 0L) > System.currentTimeMillis(),
                         disappearing = conversation?.disappearingSeconds,
                         hasConversation = cid != null && !cid.startsWith(MessagingRepository.PLACEHOLDER),
-                        hasPeer = peerUserId != null,
+                        hasPeer = peerUserId != null && !isGroup,
                         onPick = { which ->
                             menuOpen = false
                             dialog = which
@@ -383,6 +492,8 @@ fun ChatScreen(
                             player = player,
                             highlighted = highlightId == msg.id,
                             playEffect = play,
+                            groupSender = if (isGroup) nameOf(msg.senderUserId) else null,
+                            transcriptsEnabled = features.transcripts == true,
                             callbacks = BubbleCallbacks(
                                 onLongPress = { actionsFor = it },
                                 onReply = { if (!it.isPending) replyTo = it },
@@ -401,6 +512,12 @@ fun ChatScreen(
                                     scope.launch {
                                         val l = loops.firstOrNull { it.id == loopId } ?: return@launch
                                         session.relationships.loopHistory(loopId).onSuccess { loopDetail = l to it }
+                                    }
+                                },
+                                onVote = { m, options -> scope.launch { repo.vote(m.id, options) } },
+                                onTranscribe = { m ->
+                                    scope.launch {
+                                        repo.transcribe(m.id).onFailure { Toast.makeText(context, it.message, Toast.LENGTH_SHORT).show() }
                                     }
                                 },
                                 onJumpTo = { id ->
@@ -470,9 +587,28 @@ fun ChatScreen(
                 onCancelReply = { replyTo = null },
                 onCancelEdit = { editing = null },
                 onTyping = { state -> cid?.let { repo.sendTyping(it, state) } },
+                onDraftChanged = { text -> draftUrl = URL_REGEX.find(text)?.value?.trimEnd('.', ',', ')', '!', '?') },
+                aboveInput = draftPreview?.let { p ->
+                    {
+                        Box(Modifier.padding(horizontal = 12.dp)) {
+                            LinkPreviewCard(p, repo.media, mine = true, onClose = {
+                                dismissedPreviewUrl = draftUrl
+                                draftPreview = null
+                            })
+                        }
+                    }
+                },
+                stickersOpen = stickersOpen,
                 onAction = { a ->
                     when (a) {
-                        is ComposerAction.Text -> sendOut(MessagingRepository.Outgoing(body = a.body, deliverAt = a.deliverAt, effect = a.effect))
+                        is ComposerAction.Text -> {
+                            val preview = draftPreview?.takeIf { p -> a.body.contains(p.url) || draftUrl?.let { a.body.contains(it) } == true }
+                            sendOut(MessagingRepository.Outgoing(body = a.body, deliverAt = a.deliverAt, effect = a.effect, linkPreview = preview))
+                            draftPreview = null
+                            draftUrl = null
+                        }
+                        ComposerAction.CreatePoll -> dialog = "poll"
+                        ComposerAction.OpenStickers -> stickersOpen = !stickersOpen
                         is ComposerAction.Edit -> scope.launch {
                             repo.edit(a.messageId, a.body)
                             editing = null
@@ -492,7 +628,27 @@ fun ChatScreen(
                     }
                 },
             )
-            if (peerUserId == null && !isPrivate) {
+            if (stickersOpen) {
+                StickerGifPanel(
+                    repo = repo,
+                    vibe = vibe,
+                    onSticker = { st ->
+                        sendOut(MessagingRepository.Outgoing(type = "STICKER", body = st.emoji, sticker = com.viroreach.core.network.StickerRef(st.pack, st.id)))
+                    },
+                    onGif = { g ->
+                        stickersOpen = false
+                        sendOut(
+                            MessagingRepository.Outgoing(
+                                type = "GIF",
+                                gif = com.viroreach.core.network.GifSendDto(g.url, g.previewUrl, g.width, g.height, g.provider),
+                            ),
+                        )
+                    },
+                    onGifFromGallery = { pickGif.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    onClose = { stickersOpen = false },
+                )
+            }
+            if (peerUserId == null && !isPrivate && !isGroup) {
                 TextButton(
                     onClick = { inviteToViro(context, peerName) },
                     modifier = Modifier.fillMaxWidth(),
@@ -674,6 +830,10 @@ fun ChatScreen(
     }
 
     when (dialog) {
+        "poll" -> PollCreateDialog(vibe, onDismiss = { dialog = null }) { body ->
+            dialog = null
+            sendOut(MessagingRepository.Outgoing(type = "POLL", poll = body))
+        }
         "vibe" -> VibeDialog(vibe, onDismiss = { dialog = null }) { chosen ->
             dialog = null
             scope.launch {
@@ -815,11 +975,21 @@ fun ChatScreen(
                 dialog = null
                 onOpenRelationship(peerUserId, phone, peerName)
             }
+            "groupinfo" -> {
+                dialog = null
+                cid?.let(onOpenGroupInfo)
+            }
+            "search" -> {
+                dialog = null
+                searchOpen = true
+            }
         }
     }
 }
 
 // ---------------------------------------------------------------- helpers
+
+private val URL_REGEX = Regex("""https?://[^\s<>"]{4,}""", RegexOption.IGNORE_CASE)
 
 private fun listItemsCount(messages: List<ChatMessage>, loops: List<LoopDto>): Int {
     val days = messages.map { Date(it.createdAt).toInstant().atZone(ZoneId.systemDefault()).toLocalDate() }.distinct().size
@@ -918,6 +1088,7 @@ private fun ChatHeader(
     name: String,
     avatarUrl: String?,
     vibe: Vibe,
+    isGroup: Boolean = false,
     subtitle: String?,
     subtitleActive: Boolean,
     onBack: () -> Unit,
@@ -935,8 +1106,9 @@ private fun ChatHeader(
         IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
         Row(Modifier.weight(1f).clickable(onClick = onTitle), verticalAlignment = Alignment.CenterVertically) {
             Box {
-                ViroAvatar(displayName = name, imageUrl = avatarUrl, size = ViroAvatarSize.Small)
-                Box(Modifier.align(Alignment.BottomEnd).size(10.dp).clip(CircleShape).background(vibe.accent))
+                if (isGroup) GroupAvatar(name, 40.dp)
+                else ViroAvatar(displayName = name, imageUrl = avatarUrl, size = ViroAvatarSize.Small)
+                if (!isGroup) Box(Modifier.align(Alignment.BottomEnd).size(10.dp).clip(CircleShape).background(vibe.accent))
             }
             Spacer(Modifier.width(10.dp))
             Column {
@@ -955,6 +1127,7 @@ private fun ChatHeader(
 
 @Composable
 private fun ChatMenu(
+    isGroup: Boolean = false,
     isPrivate: Boolean,
     locked: Boolean,
     hidden: Boolean,
@@ -970,6 +1143,8 @@ private fun ChatMenu(
         onClick = { onPick(key) },
         enabled = enabled,
     )
+    if (isGroup) item("Group info", "groupinfo")
+    item("Search in chat", "search", enabled = hasConversation)
     if (hasPeer) item("Relationship & Moments", "relationship")
     if (hasPeer) item("Vibe", "vibe")
     if (hasPeer) item("Start a Loop", "loop")
@@ -984,7 +1159,7 @@ private fun ChatMenu(
     item(if (hidden) "Unhide chat" else "Hide chat", "hide", enabled = hasConversation)
     item(if (muted) "Muted" else "Mute", "mute", enabled = hasConversation)
     item("Delete chat", "clear", enabled = hasConversation)
-    item("Reset chat for both", "reset", danger = true, enabled = hasConversation)
+    if (!isGroup) item("Reset chat for both", "reset", danger = true, enabled = hasConversation)
     if (hasPeer) item("Erase & disconnect", "erase", danger = true)
 }
 

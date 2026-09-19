@@ -42,6 +42,8 @@ sealed class ComposerAction {
     data class Voice(val recording: VoiceRecorder.Recording, val viewOnce: Boolean) : ComposerAction()
     object PickPhoto : ComposerAction()
     object TakePhoto : ComposerAction()
+    object CreatePoll : ComposerAction()
+    object OpenStickers : ComposerAction()
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -60,6 +62,11 @@ fun Composer(
     onCancelEdit: () -> Unit,
     onTyping: (String) -> Unit,
     onAction: (ComposerAction) -> Unit,
+    /** Every change to the draft, for link previews. */
+    onDraftChanged: (String) -> Unit = {},
+    /** Shown above the input: the link preview that will go with the message. */
+    aboveInput: (@Composable () -> Unit)? = null,
+    stickersOpen: Boolean = false,
 ) {
     val context = LocalContext.current
     var draft by remember { mutableStateOf("") }
@@ -110,6 +117,7 @@ fun Composer(
         if (editing != null) onAction(ComposerAction.Edit(editing.id, body))
         else onAction(ComposerAction.Text(body, deliverAt, effect))
         draft = ""
+        onDraftChanged("")
         onTyping("idle")
     }
 
@@ -143,6 +151,7 @@ fun Composer(
             )
             return@Column
         }
+        aboveInput?.invoke()
         if (recording) {
             RecordingBar(
                 vibe = vibe,
@@ -175,6 +184,14 @@ fun Composer(
                             attachOpen = false
                             onAction(ComposerAction.TakePhoto)
                         })
+                        DropdownMenuItem(text = { Text("Poll") }, leadingIcon = { Icon(Icons.Default.Poll, null) }, onClick = {
+                            attachOpen = false
+                            onAction(ComposerAction.CreatePoll)
+                        })
+                        DropdownMenuItem(text = { Text("Stickers & GIFs") }, leadingIcon = { Icon(Icons.Default.EmojiEmotions, null) }, onClick = {
+                            attachOpen = false
+                            onAction(ComposerAction.OpenStickers)
+                        })
                         DropdownMenuItem(
                             text = { Text(if (viewOnce) "View once: on" else "View once: off") },
                             leadingIcon = { Icon(Icons.Default.LooksOne, null) },
@@ -190,6 +207,16 @@ fun Composer(
                     onValueChange = {
                         draft = it
                         onTyping(if (it.isBlank()) "idle" else "typing")
+                        onDraftChanged(it)
+                    },
+                    trailingIcon = {
+                        IconButton(onClick = { onAction(ComposerAction.OpenStickers) }) {
+                            Icon(
+                                Icons.Default.EmojiEmotions,
+                                "Stickers and GIFs",
+                                tint = if (stickersOpen) vibe.accent else ViroColors.MutedBlue,
+                            )
+                        }
                     },
                     modifier = Modifier.weight(1f).heightIn(min = 48.dp, max = 140.dp),
                     placeholder = { Text("Message", color = ViroColors.MutedBlue) },

@@ -79,7 +79,7 @@ if ! command -v docker >/dev/null; then
   exit 1
 fi
 docker compose -f docker-compose.vps.yml --env-file .env.vps build api
-docker compose -f docker-compose.vps.yml --env-file .env.vps up -d postgres redis coturn livekit api
+docker compose -f docker-compose.vps.yml --env-file .env.vps up -d postgres redis coturn livekit whisper api
 if [[ "\${VIRO_CADDY_MODE:-existing}" == "container" ]]; then
   docker compose -f docker-compose.vps.yml --env-file .env.vps --profile viro-caddy up -d caddy
 fi

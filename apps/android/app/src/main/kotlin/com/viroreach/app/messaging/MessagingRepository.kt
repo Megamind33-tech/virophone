@@ -18,6 +18,20 @@ import com.viroreach.core.network.ReactionDto
 import com.viroreach.core.network.SendBody
 import com.viroreach.core.network.TokenStore
 import com.viroreach.core.network.ViroMessagingApi
+import com.viroreach.core.network.FeaturesDto
+import com.viroreach.core.network.GifPageDto
+import com.viroreach.core.network.GifSendDto
+import com.viroreach.core.network.GroupBody
+import com.viroreach.core.network.GroupPatchBody
+import com.viroreach.core.network.LinkPreviewDto
+import com.viroreach.core.network.MemberDto
+import com.viroreach.core.network.MembersBody
+import com.viroreach.core.network.PollBody
+import com.viroreach.core.network.PollDto
+import com.viroreach.core.network.PollOptionDto
+import com.viroreach.core.network.RoleBody
+import com.viroreach.core.network.StickerRef
+import com.viroreach.core.network.VoteBody
 import com.viroreach.feature.calling.CallManager
 import com.viroreach.feature.calling.SignalingConnectionState
 import kotlinx.coroutines.CoroutineScope
@@ -102,6 +116,12 @@ class MessagingRepository(
     private val _incoming = MutableSharedFlow<Pair<String, ChatMessage>>(extraBufferCapacity = 32)
     val incoming: SharedFlow<Pair<String, ChatMessage>> = _incoming.asSharedFlow()
 
+    /** What the server has switched on (GIF search, transcripts). */
+    private val _features = MutableStateFlow(FeaturesDto(gifs = false, gifProvider = null, transcripts = false))
+    val features: StateFlow<FeaturesDto> = _features.asStateFlow()
+
+    private val previewCache = mutableMapOf<String, LinkPreviewDto?>()
+
     private val _lastError = MutableStateFlow<String?>(null)
     val lastError: StateFlow<String?> = _lastError.asStateFlow()
 
@@ -148,6 +168,11 @@ class MessagingRepository(
             }
         }
         scope.launch { syncNow() }
+        scope.launch { refreshFeatures() }
+    }
+
+    suspend fun refreshFeatures() {
+        runCatching { api.features() }.onSuccess { _features.value = it }
     }
 
     /** Wipes everything local: another account is signing in. */
@@ -409,6 +434,10 @@ class MessagingRepository(
         val forwarded: Boolean = false,
         val deliverAt: Long? = null,
         val effect: String? = null,
+        val poll: PollBody? = null,
+        val gif: GifSendDto? = null,
+        val sticker: StickerRef? = null,
+        val linkPreview: LinkPreviewDto? = null,
     )
 
     /**
@@ -428,6 +457,10 @@ class MessagingRepository(
         val reply = out.replyToId?.let { dao.message(it) }
         val meta = mutableMapOf<String, Any?>()
         out.effect?.let { meta["effect"] = it }
+        // Shown while sending exactly as they will look once sent.
+        out.gif?.let { meta["gif"] = mapOf("url" to it.url, "previewUrl" to it.previewUrl, "width" to it.width, "height" to it.height, "provider" to it.provider) }
+        out.sticker?.let { meta["sticker"] = mapOf("pack" to it.pack, "id" to it.id) }
+        out.linkPreview?.let { meta["linkPreview"] = mapOf("url" to it.url, "title" to it.title, "description" to it.description, "siteName" to it.siteName, "mediaId" to it.mediaId) }
         // Everything the outbox needs to retry lives on the row itself.
         meta["outbox"] = mapOf(
             "replyToId" to out.replyToId,
@@ -458,6 +491,9 @@ class MessagingRepository(
                     metadataJson = ChatJson.toJson(meta),
                     status = "SENDING",
                     localMediaPath = out.localFile?.absolutePath,
+                    pollJson = out.poll?.let { p ->
+                        ChatJson.toJson(PollDto(p.question, p.multi, p.options.map { PollOptionDto(it, 0, emptyList()) }, 0, emptyList()))
+                    },
                 ),
             ),
         )
@@ -535,6 +571,16 @@ class MessagingRepository(
                 forwarded = (out["forwarded"] as? Boolean)?.takeIf { it },
                 deliverAt = deliverAt?.let { Instant.ofEpochMilli(it).toString() },
                 effect = meta["effect"] as? String,
+                poll = row.pollJson?.let { ChatJson.gson.fromJson(it, PollDto::class.java) }?.let { p ->
+                    PollBody(p.question, p.options.orEmpty().map { it.text }, p.multi == true)
+                },
+                gif = (meta["gif"] as? Map<String, Any?>)?.let { g ->
+                    GifSendDto(g["url"] as String, g["previewUrl"] as? String, (g["width"] as? Number)?.toInt(), (g["height"] as? Number)?.toInt(), g["provider"] as? String)
+                },
+                sticker = (meta["sticker"] as? Map<String, Any?>)?.let { StickerRef(it["pack"] as String, it["id"] as String) },
+                linkPreview = (meta["linkPreview"] as? Map<String, Any?>)?.let { lp ->
+                    LinkPreviewDto(lp["url"] as String, lp["title"] as? String, lp["description"] as? String, lp["siteName"] as? String, lp["mediaId"] as? String)
+                },
             ),
         )
         dao.deleteMessages(listOf(row.id))
@@ -656,6 +702,105 @@ class MessagingRepository(
         api.endPrivate(conversationId)
         dao.deleteConversationMessages(conversationId)
         dao.deleteConversations(listOf(conversationId))
+    }
+
+    // -------------------------------------------------------------- groups
+
+    suspend fun createGroup(title: String, memberIds: List<String>, description: String? = null): Result<String> = act("create the group") {
+        val conv = api.createGroup(GroupBody(title.trim(), memberIds, description?.trim()?.ifBlank { null }))
+        dao.upsertConversations(listOf(conv.toEntity(myUserId(), null)))
+        syncNow()
+        conv.id
+    }
+
+    suspend fun members(conversationId: String): List<MemberDto> =
+        runCatching { api.members(conversationId) }.getOrDefault(emptyList())
+
+    suspend fun addMembers(conversationId: String, userIds: List<String>) = act("add people") {
+        api.addMembers(conversationId, MembersBody(userIds)).also { syncNow() }
+    }
+
+    suspend fun removeMember(conversationId: String, userId: String) = act("remove this person") {
+        api.removeMember(conversationId, userId).also { syncNow() }
+    }
+
+    suspend fun setRole(conversationId: String, userId: String, admin: Boolean) = act("change admins") {
+        api.setRole(conversationId, userId, RoleBody(if (admin) "ADMIN" else "MEMBER"))
+    }
+
+    suspend fun leaveGroup(conversationId: String) = act("leave the group") {
+        api.leaveGroup(conversationId)
+        dao.deleteConversationMessages(conversationId)
+        dao.deleteConversations(listOf(conversationId))
+    }
+
+    suspend fun updateGroup(conversationId: String, title: String?, description: String?) = act("update the group") {
+        val conv = api.updateGroup(conversationId, GroupPatchBody(title?.trim(), description?.trim() ?: ""))
+        dao.upsertConversations(listOf(conv.toEntity(myUserId(), dao.conversation(conversationId))))
+    }
+
+    // --------------------------------------------------------------- polls
+
+    suspend fun vote(messageId: String, options: List<Int>) = act("vote") {
+        val me = myUserId().orEmpty()
+        // The bars move at once; the server's tally replaces this.
+        dao.message(messageId)?.let { row ->
+            val p = row.pollJson?.let { ChatJson.gson.fromJson(it, PollDto::class.java) } ?: return@let
+            val opts = p.options.orEmpty().mapIndexed { i, o ->
+                val voters = o.voters.orEmpty().filter { it != me } + if (i in options) listOf(me) else emptyList()
+                o.copy(votes = voters.size, voters = voters)
+            }
+            val total = opts.flatMap { it.voters.orEmpty() }.toSet().size
+            dao.upsertMessages(listOf(row.copy(pollJson = ChatJson.toJson(p.copy(options = opts, totalVoters = total, myVotes = options)))))
+        }
+        upsertMessages(listOf(api.vote(messageId, VoteBody(options))))
+    }
+
+    // -------------------------------------------------------------- search
+
+    /**
+     * Search: this phone first (instant, works offline), then the server
+     * (reaches messages older than what the phone keeps). Newest first.
+     */
+    suspend fun search(q: String, conversationId: String? = null): List<ChatMessage> {
+        val term = q.trim()
+        if (term.length < 2) return emptyList()
+        val escaped = term.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+        val local = dao.search(escaped, conversationId).map { it.toChat(myUserId()) }
+        val remote = runCatching { api.search(term, conversationId) }.getOrDefault(emptyList())
+        if (remote.isNotEmpty()) {
+            // Keep them so tapping a result can open the chat at that message.
+            val known = remote.filter { dao.conversation(it.conversationId) != null }
+            upsertMessages(known.filter { dao.message(it.id) == null })
+        }
+        val merged = (local + remote.map { it.toEntity(null).toChat(myUserId()) }).distinctBy { it.id }
+        return merged.sortedByDescending { it.createdAt }
+    }
+
+    // ------------------------------------------------ link previews / GIFs
+
+    suspend fun linkPreview(url: String): LinkPreviewDto? {
+        if (previewCache.containsKey(url)) return previewCache[url]
+        val p = runCatching { api.linkPreview(url).preview }.getOrNull()
+        previewCache[url] = p
+        return p
+    }
+
+    suspend fun gifs(q: String?, pos: String? = null): Result<GifPageDto> = runCatching { api.gifs(q?.ifBlank { null }, pos) }
+
+    // --------------------------------------------------------- transcripts
+
+    /** Transcribes a voice note once; the text then syncs to everyone in the chat. */
+    suspend fun transcribe(messageId: String): Result<String> = act("transcribe") {
+        val row = dao.message(messageId) ?: throw IllegalStateException("Message not found")
+        val media = ChatJson.media(row.mediaJson) ?: throw IllegalStateException("No recording")
+        media.transcript?.let { return@act it }
+        val t = api.transcribe(media.id)
+        val text = t.text.orEmpty()
+        dao.message(messageId)?.let { r ->
+            dao.upsertMessages(listOf(r.copy(mediaJson = ChatJson.toJson(media.copy(transcript = text, transcriptLang = t.language)))))
+        }
+        text
     }
 
     /** Older page for scrolling back beyond what sync kept. */

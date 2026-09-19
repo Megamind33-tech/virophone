@@ -118,6 +118,12 @@ enum class ConsumerOverlay {
 
     Relationship,
 
+    NewGroup,
+
+    GroupInfo,
+
+    Search,
+
 }
 
 
@@ -138,6 +144,9 @@ data class ChatRoute(
     val peerPhoneE164: String? = null,
 
     val peerAvatarUrl: String? = null,
+
+    /** Open scrolled to this message (from search). */
+    val focusMessageId: String? = null,
 
 )
 
@@ -172,6 +181,8 @@ fun ConsumerNav(
     var relationshipTarget by remember { mutableStateOf<Triple<String?, String?, String>?>(null) }
 
     var connectionsRequested by remember { mutableStateOf(false) }
+
+    var groupInfoId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(connectionsRequested) {
         // One-shot: the Messages tab has switched to Connections by now.
@@ -393,6 +404,11 @@ fun ConsumerNav(
             ConsumerOverlay.ContactDetail -> selectedContact = null
             ConsumerOverlay.Chat -> chatRoute = null
             ConsumerOverlay.Relationship -> relationshipTarget = null
+            ConsumerOverlay.GroupInfo -> {
+                groupInfoId = null
+                overlay = if (chatRoute != null) ConsumerOverlay.Chat else ConsumerOverlay.None
+                return
+            }
             else -> Unit
         }
         overlay = ConsumerOverlay.None
@@ -731,6 +747,118 @@ fun ConsumerNav(
 
                 onOpenConversation = { next -> chatRoute = next },
 
+                onOpenGroupInfo = { id ->
+
+                    groupInfoId = id
+
+                    overlay = ConsumerOverlay.GroupInfo
+
+                },
+
+                onGroupCall = { memberIds ->
+
+                    scope.launch {
+
+                        val contacts = memberIds.mapNotNull { id -> runCatching { session.contactsRepository.findByUserId(id) }.getOrNull() }
+
+                        if (contacts.isEmpty()) return@launch
+
+                        withMic {
+
+                            session.conferenceManager.startConference(contacts)
+
+                            overlay = ConsumerOverlay.GroupCall
+
+                        }
+
+                    }
+
+                },
+
+            )
+
+            return
+
+        }
+
+        ConsumerOverlay.NewGroup -> {
+
+            com.viroreach.app.consumer.messages.NewGroupScreen(
+
+                session = session,
+
+                onBack = { overlay = ConsumerOverlay.None },
+
+                onCreated = { id, title ->
+
+                    chatRoute = ChatRoute(conversationId = id, peerName = title, peerUserId = null)
+
+                    overlay = ConsumerOverlay.Chat
+
+                },
+
+            )
+
+            return
+
+        }
+
+        ConsumerOverlay.GroupInfo -> {
+
+            val id = groupInfoId
+            if (id == null) {
+                LaunchedEffect(Unit) { overlay = ConsumerOverlay.None }
+                return
+            }
+
+            com.viroreach.app.consumer.messages.GroupInfoScreen(
+
+                session = session,
+
+                conversationId = id,
+
+                onBack = {
+
+                    groupInfoId = null
+
+                    overlay = if (chatRoute != null) ConsumerOverlay.Chat else ConsumerOverlay.None
+
+                },
+
+                onLeft = {
+
+                    groupInfoId = null
+
+                    chatRoute = null
+
+                    overlay = ConsumerOverlay.None
+
+                    tab = ViroConsumerTab.Messages
+
+                },
+
+            )
+
+            return
+
+        }
+
+        ConsumerOverlay.Search -> {
+
+            com.viroreach.app.consumer.messages.SearchScreen(
+
+                session = session,
+
+                onBack = { overlay = ConsumerOverlay.None },
+
+                onOpen = { route ->
+
+                    chatRoute = route
+
+                    overlay = ConsumerOverlay.Chat
+
+                },
+
             )
 
             return
@@ -986,6 +1114,10 @@ fun ConsumerNav(
                     },
 
                     startOnConnections = connectionsRequested,
+
+                    onSearch = { overlay = ConsumerOverlay.Search },
+
+                    onNewGroup = { overlay = ConsumerOverlay.NewGroup },
 
                 )
 

@@ -82,6 +82,46 @@ interface ViroMessagingApi {
     @DELETE("api/v1/messages/{id}/pin")
     suspend fun unpin(@Path("id") id: String): OkResult
 
+    @PUT("api/v1/messages/{id}/vote")
+    suspend fun vote(@Path("id") id: String, @Body body: VoteBody): MsgDto
+
+    @GET("api/v1/messages/features")
+    suspend fun features(): FeaturesDto
+
+    @GET("api/v1/messages/search")
+    suspend fun search(@Query("q") q: String, @Query("conversationId") conversationId: String? = null): List<MsgDto>
+
+    @GET("api/v1/messages/link-preview")
+    suspend fun linkPreview(@Query("url") url: String): LinkPreviewResult
+
+    @GET("api/v1/messages/gifs")
+    suspend fun gifs(@Query("q") q: String?, @Query("pos") pos: String? = null): GifPageDto
+
+    @POST("api/v1/messages/media/{id}/transcribe")
+    suspend fun transcribe(@Path("id") mediaId: String): TranscriptDto
+
+    // --- groups
+    @POST("api/v1/messages/groups")
+    suspend fun createGroup(@Body body: GroupBody): ConvDto
+
+    @GET("api/v1/messages/conversations/{id}/members")
+    suspend fun members(@Path("id") id: String): List<MemberDto>
+
+    @POST("api/v1/messages/conversations/{id}/members")
+    suspend fun addMembers(@Path("id") id: String, @Body body: MembersBody): List<MemberDto>
+
+    @DELETE("api/v1/messages/conversations/{id}/members/{userId}")
+    suspend fun removeMember(@Path("id") id: String, @Path("userId") userId: String): List<MemberDto>
+
+    @PUT("api/v1/messages/conversations/{id}/members/{userId}/role")
+    suspend fun setRole(@Path("id") id: String, @Path("userId") userId: String, @Body body: RoleBody): List<MemberDto>
+
+    @POST("api/v1/messages/conversations/{id}/leave")
+    suspend fun leaveGroup(@Path("id") id: String): OkResult
+
+    @PATCH("api/v1/messages/conversations/{id}/group")
+    suspend fun updateGroup(@Path("id") id: String, @Body body: GroupPatchBody): ConvDto
+
     // --- loops -----------------------------------------------------------
     @POST("api/v1/loops")
     suspend fun createLoop(@Body body: LoopBody): LoopDto
@@ -161,7 +201,45 @@ data class SendBody(
     val forwarded: Boolean? = null,
     val deliverAt: String? = null,
     val effect: String? = null,
+    val poll: PollBody? = null,
+    val linkPreview: LinkPreviewDto? = null,
+    val gif: GifSendDto? = null,
+    val sticker: StickerRef? = null,
 )
+
+data class PollBody(val question: String, val options: List<String>, val multi: Boolean = false)
+data class PollOptionDto(val text: String, val votes: Int?, val voters: List<String>?)
+data class PollDto(
+    val question: String,
+    val multi: Boolean?,
+    val options: List<PollOptionDto>?,
+    val totalVoters: Int?,
+    val myVotes: List<Int>?,
+)
+data class VoteBody(val options: List<Int>)
+
+data class LinkPreviewDto(
+    val url: String,
+    val title: String? = null,
+    val description: String? = null,
+    val siteName: String? = null,
+    val mediaId: String? = null,
+)
+data class LinkPreviewResult(val preview: LinkPreviewDto?)
+
+data class GifSendDto(val url: String, val previewUrl: String? = null, val width: Int? = null, val height: Int? = null, val provider: String? = null)
+data class GifDto(val id: String, val url: String, val previewUrl: String?, val width: Int?, val height: Int?, val provider: String?)
+data class GifPageDto(val items: List<GifDto>?, val next: String?, val provider: String?)
+data class StickerRef(val pack: String, val id: String)
+
+data class FeaturesDto(val gifs: Boolean?, val gifProvider: String?, val transcripts: Boolean?)
+data class TranscriptDto(val text: String?, val language: String?)
+
+data class GroupBody(val title: String, val memberIds: List<String>, val description: String? = null)
+data class GroupPatchBody(val title: String? = null, val description: String? = null)
+data class MembersBody(val userIds: List<String>)
+data class RoleBody(val role: String)
+data class MemberDto(val userId: String, val role: String?, val displayName: String?, val joinedAt: String?)
 
 data class SendResult(val conversationId: String, val message: MsgDto)
 
@@ -174,6 +252,8 @@ data class MediaDto(
     val waveform: String?,
     val width: Int?,
     val height: Int?,
+    val transcript: String? = null,
+    val transcriptLang: String? = null,
 )
 
 data class ReplyDto(val id: String, val senderUserId: String?, val type: String?, val body: String?, val deleted: Boolean?)
@@ -201,6 +281,7 @@ data class MsgDto(
     val forwarded: Boolean?,
     val starred: Boolean?,
     val metadata: Map<String, Any?>?,
+    val poll: PollDto? = null,
 )
 
 data class ConvDto(
@@ -219,6 +300,8 @@ data class ConvDto(
     val resetAt: String?,
     val disappearingSeconds: Int?,
     val expiresAt: String?,
+    val description: String? = null,
+    val myRole: String? = null,
     val peerLastReadAt: String?,
     val peerLastDeliveredAt: String?,
     val pinnedMessageIds: List<String>?,
@@ -394,7 +477,10 @@ data class OverviewDto(
     val achievements: List<AchievementDto>?,
     val brief: BriefDto?,
     val moments: List<String>?,
+    val achievementProgress: List<AchievementProgressDto>? = null,
 )
+
+data class AchievementProgressDto(val key: String, val title: String, val detail: String, val done: Int, val total: Int)
 
 data class ForSubjectDto(val relationship: RelationshipDto?)
 

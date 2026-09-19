@@ -30,6 +30,7 @@ import com.viroreach.app.messaging.ConversationItem
 import com.viroreach.app.messaging.Delivery
 import com.viroreach.app.messaging.preview
 import com.viroreach.app.messaging.ui.ChatLock
+import com.viroreach.app.messaging.ui.GroupAvatar
 import com.viroreach.app.messaging.ui.Ticks
 import com.viroreach.app.relationships.ui.ConnectionsDashboard
 import com.viroreach.app.session.SessionManager
@@ -60,6 +61,8 @@ fun MessagesInboxScreen(
     onCall: (peerUserId: String?, phone: String?, name: String) -> Unit,
     onOpenRelationship: (peerUserId: String?, phone: String?, name: String) -> Unit,
     startOnConnections: Boolean = false,
+    onSearch: () -> Unit = {},
+    onNewGroup: () -> Unit = {},
 ) {
     var tab by rememberSaveable { mutableIntStateOf(if (startOnConnections) 1 else 0) }
     LaunchedEffect(startOnConnections) { if (startOnConnections) tab = 1 }
@@ -71,6 +74,11 @@ fun MessagesInboxScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Segmented(listOf("Messages", "Connections"), tab) { tab = it }
+                    Spacer(Modifier.weight(1f))
+                    if (tab == 0) {
+                        IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Search messages", tint = Color.White) }
+                        IconButton(onClick = onNewGroup) { Icon(Icons.Default.GroupAdd, "New group", tint = Color.White) }
+                    }
                 }
                 if (tab == 0) {
                     Inbox(session, onOpenChat)
@@ -120,9 +128,15 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
         session.relationships.refresh()
         syncing = false
     }
-    LaunchedEffect(conversations.map { it.peerUserId }.toSet()) {
+    LaunchedEffect(conversations.map { it.peerUserId to it.lastSender }.toSet()) {
         val map = mutableMapOf<String, PeerInfo>()
         for (c in conversations) {
+            if (c.isGroup) {
+                c.lastSender?.takeIf { it !in map }?.let { sender ->
+                    map[sender] = PeerInfo(session.contactsRepository.displayNameForUserId(sender) ?: "Someone", null, null)
+                }
+                continue
+            }
             val id = c.peerUserId ?: continue
             val contact = session.contactsRepository.findByUserId(id)
             map[id] = PeerInfo(
@@ -140,7 +154,7 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
             onOpenChat(
                 ChatRoute(
                     conversationId = c.id,
-                    peerName = p?.name ?: "Viro user",
+                    peerName = if (c.isGroup) c.title ?: "Group" else p?.name ?: "Viro user",
                     peerUserId = c.peerUserId,
                     peerPhoneE164 = p?.phone,
                     peerAvatarUrl = p?.avatarUrl,
@@ -196,7 +210,8 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
                 val rel = overview?.relationships?.firstOrNull { it.subjectUserId != null && it.subjectUserId == c.peerUserId }
                 ConversationRow(
                     c = c,
-                    name = p?.name ?: "Viro user",
+                    name = if (c.isGroup) c.title ?: "Group" else p?.name ?: "Viro user",
+                    lastSenderName = if (c.isGroup && !c.lastMine) c.lastSender?.let { peers[it]?.name?.substringBefore(' ') } else null,
                     avatarUrl = p?.avatarUrl,
                     relationship = rel,
                     typingState = typing[c.id]?.state,
@@ -241,6 +256,7 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
 private fun ConversationRow(
     c: ConversationItem,
     name: String,
+    lastSenderName: String? = null,
     avatarUrl: String?,
     relationship: RelationshipDto?,
     typingState: String?,
@@ -255,7 +271,8 @@ private fun ConversationRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box {
-            ViroAvatar(displayName = name, imageUrl = avatarUrl, size = ViroAvatarSize.Medium)
+            if (c.isGroup) GroupAvatar(name, 48.dp)
+            else ViroAvatar(displayName = name, imageUrl = avatarUrl, size = ViroAvatarSize.Medium)
             if (c.isPrivate) {
                 Box(
                     Modifier.align(Alignment.BottomEnd).size(18.dp).clip(CircleShape).background(ViroColors.NavyBackground),
@@ -308,7 +325,12 @@ private fun ConversationRow(
                             Spacer(Modifier.width(3.dp))
                         }
                         Text(
-                            (if (c.lastMine && c.lastType != "SYSTEM") "You: " else "") + c.preview(),
+                            when {
+                                c.lastType == "SYSTEM" -> ""
+                                c.lastMine -> "You: "
+                                lastSenderName != null -> "$lastSenderName: "
+                                else -> ""
+                            } + c.preview(),
                             color = ViroColors.textSecondary,
                             fontSize = 14.sp,
                             maxLines = 1,

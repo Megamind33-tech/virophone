@@ -8,6 +8,7 @@ import com.viroreach.core.database.MessageEntity
 import com.viroreach.core.network.ConvDto
 import com.viroreach.core.network.MediaDto
 import com.viroreach.core.network.MsgDto
+import com.viroreach.core.network.PollDto
 import com.viroreach.core.network.ReactionDto
 import com.viroreach.core.network.ReplyDto
 import java.time.Instant
@@ -21,7 +22,7 @@ data class ChatMessage(
     val conversationId: String,
     val senderUserId: String,
     val mine: Boolean,
-    /** TEXT | VOICE | IMAGE | SYSTEM | LOOP */
+    /** TEXT | VOICE | IMAGE | SYSTEM | LOOP | POLL | GIF | STICKER */
     val type: String,
     val body: String?,
     val createdAt: Long,
@@ -39,11 +40,27 @@ data class ChatMessage(
     val metadata: Map<String, Any?>,
     val outboxStatus: String?,
     val localMediaPath: String?,
+    val poll: PollDto? = null,
 ) {
     val isPending: Boolean get() = outboxStatus != null
     val effect: String? get() = metadata["effect"] as? String
     val event: String? get() = metadata["event"] as? String
     val loopId: String? get() = metadata["loopId"] as? String
+
+    @Suppress("UNCHECKED_CAST")
+    private fun obj(key: String): Map<String, Any?>? = metadata[key] as? Map<String, Any?>
+    val gifUrl: String? get() = obj("gif")?.get("url") as? String
+    val gifSize: Pair<Int, Int>? get() = obj("gif")?.let { g ->
+        val w = (g["width"] as? Number)?.toInt()
+        val h = (g["height"] as? Number)?.toInt()
+        if (w != null && h != null && w > 0 && h > 0) w to h else null
+    }
+    val stickerPack: String? get() = obj("sticker")?.get("pack") as? String
+    val stickerId: String? get() = obj("sticker")?.get("id") as? String
+    val linkPreview: com.viroreach.core.network.LinkPreviewDto? get() = obj("linkPreview")?.let { lp ->
+        val url = lp["url"] as? String ?: return@let null
+        com.viroreach.core.network.LinkPreviewDto(url, lp["title"] as? String, lp["description"] as? String, lp["siteName"] as? String, lp["mediaId"] as? String)
+    }
 
     fun delivery(peerLastDeliveredAt: Long?, peerLastReadAt: Long?): Delivery = when {
         !mine -> Delivery.INCOMING
@@ -59,6 +76,8 @@ data class ChatMessage(
 data class ConversationItem(
     val id: String,
     val kind: String,
+    val title: String?,
+    val myRole: String,
     val peerUserId: String?,
     val participants: List<String>,
     val unread: Int,
@@ -74,12 +93,14 @@ data class ConversationItem(
     val lastBody: String?,
     val lastType: String?,
     val lastMine: Boolean,
+    val lastSender: String?,
     val lastAt: Long?,
     val lastDeleted: Boolean,
     val lastPending: String?,
     val updatedAt: Long,
 ) {
     val isPrivate: Boolean get() = kind == "PRIVATE"
+    val isGroup: Boolean get() = kind == "GROUP"
 }
 
 data class TypingState(val userId: String, val state: String, val at: Long)
@@ -124,6 +145,7 @@ internal fun MsgDto.toEntity(existing: MessageEntity?): MessageEntity = MessageE
     forwarded = forwarded == true,
     starred = starred == true,
     metadataJson = ChatJson.toJson(metadata),
+    pollJson = ChatJson.toJson(poll),
     status = null,
     // A recording I sent, or a file already downloaded, stays usable offline.
     localMediaPath = if (media != null && deletedAt == null) existing?.localMediaPath else null,
@@ -134,7 +156,8 @@ internal fun ConvDto.toEntity(myUserId: String?, existing: ConversationEntity?):
     return ConversationEntity(
         id = id,
         kind = kind ?: "DM",
-        peerUserId = people.firstOrNull { it != myUserId },
+        // A group has members, not "the other person".
+        peerUserId = if (kind == "GROUP") null else people.firstOrNull { it != myUserId },
         title = title,
         participantsCsv = people.joinToString(","),
         unread = unread ?: 0,
@@ -149,6 +172,8 @@ internal fun ConvDto.toEntity(myUserId: String?, existing: ConversationEntity?):
         peerLastDeliveredAt = parseIso(peerLastDeliveredAt),
         pinnedCsv = (pinnedMessageIds ?: emptyList()).joinToString(","),
         locked = existing?.locked ?: false,
+        description = description,
+        myRole = myRole ?: "MEMBER",
     )
 }
 
@@ -175,11 +200,14 @@ internal fun MessageEntity.toChat(myUserId: String?): ChatMessage = ChatMessage(
     metadata = ChatJson.map(metadataJson),
     outboxStatus = status,
     localMediaPath = localMediaPath,
+    poll = pollJson?.let { runCatching { ChatJson.gson.fromJson(it, PollDto::class.java) }.getOrNull() },
 )
 
 internal fun ConversationRow.toItem(myUserId: String?): ConversationItem = ConversationItem(
     id = id,
     kind = kind,
+    title = title,
+    myRole = myRole,
     peerUserId = peerUserId,
     participants = participantsCsv.split(',').filter { it.isNotBlank() },
     unread = unread,
@@ -195,6 +223,7 @@ internal fun ConversationRow.toItem(myUserId: String?): ConversationItem = Conve
     lastBody = lastBody,
     lastType = lastType,
     lastMine = lastSender != null && lastSender == myUserId,
+    lastSender = lastSender,
     lastAt = lastAt,
     lastDeleted = lastDeleted != null,
     lastPending = lastStatus,
@@ -208,6 +237,9 @@ fun ConversationItem.preview(): String = when {
     lastType == "VOICE" -> "🎤 Voice message"
     lastType == "IMAGE" -> if (lastBody.isNullOrBlank()) "📷 Photo" else "📷 $lastBody"
     lastType == "LOOP" -> "🔁 ${lastBody ?: "Loop"}"
+    lastType == "POLL" -> "📊 Poll"
+    lastType == "GIF" -> "GIF"
+    lastType == "STICKER" -> "${lastBody ?: ""} Sticker".trim()
     lastType == "SYSTEM" -> lastBody?.replaceFirstChar { it.uppercase() } ?: ""
     else -> lastBody.orEmpty()
 }

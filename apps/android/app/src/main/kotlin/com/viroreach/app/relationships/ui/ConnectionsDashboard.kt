@@ -168,6 +168,27 @@ fun ConnectionsDashboard(
             }
         }
 
+        val progress = ov.achievementProgress.orEmpty()
+        if (progress.isNotEmpty()) {
+            item { SectionTitle("On the way") }
+            item {
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(ViroColors.NavySurface).padding(14.dp)) {
+                    progress.forEach { p ->
+                        Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(p.title, color = Color.White, fontWeight = FontWeight.Medium, modifier = Modifier.width(118.dp))
+                            Text(p.detail, color = ViroColors.textSecondary, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        }
+                        LinearProgressIndicator(
+                            progress = { (p.done.toFloat() / p.total.coerceAtLeast(1)).coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp).height(4.dp).clip(RoundedCornerShape(2.dp)),
+                            color = ViroColors.accent,
+                            trackColor = ViroColors.NavySurfaceElevated,
+                        )
+                    }
+                }
+            }
+        }
+
         val achievements = ov.achievements.orEmpty()
         if (achievements.isNotEmpty()) {
             item { SectionTitle("Achievements") }

@@ -71,6 +71,8 @@ data class BubbleCallbacks(
     val onReactionTap: (ChatMessage) -> Unit,
     val onOpenLoop: (String) -> Unit,
     val onJumpTo: (String) -> Unit,
+    val onVote: (ChatMessage, List<Int>) -> Unit = { _, _ -> },
+    val onTranscribe: (ChatMessage) -> Unit = {},
 )
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -85,6 +87,9 @@ fun MessageRow(
     highlighted: Boolean,
     playEffect: Boolean,
     callbacks: BubbleCallbacks,
+    /** In a group: the sender's name above their incoming messages. */
+    groupSender: String? = null,
+    transcriptsEnabled: Boolean = false,
 ) {
     if (msg.type == "SYSTEM") {
         SystemRow(msg, senderLabel)
@@ -98,8 +103,9 @@ fun MessageRow(
     val scope = rememberCoroutineScope()
     val drag = remember(msg.id) { Animatable(0f) }
     val align = if (msg.mine) Alignment.End else Alignment.Start
+    val bare = msg.type == "STICKER" && !msg.deleted
     val bubbleColor = when {
-        msg.deleted -> Color.Transparent
+        msg.deleted || bare -> Color.Transparent
         msg.mine -> vibe.mine
         else -> vibe.theirs
     }
@@ -155,8 +161,11 @@ fun MessageRow(
                             callbacks.onLongPress(msg)
                         },
                     )
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = if (bare) 2.dp else 12.dp, vertical = if (bare) 2.dp else 8.dp),
             ) {
+                if (groupSender != null && !msg.mine && !msg.deleted) {
+                    Text(groupSender, color = memberColor(msg.senderUserId), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
                 if (msg.forwarded && !msg.deleted) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Shortcut, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(14.dp))
@@ -189,9 +198,18 @@ fun MessageRow(
                         )
                     }
                     msg.viewOnce -> ViewOnceContent(msg, onOpen = { callbacks.onOpenViewOnce(msg) })
-                    msg.type == "VOICE" -> VoiceContent(msg, media, player, vibe, callbacks.onToggleVoice)
+                    msg.type == "VOICE" -> {
+                        VoiceContent(msg, media, player, vibe, callbacks.onToggleVoice)
+                        TranscriptLine(msg, transcriptsEnabled, callbacks.onTranscribe)
+                    }
                     msg.type == "IMAGE" -> ImageContent(msg, media, callbacks.onOpenImage)
-                    else -> Text(msg.body.orEmpty(), color = Color.White, fontSize = 16.sp)
+                    msg.type == "POLL" -> PollContent(msg, vibe, senderLabel, callbacks.onVote)
+                    msg.type == "GIF" -> GifContent(msg)
+                    msg.type == "STICKER" -> StickerContent(msg)
+                    else -> {
+                        Text(msg.body.orEmpty(), color = Color.White, fontSize = 16.sp)
+                        msg.linkPreview?.let { LinkPreviewCard(it, media, msg.mine) }
+                    }
                 }
                 MetaLine(msg, delivery)
             }

@@ -54,6 +54,7 @@ data class MessageEntity(
     val status: String? = null,
     /** A file on this phone: the recording/photo before upload, or a cached download. */
     val localMediaPath: String? = null,
+    val pollJson: String? = null,
 )
 
 @Entity(tableName = "conversations", indices = [Index("peerUserId")])
@@ -76,6 +77,9 @@ data class ConversationEntity(
     val pinnedCsv: String,
     /** Chat lock is local to this phone (biometric), never sent anywhere. */
     val locked: Boolean = false,
+    val description: String? = null,
+    /** ADMIN | MEMBER — my role, for groups. */
+    val myRole: String = "MEMBER",
 )
 
 @Entity(tableName = "kv")
@@ -86,6 +90,7 @@ data class ConversationRow(
     val kind: String,
     val peerUserId: String?,
     val title: String?,
+    val myRole: String,
     val participantsCsv: String,
     val unread: Int,
     val updatedAt: Long,
@@ -111,7 +116,7 @@ data class ConversationRow(
 interface MessagingDao {
     @Query(
         """
-        SELECT c.id, c.kind, c.peerUserId, c.title, c.participantsCsv, c.unread, c.updatedAt, c.hidden,
+        SELECT c.id, c.kind, c.peerUserId, c.title, c.myRole, c.participantsCsv, c.unread, c.updatedAt, c.hidden,
                c.mutedUntil, c.clearedAt, c.disappearingSeconds, c.expiresAt, c.peerLastReadAt,
                c.peerLastDeliveredAt, c.pinnedCsv, c.locked,
                m.id AS lastId, m.body AS lastBody, m.type AS lastType, m.senderUserId AS lastSender,
@@ -188,6 +193,18 @@ interface MessagingDao {
     @Query("UPDATE messages SET conversationId = :to WHERE conversationId = :from")
     suspend fun moveMessages(from: String, to: String)
 
+    /** Local search; [q] must already have %, _ and ! escaped with a leading !. */
+    @Query(
+        """
+        SELECT * FROM messages
+        WHERE deletedAt IS NULL AND viewOnce = 0 AND type IN ('TEXT', 'IMAGE', 'POLL')
+          AND (body LIKE '%' || :q || '%' ESCAPE '!' OR pollJson LIKE '%' || :q || '%' ESCAPE '!')
+          AND (:conversationId IS NULL OR conversationId = :conversationId)
+        ORDER BY createdAt DESC LIMIT 100
+        """,
+    )
+    suspend fun search(q: String, conversationId: String?): List<MessageEntity>
+
     @Query("SELECT * FROM messages WHERE starred = 1 ORDER BY createdAt DESC")
     fun observeStarred(): Flow<List<MessageEntity>>
 
@@ -219,7 +236,9 @@ interface MessagingDao {
 
 @Database(
     entities = [MessageEntity::class, ConversationEntity::class, KvEntity::class],
-    version = 1,
+    // v2: polls, group roles and descriptions. A cache of the server plus an
+    // outbox, so the destructive fallback below just triggers a full re-sync.
+    version = 2,
     exportSchema = false,
 )
 abstract class MessagingDatabase : RoomDatabase() {
