@@ -674,6 +674,44 @@ export class AuthService {
     return { challengeId: challenge.id, expiresAt: challenge.expiresAt.toISOString() };
   }
 
+  /**
+   * Attaches an email the user has proved they own through Firebase: the app
+   * creates a Firebase email/password login, Firebase emails a verification
+   * link, and once it has been opened the app sends the ID token here. This
+   * replaces the emailed-code flow for servers with no mail transport, and it
+   * leaves the user with a password they can sign in with — and reset.
+   */
+  async linkEmailWithFirebase(userId: string, idToken: string) {
+    const { email, verified } =
+      await this.firebaseAuthService.verifiedEmailFromIdToken(idToken);
+    if (!verified) {
+      throw new ViroException(
+        'FORBIDDEN',
+        'Open the link we emailed you, then try again.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    const existing = await this.emailRepo.findOne({ where: { email } });
+    if (existing) {
+      if (existing.userId === userId) return this.listIdentities(userId);
+      throw new ViroException(
+        'VALIDATION_ERROR',
+        'That email is already used by another Viro account.',
+        HttpStatus.CONFLICT,
+      );
+    }
+    await this.emailRepo.save(
+      this.emailRepo.create({ userId, email, verifiedAt: new Date(), status: 'VERIFIED' }),
+    );
+    await this.securityService.logEvent({
+      userId,
+      eventType: 'EMAIL_LINKED',
+      severity: 'LOW',
+      metadata: { via: 'firebase' },
+    });
+    return this.listIdentities(userId);
+  }
+
   /** Confirms the code and attaches the email to this account. */
   async verifyEmailLink(userId: string, challengeId: string, code: string) {
     const challenge = await this.otpRepo.findOne({ where: { id: challengeId } });

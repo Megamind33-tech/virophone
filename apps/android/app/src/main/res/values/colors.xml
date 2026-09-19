@@ -5,4 +5,6 @@
          behind the logo under the launcher's mask. -->
     <color name="ic_launcher_background">#FFFFFF</color>
     <color name="ic_launcher_foreground">#4FC3F7</color>
+    <!-- Tint behind the notification icon in the shade; the mark's blue. -->
+    <color name="notification_accent">#1565F5</color>
 </resources>

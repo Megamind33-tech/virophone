@@ -97,28 +97,7 @@ export class FirebaseAuthService {
   async resolveUserFromIdToken(
     idToken: string,
   ): Promise<{ userId: string; email: string; isNewUser: boolean }> {
-    let decoded: DecodedIdToken;
-    try {
-      // checkRevoked: a disabled or revoked Firebase account must not be able
-      // to keep minting Viro sessions from an ID token it already holds.
-      decoded = await adminAuth().getAuth(this.getApp()).verifyIdToken(idToken, true);
-    } catch (e) {
-      this.logger.warn(`FIREBASE_IDTOKEN_REJECTED ${(e as Error).message}`);
-      throw new ViroException(
-        'UNAUTHORIZED',
-        'Invalid or expired Firebase sign-in.',
-        HttpStatus.UNAUTHORIZED,
-      );
-    }
-
-    const email = (decoded.email || '').trim().toLowerCase();
-    if (!email) {
-      throw new ViroException(
-        'VALIDATION_ERROR',
-        'This Firebase account has no email address.',
-        HttpStatus.BAD_REQUEST,
-      );
-    }
+    const { decoded, email } = await this.decode(idToken);
     if (decoded.email_verified !== true && requireVerifiedEmail()) {
       throw new ViroException(
         'FORBIDDEN',
@@ -155,6 +134,42 @@ export class FirebaseAuthService {
     );
     this.logger.log(`FIREBASE_SIGNIN_NEW_USER userId=${userId}`);
     return { userId, email, isNewUser: true };
+  }
+
+  /**
+   * Proves which email address the holder of this ID token owns, for
+   * attaching it to an existing account. Firebase sends the verification
+   * email and records the click; this reads the result, so no mail service is
+   * needed on this server.
+   */
+  async verifiedEmailFromIdToken(idToken: string): Promise<{ email: string; verified: boolean }> {
+    const { decoded, email } = await this.decode(idToken);
+    return { email, verified: decoded.email_verified === true };
+  }
+
+  private async decode(idToken: string): Promise<{ decoded: DecodedIdToken; email: string }> {
+    let decoded: DecodedIdToken;
+    try {
+      // checkRevoked: a disabled or revoked Firebase account must not be able
+      // to keep minting Viro sessions from an ID token it already holds.
+      decoded = await adminAuth().getAuth(this.getApp()).verifyIdToken(idToken, true);
+    } catch (e) {
+      this.logger.warn(`FIREBASE_IDTOKEN_REJECTED ${(e as Error).message}`);
+      throw new ViroException(
+        'UNAUTHORIZED',
+        'Invalid or expired Firebase sign-in.',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+    const email = (decoded.email || '').trim().toLowerCase();
+    if (!email) {
+      throw new ViroException(
+        'VALIDATION_ERROR',
+        'This Firebase account has no email address.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    return { decoded, email };
   }
 }
 

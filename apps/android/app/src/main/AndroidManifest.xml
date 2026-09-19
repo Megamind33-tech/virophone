@@ -125,6 +125,16 @@
             </intent-filter>
         </service>
 
+        <!-- Used when FCM draws a notification itself (app in background).
+             Without it Android falls back to the full-colour launcher icon,
+             which the status bar flattens into a white blob. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_viro" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_accent" />
+
 
 
 

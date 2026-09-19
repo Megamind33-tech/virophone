@@ -34,12 +34,12 @@ val gitCommitAbbrev: String = providers.exec {
 
 android {
     namespace = "com.viroreach.app"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.viroreach.app"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 35
         versionCode = gitCommitCount
         // Carries the commit it was built from, so a bug report identifies the
         // exact source state rather than a name that never changes.

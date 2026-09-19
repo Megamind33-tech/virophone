@@ -115,6 +115,12 @@ class AuthRepository(
             )
         }
 
+    /** Firebase emails the link and hosts the reset page. */
+    suspend fun sendPasswordReset(email: String): Result<Unit> = runCatching {
+        FirebaseAuth.getInstance().sendPasswordResetEmail(email.trim()).await()
+        Unit
+    }
+
     suspend fun signInWithEmail(
         email: String,
         password: String,
@@ -127,7 +133,12 @@ class AuthRepository(
         return try {
             val auth = FirebaseAuth.getInstance()
             val result = if (register) {
-                auth.createUserWithEmailAndPassword(trimmed, password).await()
+                auth.createUserWithEmailAndPassword(trimmed, password).await().also {
+                    // Best effort: a failed send must not fail sign-up. Proves
+                    // the address is real, and a verified address is what makes
+                    // password reset trustworthy later.
+                    runCatching { it.user?.sendEmailVerification()?.await() }
+                }
             } else {
                 auth.signInWithEmailAndPassword(trimmed, password).await()
             }

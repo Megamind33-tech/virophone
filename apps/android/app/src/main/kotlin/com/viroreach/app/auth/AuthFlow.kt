@@ -47,10 +47,12 @@ fun AuthFlow(
             registerMode = state.registerMode,
             loading = state.loading,
             errorMessage = state.errorMessage,
+            infoMessage = state.infoMessage,
             onEmailChange = viewModel::updateEmail,
             onPasswordChange = viewModel::updatePassword,
             onToggleMode = viewModel::toggleEmailRegisterMode,
             onSubmit = { viewModel.submitEmailAuth(onAuthenticated) },
+            onForgotPassword = viewModel::sendPasswordReset,
             onUsePhone = viewModel::showPhoneAuth,
         )
         AuthStep.LinkPhone -> LinkPhoneScreen(

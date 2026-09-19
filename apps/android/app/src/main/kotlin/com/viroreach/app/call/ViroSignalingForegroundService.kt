@@ -60,7 +60,7 @@ class ViroSignalingForegroundService : Service() {
             pendingIntentFlags(),
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification)
+            .setSmallIcon(R.drawable.ic_stat_viro)
             .setContentTitle("Viro ready")
             .setContentText("Listening for incoming calls")
             .setOngoing(true)

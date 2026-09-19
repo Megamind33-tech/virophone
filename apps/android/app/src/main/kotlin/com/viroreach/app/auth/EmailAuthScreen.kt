@@ -32,10 +32,12 @@ fun EmailAuthScreen(
     registerMode: Boolean,
     loading: Boolean,
     errorMessage: String?,
+    infoMessage: String?,
     onEmailChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
     onToggleMode: () -> Unit,
     onSubmit: () -> Unit,
+    onForgotPassword: () -> Unit,
     onUsePhone: () -> Unit,
 ) {
     ViroScreenBackground {
@@ -122,6 +124,20 @@ fun EmailAuthScreen(
                     )
                 }
 
+                if (!registerMode) {
+                    TextButton(onClick = onForgotPassword, enabled = !loading) {
+                        Text("Forgot password?")
+                    }
+                }
+
+                infoMessage?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 errorMessage?.let {
                     Spacer(Modifier.height(8.dp))
                     ViroErrorMessage(it)

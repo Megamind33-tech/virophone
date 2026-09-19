@@ -4,7 +4,7 @@ plugins {
 }
 android {
     namespace = "com.viroreach.core.network"
-    compileSdk = 34
+    compileSdk = 35
     defaultConfig {
         minSdk = 26
         buildConfigField("String", "API_BASE_URL", "\"https://reach.viro3.online\"")

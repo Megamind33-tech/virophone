@@ -23,6 +23,8 @@ data class AuthUiState(
     val normalizedPhone: String? = null,
     val loading: Boolean = false,
     val errorMessage: String? = null,
+    /** Neutral confirmation, e.g. "reset link sent" — shown instead of an error. */
+    val infoMessage: String? = null,
     val returningInstall: Boolean = false,
     val email: String = "",
     val password: String = "",
@@ -55,7 +57,43 @@ class AuthViewModel(
     // --- Email / password (Firebase) ---
 
     fun updateEmail(value: String) {
-        uiState = uiState.copy(email = value.trim(), errorMessage = null)
+        uiState = uiState.copy(email = value.trim(), errorMessage = null, infoMessage = null)
+    }
+
+    /**
+     * Emails a password-reset link. Firebase sends it and hosts the page where
+     * the new password is chosen, so nothing here handles the password.
+     *
+     * The confirmation is the same whether or not an account exists for the
+     * address; saying "no such account" would let anyone test which emails
+     * are registered.
+     */
+    fun sendPasswordReset() {
+        val email = uiState.email.trim()
+        if (!email.contains("@") || !email.contains(".")) {
+            uiState = uiState.copy(errorMessage = "Enter your email address above, then tap Forgot password.")
+            return
+        }
+        uiState = uiState.copy(loading = true, errorMessage = null, infoMessage = null)
+        viewModelScope.launch {
+            val result = repository.sendPasswordReset(email)
+            uiState = if (result.isSuccess || !isNetworkFailure(result.exceptionOrNull())) {
+                uiState.copy(
+                    loading = false,
+                    infoMessage = "If $email has a Viro account, a reset link is on its way. Check spam too.",
+                )
+            } else {
+                uiState.copy(
+                    loading = false,
+                    errorMessage = "Couldn't reach the server. Check your connection and try again.",
+                )
+            }
+        }
+    }
+
+    private fun isNetworkFailure(error: Throwable?): Boolean {
+        val raw = error?.message.orEmpty()
+        return error is java.io.IOException || raw.contains("NETWORK", true) || raw.contains("timeout", true)
     }
 
     fun updatePassword(value: String) {
@@ -71,7 +109,7 @@ class AuthViewModel(
     }
 
     fun toggleEmailRegisterMode() {
-        uiState = uiState.copy(registerMode = !uiState.registerMode, errorMessage = null)
+        uiState = uiState.copy(registerMode = !uiState.registerMode, errorMessage = null, infoMessage = null)
     }
 
     // --- Linking a phone number after email sign-in ------------------------

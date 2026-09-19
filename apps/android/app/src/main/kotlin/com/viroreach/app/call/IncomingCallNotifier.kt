@@ -45,7 +45,7 @@ class IncomingCallNotifier(private val context: Context) {
             pendingIntentFlags(),
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification)
+            .setSmallIcon(R.drawable.ic_stat_viro)
             .setContentTitle("Incoming Viro")
             .setContentText(callerName)
             .setCategory(NotificationCompat.CATEGORY_CALL)

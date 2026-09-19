@@ -37,6 +37,11 @@ interface ViroApiService {
     @POST("api/v1/auth/link/email/verify")
     suspend fun verifyEmailLink(@Body body: EmailLinkVerifyBody): IdentitiesResponse
 
+    // Attaches an email whose ownership Firebase verified (the user opened the
+    // link Firebase emailed). Needs no mail service on the Viro server.
+    @POST("api/v1/auth/link/email/firebase")
+    suspend fun linkEmailWithFirebase(@Body body: FirebaseLinkEmailBody): IdentitiesResponse
+
     @POST("api/v1/auth/link/phone/request")
     suspend fun requestPhoneLink(@Body body: PhoneLinkRequestBody): PhoneLinkRequestResponse
 
@@ -221,6 +226,7 @@ data class IdentitiesResponse(
 )
 data class EmailLinkRequestBody(val email: String)
 data class EmailLinkVerifyBody(val challengeId: String, val code: String)
+data class FirebaseLinkEmailBody(val idToken: String)
 
 data class PhoneLinkRequestBody(val phoneE164: String)
 data class PhoneLinkRequestResponse(val challengeId: String, val expiresAt: String)

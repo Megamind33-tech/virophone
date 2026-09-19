@@ -45,6 +45,13 @@ class PhoneLinkVerifyDto {
   @Length(6, 6)
   code!: string;
 }
+class FirebaseLinkEmailDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(4096)
+  idToken!: string;
+}
+
 class FirebaseSignInDto {
   @IsString()
   @IsNotEmpty()
@@ -252,6 +259,17 @@ export class AuthController {
     @Body() body: EmailLinkRequestDto,
   ) {
     return this.authService.requestEmailLink(req.user.sub, body.email);
+  }
+
+  /** Attaches an email whose ownership Firebase has verified (link clicked). */
+  @Post('link/email/firebase')
+  @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 10, ttl: 300000 } })
+  async linkEmailWithFirebase(
+    @Req() req: { user: { sub: string } },
+    @Body() body: FirebaseLinkEmailDto,
+  ) {
+    return this.authService.linkEmailWithFirebase(req.user.sub, body.idToken);
   }
 
   @Post('link/email/verify')
