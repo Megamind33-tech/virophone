@@ -188,6 +188,10 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
                 Text(if (showHidden) "Back to chats" else "Hidden chats ($hiddenCount)", color = ViroColors.textSecondary)
             }
         }
+        // if/else, never an early `return@Column`: the Compose compiler (1.5.x)
+        // emits one group end too many on an early return out of an inline
+        // layout lambda, and the next recomposition that flips the branch
+        // crashes in Stack.pop (IndexOutOfBoundsException: Index -1).
         if (visible.isEmpty()) {
             Column(
                 Modifier.fillMaxSize().padding(32.dp),
@@ -202,22 +206,22 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 )
             }
-            return@Column
-        }
-        LazyColumn(Modifier.fillMaxSize()) {
-            items(visible, key = { it.id }) { c ->
-                val p = c.peerUserId?.let { peers[it] }
-                val rel = overview?.relationships?.firstOrNull { it.subjectUserId != null && it.subjectUserId == c.peerUserId }
-                ConversationRow(
-                    c = c,
-                    name = if (c.isGroup) c.title ?: "Group" else p?.name ?: "Viro user",
-                    lastSenderName = if (c.isGroup && !c.lastMine) c.lastSender?.let { peers[it]?.name?.substringBefore(' ') } else null,
-                    avatarUrl = p?.avatarUrl,
-                    relationship = rel,
-                    typingState = typing[c.id]?.state,
-                    onClick = { open(c) },
-                    onLongClick = { optionsFor = c },
-                )
+        } else {
+            LazyColumn(Modifier.fillMaxSize()) {
+                items(visible, key = { it.id }) { c ->
+                    val p = c.peerUserId?.let { peers[it] }
+                    val rel = overview?.relationships?.firstOrNull { it.subjectUserId != null && it.subjectUserId == c.peerUserId }
+                    ConversationRow(
+                        c = c,
+                        name = if (c.isGroup) c.title ?: "Group" else p?.name ?: "Viro user",
+                        lastSenderName = if (c.isGroup && !c.lastMine) c.lastSender?.let { peers[it]?.name?.substringBefore(' ') } else null,
+                        avatarUrl = p?.avatarUrl,
+                        relationship = rel,
+                        typingState = typing[c.id]?.state,
+                        onClick = { open(c) },
+                        onLongClick = { optionsFor = c },
+                    )
+                }
             }
         }
     }

@@ -291,6 +291,20 @@ fun ConsumerNav(
 
 
     // A notification tap: open the chat, or Connections.
+    // Temporary crash breadcrumbs: screen and call state as they change (ids only).
+    LaunchedEffect(Unit) {
+        androidx.compose.runtime.snapshotFlow {
+            Triple(
+                "${tab.name}/${overlay.name}",
+                chatRoute?.conversationId ?: selectedContact?.id?.takeIf { overlay == ConsumerOverlay.ContactDetail },
+                callState.name,
+            )
+        }.collect { (route, id, call) ->
+            com.viroreach.app.diagnostics.Breadcrumbs.route(route, id)
+            com.viroreach.app.diagnostics.Breadcrumbs.call(call)
+        }
+    }
+
     val pendingNav by com.viroreach.app.AppNavigation.pending.collectAsState()
     LaunchedEffect(pendingNav) {
         val target = com.viroreach.app.AppNavigation.consume() ?: return@LaunchedEffect

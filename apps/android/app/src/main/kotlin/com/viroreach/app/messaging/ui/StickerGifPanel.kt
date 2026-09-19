@@ -114,53 +114,57 @@ private fun GifTab(
             Spacer(Modifier.width(6.dp))
             Text("Send a GIF from your gallery")
         }
+        // if/else, never an early `return@Column`: the Compose compiler (1.5.x)
+        // emits one group end too many on an early return out of an inline
+        // layout lambda, and the next recomposition that flips the branch
+        // crashes in Stack.pop (IndexOutOfBoundsException: Index -1).
         if (!enabled) {
             Text(
                 "GIF search isn't switched on yet. GIFs from your gallery still work.",
                 color = ViroColors.textSecondary, fontSize = 13.sp, modifier = Modifier.padding(8.dp),
             )
-            return@Column
-        }
-        LaunchedEffect(q) {
-            delay(350)
-            loading = true
-            repo.gifs(q).onSuccess {
-                items = it.items.orEmpty()
-                next = it.next
-                error = null
-            }.onFailure { error = "Couldn't load GIFs." }
-            loading = false
-        }
-        // Load more at the end.
-        val atEnd by remember { derivedStateOf { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index == grid.layoutInfo.totalItemsCount - 1 } }
-        LaunchedEffect(atEnd, next) {
-            val pos = next
-            if (atEnd && pos != null && !loading && items.isNotEmpty()) {
+        } else {
+            LaunchedEffect(q) {
+                delay(350)
                 loading = true
-                repo.gifs(q, pos).onSuccess {
-                    items = items + it.items.orEmpty()
+                repo.gifs(q).onSuccess {
+                    items = it.items.orEmpty()
                     next = it.next
-                }
+                    error = null
+                }.onFailure { error = "Couldn't load GIFs." }
                 loading = false
             }
-        }
-        OutlinedTextField(
-            value = q,
-            onValueChange = { q = it.take(60) },
-            leadingIcon = { Icon(Icons.Default.Search, null) },
-            placeholder = { Text("Search ${if (provider == "tenor") "Tenor" else "GIPHY"}") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        error?.let { Text(it, color = ViroColors.textSecondary, fontSize = 13.sp) }
-        LazyVerticalGrid(GridCells.Fixed(3), state = grid, modifier = Modifier.fillMaxSize().padding(top = 6.dp)) {
-            items(items, key = { it.id }) { g ->
-                AsyncImage(
-                    model = g.previewUrl ?: g.url,
-                    contentDescription = "GIF",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.padding(2.dp).aspectRatio(1f).clip(RoundedCornerShape(8.dp)).clickable { onGif(g) },
-                )
+            // Load more at the end.
+            val atEnd by remember { derivedStateOf { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index == grid.layoutInfo.totalItemsCount - 1 } }
+            LaunchedEffect(atEnd, next) {
+                val pos = next
+                if (atEnd && pos != null && !loading && items.isNotEmpty()) {
+                    loading = true
+                    repo.gifs(q, pos).onSuccess {
+                        items = items + it.items.orEmpty()
+                        next = it.next
+                    }
+                    loading = false
+                }
+            }
+            OutlinedTextField(
+                value = q,
+                onValueChange = { q = it.take(60) },
+                leadingIcon = { Icon(Icons.Default.Search, null) },
+                placeholder = { Text("Search ${if (provider == "tenor") "Tenor" else "GIPHY"}") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            error?.let { Text(it, color = ViroColors.textSecondary, fontSize = 13.sp) }
+            LazyVerticalGrid(GridCells.Fixed(3), state = grid, modifier = Modifier.fillMaxSize().padding(top = 6.dp)) {
+                items(items, key = { it.id }) { g ->
+                    AsyncImage(
+                        model = g.previewUrl ?: g.url,
+                        contentDescription = "GIF",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.padding(2.dp).aspectRatio(1f).clip(RoundedCornerShape(8.dp)).clickable { onGif(g) },
+                    )
+                }
             }
         }
     }

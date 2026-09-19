@@ -52,6 +52,8 @@ object CrashReporter {
             appendLine("${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
             appendLine("Thread: ${thread.name}")
             appendLine()
+            append(runCatching { Breadcrumbs.dump() }.getOrDefault("(no breadcrumbs)"))
+            appendLine()
             // Share sheets and chat apps choke on huge texts; the top of the
             // trace and its causes are what identify the bug.
             append(trace.take(12_000))

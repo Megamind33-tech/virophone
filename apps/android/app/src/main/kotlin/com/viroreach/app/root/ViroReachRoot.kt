@@ -36,6 +36,8 @@ fun ViroReachRoot() {
         }
     }
 
+    LaunchedEffect(startupState) { com.viroreach.app.diagnostics.Breadcrumbs.startup(startupState.name) }
+
     // Both entry paths — a fresh sign-in and a restored session — pass through
     // Preparing, so neither one can show a half-loaded app.
     LaunchedEffect(startupState) {

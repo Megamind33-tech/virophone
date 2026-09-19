@@ -143,166 +143,172 @@ fun Composer(
                 onCancelEdit()
             })
         }
+        // if/else, never an early `return@Column`: the Compose compiler (1.5.x)
+        // emits one group end too many on an early return out of an inline
+        // layout lambda, and the next recomposition that flips the branch
+        // crashes in Stack.pop (IndexOutOfBoundsException: Index -1).
         if (!enabled) {
             Text(
                 disabledReason ?: "You can't message here.",
                 color = ViroColors.textSecondary,
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
             )
-            return@Column
-        }
-        aboveInput?.invoke()
-        if (recording) {
-            RecordingBar(
-                vibe = vibe,
-                elapsedMs = elapsed,
-                level = level,
-                locked = locked,
-                dragX = dragX,
-                viewOnce = viewOnce,
-                onToggleViewOnce = onToggleViewOnce,
-                onCancel = { finishRecording(send = false) },
-                onSend = { finishRecording(send = true) },
-            )
-            if (locked) return@Column
-        }
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            if (!recording) {
-                Box {
-                    IconButton(onClick = { attachOpen = true }) {
-                        Icon(Icons.Default.AddCircleOutline, "Attach", tint = vibe.accent)
-                    }
-                    DropdownMenu(expanded = attachOpen, onDismissRequest = { attachOpen = false }) {
-                        DropdownMenuItem(text = { Text("Photo") }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
-                            attachOpen = false
-                            onAction(ComposerAction.PickPhoto)
-                        })
-                        DropdownMenuItem(text = { Text("Camera") }, leadingIcon = { Icon(Icons.Default.PhotoCamera, null) }, onClick = {
-                            attachOpen = false
-                            onAction(ComposerAction.TakePhoto)
-                        })
-                        DropdownMenuItem(text = { Text("Poll") }, leadingIcon = { Icon(Icons.Default.Poll, null) }, onClick = {
-                            attachOpen = false
-                            onAction(ComposerAction.CreatePoll)
-                        })
-                        DropdownMenuItem(text = { Text("Stickers & GIFs") }, leadingIcon = { Icon(Icons.Default.EmojiEmotions, null) }, onClick = {
-                            attachOpen = false
-                            onAction(ComposerAction.OpenStickers)
-                        })
-                        DropdownMenuItem(
-                            text = { Text(if (viewOnce) "View once: on" else "View once: off") },
-                            leadingIcon = { Icon(Icons.Default.LooksOne, null) },
-                            onClick = {
-                                attachOpen = false
-                                onToggleViewOnce()
-                            },
-                        )
-                    }
-                }
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = {
-                        draft = it
-                        onTyping(if (it.isBlank()) "idle" else "typing")
-                        onDraftChanged(it)
-                    },
-                    trailingIcon = {
-                        IconButton(onClick = { onAction(ComposerAction.OpenStickers) }) {
-                            Icon(
-                                Icons.Default.EmojiEmotions,
-                                "Stickers and GIFs",
-                                tint = if (stickersOpen) vibe.accent else ViroColors.MutedBlue,
-                            )
-                        }
-                    },
-                    modifier = Modifier.weight(1f).heightIn(min = 48.dp, max = 140.dp),
-                    placeholder = { Text("Message", color = ViroColors.MutedBlue) },
-                    shape = RoundedCornerShape(24.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = ViroColors.NavySurfaceElevated,
-                        unfocusedContainerColor = ViroColors.NavySurfaceElevated,
-                        focusedBorderColor = vibe.accent.copy(alpha = 0.6f),
-                        unfocusedBorderColor = Color.Transparent,
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        cursorColor = vibe.accent,
-                    ),
+        } else {
+            aboveInput?.invoke()
+            if (recording) {
+                RecordingBar(
+                    vibe = vibe,
+                    elapsedMs = elapsed,
+                    level = level,
+                    locked = locked,
+                    dragX = dragX,
+                    viewOnce = viewOnce,
+                    onToggleViewOnce = onToggleViewOnce,
+                    onCancel = { finishRecording(send = false) },
+                    onSend = { finishRecording(send = true) },
                 )
-            } else {
-                Spacer(Modifier.weight(1f))
             }
-            Spacer(Modifier.width(6.dp))
-            if (draft.isNotBlank() || editing != null) {
-                Box {
-                    Box(
-                        Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(vibe.accent)
-                            .combinedClickable(
-                                onClick = { sendText() },
-                                onLongClick = { if (editing == null) menuOpen = true },
-                            ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(if (editing != null) Icons.Default.Check else Icons.Default.Send, if (editing != null) "Save edit" else "Send", tint = Color.White)
-                    }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        DropdownMenuItem(text = { Text("Send later…") }, leadingIcon = { Icon(Icons.Default.Schedule, null) }, onClick = {
-                            menuOpen = false
-                            pickSendLater()
-                        })
-                        if (vibe.effects) {
-                            DropdownMenuItem(text = { Text("Send with confetti 🎉") }, onClick = {
-                                menuOpen = false
-                                sendText(effect = "confetti")
-                            })
+            // A locked recording hides the input row; the bar above has its own send/cancel.
+            if (!(recording && locked)) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    if (!recording) {
+                        Box {
+                            IconButton(onClick = { attachOpen = true }) {
+                                Icon(Icons.Default.AddCircleOutline, "Attach", tint = vibe.accent)
+                            }
+                            DropdownMenu(expanded = attachOpen, onDismissRequest = { attachOpen = false }) {
+                                DropdownMenuItem(text = { Text("Photo") }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
+                                    attachOpen = false
+                                    onAction(ComposerAction.PickPhoto)
+                                })
+                                DropdownMenuItem(text = { Text("Camera") }, leadingIcon = { Icon(Icons.Default.PhotoCamera, null) }, onClick = {
+                                    attachOpen = false
+                                    onAction(ComposerAction.TakePhoto)
+                                })
+                                DropdownMenuItem(text = { Text("Poll") }, leadingIcon = { Icon(Icons.Default.Poll, null) }, onClick = {
+                                    attachOpen = false
+                                    onAction(ComposerAction.CreatePoll)
+                                })
+                                DropdownMenuItem(text = { Text("Stickers & GIFs") }, leadingIcon = { Icon(Icons.Default.EmojiEmotions, null) }, onClick = {
+                                    attachOpen = false
+                                    onAction(ComposerAction.OpenStickers)
+                                })
+                                DropdownMenuItem(
+                                    text = { Text(if (viewOnce) "View once: on" else "View once: off") },
+                                    leadingIcon = { Icon(Icons.Default.LooksOne, null) },
+                                    onClick = {
+                                        attachOpen = false
+                                        onToggleViewOnce()
+                                    },
+                                )
+                            }
                         }
-                        if (vibe.heartbeat) {
-                            DropdownMenuItem(text = { Text("Send with a heartbeat 💓") }, onClick = {
-                                menuOpen = false
-                                sendText(effect = "heartbeat")
-                            })
-                        }
-                    }
-                }
-            } else {
-                // Hold to record, slide left to cancel, slide up to lock.
-                val size = if (vibe.voiceFirst) 58.dp else 48.dp
-                Box(
-                    Modifier
-                        .size(size)
-                        .scale(if (recording) 1.25f else 1f)
-                        .clip(CircleShape)
-                        .background(if (recording) ViroColors.consumerError else vibe.accent)
-                        .pointerInput(Unit) {
-                            awaitEachGesture {
-                                val down = awaitFirstDown()
-                                if (!startRecording()) return@awaitEachGesture
-                                var outcome = "send"
-                                while (true) {
-                                    val event = awaitPointerEvent()
-                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                    val dx = change.position.x - down.position.x
-                                    val dy = change.position.y - down.position.y
-                                    dragX = dx.coerceAtMost(0f)
-                                    if (dx < -cancelPx) { outcome = "cancel"; break }
-                                    if (dy < -lockPx) { outcome = "lock"; break }
-                                    if (!change.pressed) break
+                        OutlinedTextField(
+                            value = draft,
+                            onValueChange = {
+                                draft = it
+                                onTyping(if (it.isBlank()) "idle" else "typing")
+                                onDraftChanged(it)
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = { onAction(ComposerAction.OpenStickers) }) {
+                                    Icon(
+                                        Icons.Default.EmojiEmotions,
+                                        "Stickers and GIFs",
+                                        tint = if (stickersOpen) vibe.accent else ViroColors.MutedBlue,
+                                    )
                                 }
-                                when (outcome) {
-                                    "cancel" -> finishRecording(send = false)
-                                    "lock" -> { locked = true; dragX = 0f }
-                                    else -> finishRecording(send = true)
+                            },
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp, max = 140.dp),
+                            placeholder = { Text("Message", color = ViroColors.MutedBlue) },
+                            shape = RoundedCornerShape(24.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = ViroColors.NavySurfaceElevated,
+                                unfocusedContainerColor = ViroColors.NavySurfaceElevated,
+                                focusedBorderColor = vibe.accent.copy(alpha = 0.6f),
+                                unfocusedBorderColor = Color.Transparent,
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                cursorColor = vibe.accent,
+                            ),
+                        )
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    if (draft.isNotBlank() || editing != null) {
+                        Box {
+                            Box(
+                                Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(vibe.accent)
+                                    .combinedClickable(
+                                        onClick = { sendText() },
+                                        onLongClick = { if (editing == null) menuOpen = true },
+                                    ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(if (editing != null) Icons.Default.Check else Icons.Default.Send, if (editing != null) "Save edit" else "Send", tint = Color.White)
+                            }
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                DropdownMenuItem(text = { Text("Send later…") }, leadingIcon = { Icon(Icons.Default.Schedule, null) }, onClick = {
+                                    menuOpen = false
+                                    pickSendLater()
+                                })
+                                if (vibe.effects) {
+                                    DropdownMenuItem(text = { Text("Send with confetti 🎉") }, onClick = {
+                                        menuOpen = false
+                                        sendText(effect = "confetti")
+                                    })
+                                }
+                                if (vibe.heartbeat) {
+                                    DropdownMenuItem(text = { Text("Send with a heartbeat 💓") }, onClick = {
+                                        menuOpen = false
+                                        sendText(effect = "heartbeat")
+                                    })
                                 }
                             }
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Default.Mic, "Hold to record a voice message", tint = Color.White, modifier = Modifier.size(if (vibe.voiceFirst) 28.dp else 24.dp))
+                        }
+                    } else {
+                        // Hold to record, slide left to cancel, slide up to lock.
+                        val size = if (vibe.voiceFirst) 58.dp else 48.dp
+                        Box(
+                            Modifier
+                                .size(size)
+                                .scale(if (recording) 1.25f else 1f)
+                                .clip(CircleShape)
+                                .background(if (recording) ViroColors.consumerError else vibe.accent)
+                                .pointerInput(Unit) {
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown()
+                                        if (!startRecording()) return@awaitEachGesture
+                                        var outcome = "send"
+                                        while (true) {
+                                            val event = awaitPointerEvent()
+                                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                            val dx = change.position.x - down.position.x
+                                            val dy = change.position.y - down.position.y
+                                            dragX = dx.coerceAtMost(0f)
+                                            if (dx < -cancelPx) { outcome = "cancel"; break }
+                                            if (dy < -lockPx) { outcome = "lock"; break }
+                                            if (!change.pressed) break
+                                        }
+                                        when (outcome) {
+                                            "cancel" -> finishRecording(send = false)
+                                            "lock" -> { locked = true; dragX = 0f }
+                                            else -> finishRecording(send = true)
+                                        }
+                                    }
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.Default.Mic, "Hold to record a voice message", tint = Color.White, modifier = Modifier.size(if (vibe.voiceFirst) 28.dp else 24.dp))
+                        }
+                    }
                 }
             }
         }
