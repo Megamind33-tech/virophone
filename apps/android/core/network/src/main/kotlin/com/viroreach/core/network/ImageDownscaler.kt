@@ -31,8 +31,13 @@ object ImageDownscaler {
     ) {
         val resolver = context.contentResolver
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        resolver.openInputStream(source)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        // A bounds-only decode ALWAYS returns null — that is how
+        // inJustDecodeBounds works; the answer is in `bounds`. Chaining
+        // `?: throw` onto it rejected every photo as unreadable, so the stream
+        // is checked on its own and the decode result ignored.
+        val stream = resolver.openInputStream(source)
             ?: throw IllegalStateException("Could not read the selected photo")
+        stream.use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
             throw IllegalStateException("That file does not look like an image")
         }
@@ -41,9 +46,12 @@ object ImageDownscaler {
         while (bounds.outWidth / sample > maxEdgePx * 2 || bounds.outHeight / sample > maxEdgePx * 2) {
             sample *= 2
         }
-        val decoded = resolver.openInputStream(source)?.use {
+        val decoded = (
+            resolver.openInputStream(source)
+                ?: throw IllegalStateException("Could not read the selected photo")
+            ).use {
             BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
-        } ?: throw IllegalStateException("Could not read the selected photo")
+        } ?: throw IllegalStateException("This phone can't open that photo's format. Try another photo.")
 
         // Phone cameras store pixels in sensor order and record the rotation
         // in EXIF; BitmapFactory ignores it, so without this a portrait photo
