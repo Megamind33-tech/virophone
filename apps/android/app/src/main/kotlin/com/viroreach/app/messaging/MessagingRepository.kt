@@ -46,6 +46,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -183,16 +184,20 @@ class MessagingRepository(
 
     // --------------------------------------------------------------- reads
 
+    // Screens collect these straight into Compose, where an exception is an
+    // app crash. A local read failing must show an empty list, not kill Viro.
     fun conversations(): Flow<List<ConversationItem>> =
         dao.observeConversations().map { rows -> rows.map { it.toItem(myUserId()) } }
+            .catch { e -> Log.e(TAG, "INBOX_READ_FAILED", e); emit(emptyList()) }
 
     fun messages(conversationId: String): Flow<List<ChatMessage>> =
         dao.observeMessages(conversationId).map { rows ->
             val now = System.currentTimeMillis()
             rows.filter { it.expiresAt == null || it.expiresAt!! > now }.map { it.toChat(myUserId()) }
-        }
+        }.catch { e -> Log.e(TAG, "CHAT_READ_FAILED", e); emit(emptyList()) }
 
     fun conversation(conversationId: String): Flow<ConversationEntity?> = dao.observeConversation(conversationId)
+        .catch { e -> Log.e(TAG, "CONVERSATION_READ_FAILED", e); emit(null) }
 
     suspend fun dmWith(peerUserId: String): ConversationEntity? = dao.dmWith(peerUserId)
 

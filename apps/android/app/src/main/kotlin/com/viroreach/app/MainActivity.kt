@@ -62,6 +62,7 @@ class MainActivity : FragmentActivity() {
                     },
                 ) {
                     ViroReachRoot()
+                    com.viroreach.app.diagnostics.CrashReportPrompt()
                 }
             }
         }
@@ -81,6 +82,7 @@ class MainActivity : FragmentActivity() {
             AppNavigation.Target(
                 screen = target,
                 peerUserId = intent.getStringExtra(EXTRA_PEER_USER_ID),
+                conversationId = intent.getStringExtra(EXTRA_CONVERSATION_ID),
             ),
         )
         intent.removeExtra(EXTRA_OPEN)
@@ -97,6 +99,7 @@ class MainActivity : FragmentActivity() {
         const val EXTRA_CALLER_NAME = "extra_caller_name"
         const val EXTRA_OPEN = "extra_open"
         const val EXTRA_PEER_USER_ID = "extra_peer_user_id"
+        const val EXTRA_CONVERSATION_ID = "extra_conversation_id"
         const val OPEN_CHAT = "chat"
         const val OPEN_CONNECTIONS = "connections"
 

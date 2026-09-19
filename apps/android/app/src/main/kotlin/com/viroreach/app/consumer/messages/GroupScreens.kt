@@ -134,7 +134,7 @@ fun GroupInfoScreen(
     suspend fun reload() {
         members = session.messaging.members(conversationId)
         names = members.associate { m ->
-            m.userId to (if (m.userId == me) "You" else session.contactsRepository.displayNameForUserId(m.userId) ?: m.displayName ?: "Viro user")
+            m.userId to (if (m.userId == me) "You" else session.contactsRepository.nameForUserId(m.userId) ?: m.displayName ?: "Viro user")
         }
     }
     LaunchedEffect(conversationId) { reload() }

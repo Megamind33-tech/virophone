@@ -152,7 +152,7 @@ fun ChatScreen(
         if (c.kind != "GROUP") return@LaunchedEffect
         val server = repo.members(c.id).associate { it.userId to it.displayName }
         memberNames = c.participantsCsv.split(',').filter { it.isNotBlank() }.associateWith { id ->
-            session.contactsRepository.displayNameForUserId(id) ?: server[id] ?: "Viro user"
+            session.contactsRepository.nameForUserId(id) ?: server[id] ?: "Viro user"
         }
     }
 
@@ -1491,7 +1491,7 @@ private fun ForwardDialog(session: SessionManager, onDismiss: () -> Unit, onPick
     val conversations by session.messaging.conversations().collectAsState(initial = emptyList())
     var names by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     LaunchedEffect(conversations) {
-        names = conversations.mapNotNull { c -> c.peerUserId?.let { it to (session.contactsRepository.displayNameForUserId(it) ?: "Viro user") } }.toMap()
+        names = conversations.mapNotNull { c -> c.peerUserId?.let { it to (session.contactsRepository.nameForUserId(it) ?: "Viro user") } }.toMap()
     }
     AlertDialog(
         onDismissRequest = onDismiss,

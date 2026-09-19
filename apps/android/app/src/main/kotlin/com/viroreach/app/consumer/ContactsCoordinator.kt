@@ -107,6 +107,7 @@ class ContactsCoordinator(
     }
 
     fun onContactsPermissionGranted() {
+        repository.watchDeviceContactChanges(scope)
         refresh(silent = uiState.contacts.isNotEmpty() || hasEverLoaded)
     }
 }

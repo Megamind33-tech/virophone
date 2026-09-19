@@ -114,7 +114,7 @@ private fun Segmented(labels: List<String>, selected: Int, onSelect: (Int) -> Un
 private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val conversations by session.messaging.conversations().collectAsState(initial = emptyList())
+    val conversations by remember { session.messaging.conversations() }.collectAsState(initial = emptyList())
     val typing by session.messaging.typing.collectAsState()
     val overview by session.relationships.overview.collectAsState()
     var peers by remember { mutableStateOf<Map<String, PeerInfo>>(emptyMap()) }
@@ -133,14 +133,14 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
         for (c in conversations) {
             if (c.isGroup) {
                 c.lastSender?.takeIf { it !in map }?.let { sender ->
-                    map[sender] = PeerInfo(session.contactsRepository.displayNameForUserId(sender) ?: "Someone", null, null)
+                    map[sender] = PeerInfo(session.contactsRepository.nameForUserId(sender) ?: "Someone", null, null)
                 }
                 continue
             }
             val id = c.peerUserId ?: continue
             val contact = session.contactsRepository.findByUserId(id)
             map[id] = PeerInfo(
-                name = contact?.effectiveDisplayName ?: session.contactsRepository.displayNameForUserId(id) ?: "Viro user",
+                name = contact?.effectiveDisplayName ?: session.contactsRepository.nameForUserId(id) ?: "Viro user",
                 avatarUrl = contact?.resolveAvatarUrl(),
                 phone = contact?.phoneE164,
             )

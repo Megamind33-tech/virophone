@@ -1,11 +1,14 @@
 package com.viroreach.app.consumer
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.ContactsContract
+import androidx.core.content.ContextCompat
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -33,6 +36,7 @@ class CachedContactsRepository(
     private val hiddenStore = context.applicationContext.hiddenContactsStore
     private var knownDevicePhones: Set<String>? = null
     private var debounceJob: Job? = null
+    private var contactObserverRegistered = false
 
     /**
      * Watches the device's own contact book so a newly saved number gets
@@ -41,6 +45,14 @@ class CachedContactsRepository(
      * are actually new get sent, not the whole book.
      */
     fun watchDeviceContactChanges(scope: CoroutineScope) {
+        // Registering on the contacts provider without READ_CONTACTS throws a
+        // SecurityException — and this runs from Application.onCreate, so it
+        // took the whole app down on first launch. Called again once the
+        // permission is granted.
+        if (contactObserverRegistered) return
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS)
+            != PackageManager.PERMISSION_GRANTED
+        ) return
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
                 debounceJob?.cancel()
@@ -50,11 +62,13 @@ class CachedContactsRepository(
                 }
             }
         }
-        context.contentResolver.registerContentObserver(
-            ContactsContract.Contacts.CONTENT_URI,
-            true,
-            observer,
-        )
+        contactObserverRegistered = runCatching {
+            context.contentResolver.registerContentObserver(
+                ContactsContract.Contacts.CONTENT_URI,
+                true,
+                observer,
+            )
+        }.isSuccess
     }
 
     private suspend fun checkForNewlyAddedContacts() {
@@ -167,6 +181,11 @@ class CachedContactsRepository(
      * Blocking by design: the call-history mapper is synchronous, and this is a
      * single indexed lookup against a local table.
      */
+    /** Same lookup without blocking — use this from coroutines and Compose effects. */
+    suspend fun nameForUserId(userId: String): String? = runCatching {
+        dao.findByUserId(userId)?.let { it.customDisplayName ?: it.displayName }
+    }.getOrNull()
+
     fun displayNameForUserId(userId: String): String? = runCatching {
         kotlinx.coroutines.runBlocking {
             dao.findByUserId(userId)?.let { it.customDisplayName ?: it.displayName }

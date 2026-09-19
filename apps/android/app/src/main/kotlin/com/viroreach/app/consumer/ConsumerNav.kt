@@ -2,6 +2,7 @@ package com.viroreach.app.consumer
 
 
 
+import kotlinx.coroutines.flow.first
 import android.Manifest
 
 import android.content.pm.PackageManager
@@ -300,6 +301,12 @@ fun ConsumerNav(
                 connectionsRequested = true
             }
             com.viroreach.app.MainActivity.OPEN_CHAT -> {
+                target.conversationId?.let { groupId ->
+                    val group = runCatching { session.messaging.conversation(groupId).first() }.getOrNull()
+                    chatRoute = ChatRoute(conversationId = groupId, peerName = group?.title ?: "Group", peerUserId = null)
+                    overlay = ConsumerOverlay.Chat
+                    return@LaunchedEffect
+                }
                 val peer = target.peerUserId ?: return@LaunchedEffect
                 val contact = runCatching { session.contactsRepository.findByUserId(peer) }.getOrNull()
                 chatRoute = ChatRoute(

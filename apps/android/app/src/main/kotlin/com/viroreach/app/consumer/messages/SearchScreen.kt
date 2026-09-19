@@ -49,7 +49,7 @@ fun SearchScreen(session: SessionManager, onBack: () -> Unit, onOpen: (ChatRoute
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     LaunchedEffect(conversations) {
         names = conversations.associate { c ->
-            c.id to (if (c.isGroup) c.title ?: "Group" else c.peerUserId?.let { session.contactsRepository.displayNameForUserId(it) } ?: "Viro user")
+            c.id to (if (c.isGroup) c.title ?: "Group" else c.peerUserId?.let { session.contactsRepository.nameForUserId(it) } ?: "Viro user")
         }
     }
     LaunchedEffect(q) {

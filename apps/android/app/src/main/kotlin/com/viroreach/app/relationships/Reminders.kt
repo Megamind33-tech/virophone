@@ -216,11 +216,12 @@ internal object ReminderNotifications {
         Build.VERSION.SDK_INT < 33 ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
-    fun openIntent(context: Context, target: String, subjectUserId: String? = null, requestCode: Int): PendingIntent {
+    fun openIntent(context: Context, target: String, subjectUserId: String? = null, requestCode: Int, conversationId: String? = null): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(MainActivity.EXTRA_OPEN, target)
             subjectUserId?.let { putExtra(MainActivity.EXTRA_PEER_USER_ID, it) }
+            conversationId?.let { putExtra(MainActivity.EXTRA_CONVERSATION_ID, it) }
         }
         return PendingIntent.getActivity(
             context,

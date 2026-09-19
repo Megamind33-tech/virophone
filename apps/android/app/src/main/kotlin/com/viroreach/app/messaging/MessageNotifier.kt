@@ -51,9 +51,11 @@ class MessageNotifier(private val context: Context) {
         val intent = ReminderNotifications.openIntent(
             context,
             MainActivity.OPEN_CHAT,
-            conversation?.peerUserId ?: message.senderUserId,
+            // A group has no single peer: open the group itself, not a DM with the sender.
+            if (conversation?.kind == "GROUP") null else conversation?.peerUserId ?: message.senderUserId,
             key.hashCode(),
-        ).also { }
+            conversationId = if (conversation?.kind == "GROUP") conversation.id else null,
+        )
         val n = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_viro)
             .setContentTitle(if (conversation?.locked == true) "Viro" else senderName)

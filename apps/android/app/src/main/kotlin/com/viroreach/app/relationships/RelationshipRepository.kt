@@ -46,7 +46,11 @@ class RelationshipRepository(context: Context, private val api: ViroMessagingApi
             .onSuccess {
                 _overview.value = it
                 lastRefresh = System.currentTimeMillis()
-                ReminderScheduler.scheduleCommitments(appContext, it.relationships.orEmpty().flatMap { r -> r.openCommitments.orEmpty() })
+                // Runs from the Messages tab's LaunchedEffect — a throw here
+                // would take the whole app down, so reminders never get to.
+                runCatching {
+                    ReminderScheduler.scheduleCommitments(appContext, it.relationships.orEmpty().flatMap { r -> r.openCommitments.orEmpty() })
+                }
             }
         _overview.value
     }

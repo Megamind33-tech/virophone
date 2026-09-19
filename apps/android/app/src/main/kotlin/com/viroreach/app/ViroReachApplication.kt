@@ -11,6 +11,7 @@ import com.viroreach.app.session.SessionManager
 class ViroReachApplication : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
+        com.viroreach.app.diagnostics.CrashReporter.install(this)
         SessionManager.get(this)
     }
 
