@@ -63,6 +63,12 @@ class SessionManager private constructor(context: Context) {
         callManager,
     )
     val relationships: RelationshipRepository = RelationshipRepository(appContext, messagingApi)
+    /** What downloads by itself, and what Viro is keeping on this phone. */
+    val mediaSettings: com.viroreach.app.messaging.MediaSettings = com.viroreach.app.messaging.MediaSettings(appContext)
+    val mediaStorage: com.viroreach.app.messaging.MediaStorage by lazy {
+        com.viroreach.app.messaging.MediaStorage(appContext, messaging.media)
+    }
+
     /** My profile + reaching people without a phone number (Viro ID / email, connections). */
     val people: com.viroreach.app.people.PeopleRepository = com.viroreach.app.people.PeopleRepository(appContext) { api }
     val messageNotifier: MessageNotifier = MessageNotifier(appContext)

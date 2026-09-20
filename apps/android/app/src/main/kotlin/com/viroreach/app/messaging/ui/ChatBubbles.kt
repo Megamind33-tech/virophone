@@ -23,6 +23,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
@@ -355,6 +356,31 @@ private fun rememberMediaFile(msg: ChatMessage, media: MediaFiles): File? {
     return state.value
 }
 
+/**
+ * A photo, held back when the data rule says so. Already downloaded or already
+ * on this phone, it shows regardless; otherwise it waits to be tapped.
+ */
+@Composable
+private fun rememberPhoto(msg: ChatMessage, media: MediaFiles): Pair<File?, (() -> Unit)?> {
+    val context = LocalContext.current
+    val settings = remember(context) { com.viroreach.app.messaging.MediaSettings(context) }
+    val prefs by settings.preferences.collectAsState(initial = com.viroreach.app.messaging.MediaPreferences())
+    var wanted by remember(msg.id, msg.media?.id) { mutableStateOf(false) }
+    val local = msg.localMediaPath?.let { File(it) }?.takeIf { it.exists() }
+    val cached = remember(msg.media?.id, local) { local ?: msg.media?.let { media.cachedFile(it) } }
+    val allowed = remember(prefs, msg.id) {
+        com.viroreach.app.messaging.shouldAutoDownload(
+            com.viroreach.app.messaging.AutoKind.PHOTO,
+            settings.onMeteredConnection(),
+            prefs,
+        )
+    }
+    val state = produceState(initialValue = cached, msg.id, msg.media?.id, allowed, wanted) {
+        if (value == null && (allowed || wanted)) msg.media?.let { value = media.fetch(it) }
+    }
+    return state.value to if (state.value == null && !allowed) ({ wanted = true }) else null
+}
+
 @Composable
 private fun VoiceContent(
     msg: ChatMessage,
@@ -429,7 +455,7 @@ fun formatDuration(ms: Long): String {
 
 @Composable
 private fun ImageContent(msg: ChatMessage, media: MediaFiles, onOpen: (ChatMessage, File) -> Unit) {
-    val file = rememberMediaFile(msg, media)
+    val (file, download) = rememberPhoto(msg, media)
     val ratio = msg.media?.let { m ->
         if ((m.width ?: 0) > 0 && (m.height ?: 0) > 0) m.width!!.toFloat() / m.height!! else null
     } ?: 1f
@@ -440,13 +466,21 @@ private fun ImageContent(msg: ChatMessage, media: MediaFiles, onOpen: (ChatMessa
                 .aspectRatio(ratio.coerceIn(0.6f, 1.8f))
                 .clip(RoundedCornerShape(10.dp))
                 .background(Color.Black.copy(alpha = 0.25f))
-                .clickable(enabled = file != null) { file?.let { onOpen(msg, it) } },
+                .clickable(enabled = file != null || download != null) {
+                    if (file != null) onOpen(msg, file) else download?.invoke()
+                },
             contentAlignment = Alignment.Center,
         ) {
-            if (file != null) {
-                AsyncImage(model = file, contentDescription = "Photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            } else {
-                CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
+            when {
+                file != null -> AsyncImage(model = file, contentDescription = "Photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                download != null -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.Download, null, tint = Color.White)
+                    Text("Tap to download", color = Color.White, fontSize = 13.sp)
+                    msg.media?.sizeBytes?.let {
+                        Text(formatFileSize(it), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                    }
+                }
+                else -> CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
             }
         }
         msg.body?.takeIf { it.isNotBlank() }?.let {

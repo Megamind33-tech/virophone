@@ -123,6 +123,8 @@ enum class ConsumerOverlay {
 
     JoinGroup,
 
+    MediaStorage,
+
     NewGroup,
 
     GroupInfo,
@@ -821,6 +823,14 @@ fun ConsumerNav(
 
         }
 
+        ConsumerOverlay.MediaStorage -> {
+
+            MediaStorageScreen(session = session, onBack = { overlay = ConsumerOverlay.None })
+
+            return
+
+        }
+
         ConsumerOverlay.JoinGroup -> {
 
             com.viroreach.app.consumer.messages.JoinGroupScreen(
@@ -1341,6 +1351,8 @@ fun ConsumerNav(
                     onAddPeople = { findPeopleQuery = ""; overlay = ConsumerOverlay.FindPeople },
 
                     onDevices = { overlay = ConsumerOverlay.Devices },
+
+                    onMediaStorage = { overlay = ConsumerOverlay.MediaStorage },
 
                     onSubscription = { overlay = ConsumerOverlay.Subscription },
 

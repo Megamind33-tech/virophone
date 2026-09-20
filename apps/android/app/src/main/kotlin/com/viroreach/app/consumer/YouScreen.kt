@@ -37,6 +37,7 @@ fun YouScreen(
     onConnections: () -> Unit,
     onAddPeople: () -> Unit,
     onDevices: () -> Unit,
+    onMediaStorage: () -> Unit,
     onSubscription: () -> Unit,
     onHelp: () -> Unit,
     onLogout: () -> Unit,
@@ -185,6 +186,7 @@ fun YouScreen(
                 }
                 SettingsSection(title = "Preferences") {
                     SettingsNavRow("Appearance", onAppearance)
+                    SettingsNavRow("Media and storage", onMediaStorage)
                     SettingsNavRow("Calling privacy") { callingPrivacyExpanded = true }
                     SettingsRow(label = "Calling", value = callingLabel)
                     SettingsRow(label = "Notifications", value = "Coming soon")

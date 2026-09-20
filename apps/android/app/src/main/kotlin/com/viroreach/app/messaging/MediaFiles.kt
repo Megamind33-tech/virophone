@@ -94,6 +94,18 @@ class MediaFiles(
         }.getOrNull()
     }
 
+    /** Everything downloaded so far (not the parts still arriving). */
+    fun cachedFiles(): List<File> =
+        dir.listFiles()?.filter { it.isFile && !it.name.endsWith(".part") }.orEmpty()
+
+    /** Files still waiting to be sent. */
+    fun outgoingFiles(): List<File> = outgoing.listFiles()?.filter { it.isFile }.orEmpty()
+
+    /** Drops downloads only; anything queued to send is left where it is. */
+    fun clearCache() {
+        dir.listFiles()?.forEach { it.delete() }
+    }
+
     fun wipe() {
         dir.listFiles()?.forEach { it.delete() }
         outgoing.listFiles()?.forEach { it.delete() }

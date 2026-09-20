@@ -172,6 +172,10 @@ interface MessagingDao {
     @Query("UPDATE conversations SET peerLastDeliveredAt = MAX(COALESCE(peerLastDeliveredAt, 0), :at) WHERE id = :id")
     suspend fun bumpPeerDelivered(id: String, at: Long)
 
+    /** Every message holding a file, for working out what storage is used by what. */
+    @Query("SELECT * FROM messages WHERE mediaJson IS NOT NULL")
+    suspend fun mediaMessages(): List<MessageEntity>
+
     /** Recent locations, for keeping my own live shares moving. */
     @Query("SELECT * FROM messages WHERE type = 'LOCATION' AND deletedAt IS NULL ORDER BY createdAt DESC LIMIT 50")
     suspend fun liveLocations(): List<MessageEntity>
