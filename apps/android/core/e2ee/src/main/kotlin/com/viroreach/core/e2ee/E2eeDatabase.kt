@@ -100,8 +100,33 @@ data class RemoteIdentityEntity(
     override fun hashCode(): Int = address.hashCode()
 }
 
+/**
+ * A sender key: how a group message is encrypted once rather than once per
+ * member. Nothing writes these until groups are encrypted, but the protocol
+ * store must be able to hold them.
+ */
+@Entity(tableName = "sender_keys", primaryKeys = ["address", "distributionId"])
+data class SenderKeyEntity(
+    val address: String,
+    val distributionId: String,
+    val record: ByteArray,
+) {
+    override fun equals(other: Any?): Boolean =
+        other is SenderKeyEntity && other.address == address && other.distributionId == distributionId
+    override fun hashCode(): Int = 31 * address.hashCode() + distributionId.hashCode()
+}
+
 @Dao
 interface E2eeDao {
+    @Query("SELECT * FROM sender_keys WHERE address = :address AND distributionId = :distributionId")
+    fun senderKey(address: String, distributionId: String): SenderKeyEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun saveSenderKey(row: SenderKeyEntity)
+
+    @Query("DELETE FROM sender_keys")
+    fun wipeSenderKeys()
+
     @Query("SELECT * FROM own_identity WHERE id = 1")
     fun ownIdentity(): OwnIdentityEntity?
 
@@ -192,6 +217,7 @@ interface E2eeDao {
         SignedPreKeyEntity::class,
         KyberPreKeyEntity::class,
         RemoteIdentityEntity::class,
+        SenderKeyEntity::class,
     ],
     version = 1,
     exportSchema = false,

@@ -199,6 +199,7 @@ class E2eeEngine(
         dao.wipeSignedPreKeys()
         dao.wipeKyberPreKeys()
         dao.wipeRemoteIdentities()
+        dao.wipeSenderKeys()
         dao.wipeIdentity()
     }
 

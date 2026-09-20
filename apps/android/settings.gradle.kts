@@ -9,6 +9,12 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
+        // Checked first, and normally empty. libsignal's native library is
+        // 114 MB, and on a connection that stalls part-way Gradle gives up
+        // where curl can resume; installing it here once lets the build
+        // proceed. On any machine without it, resolution falls straight
+        // through to mavenCentral below.
+        mavenLocal()
         google()
         mavenCentral()
         // LiveKit Android SDK pulls its bundled audioswitch fork from JitPack.

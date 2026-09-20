@@ -4,12 +4,14 @@ import org.signal.libsignal.protocol.IdentityKey
 import org.signal.libsignal.protocol.IdentityKeyPair
 import org.signal.libsignal.protocol.InvalidKeyIdException
 import org.signal.libsignal.protocol.SignalProtocolAddress
+import org.signal.libsignal.protocol.groups.state.SenderKeyRecord
 import org.signal.libsignal.protocol.state.IdentityKeyStore
 import org.signal.libsignal.protocol.state.KyberPreKeyRecord
 import org.signal.libsignal.protocol.state.PreKeyRecord
 import org.signal.libsignal.protocol.state.SessionRecord
 import org.signal.libsignal.protocol.state.SignalProtocolStore
 import org.signal.libsignal.protocol.state.SignedPreKeyRecord
+import java.util.UUID
 
 /**
  * The bridge between libsignal and this phone's storage.
@@ -146,6 +148,19 @@ internal class ViroSignalStore(
     }
 
     override fun containsKyberPreKey(kyberPreKeyId: Int): Boolean = dao.kyberPreKey(kyberPreKeyId) != null
+
+    // ----------------------------------------------------------- sender keys
+
+    // Group messages are encrypted once with a sender key rather than once per
+    // member. Nothing creates them until groups are encrypted, but the store
+    // has to be able to hold them.
+
+    override fun storeSenderKey(sender: SignalProtocolAddress, distributionId: UUID, record: SenderKeyRecord) {
+        dao.saveSenderKey(SenderKeyEntity(sender.name, distributionId.toString(), record.serialize()))
+    }
+
+    override fun loadSenderKey(sender: SignalProtocolAddress, distributionId: UUID): SenderKeyRecord? =
+        dao.senderKey(sender.name, distributionId.toString())?.let { SenderKeyRecord(it.record) }
 
     override fun markKyberPreKeyUsed(kyberPreKeyId: Int) {
         // The published Kyber prekey is the last-resort one, which is reused
