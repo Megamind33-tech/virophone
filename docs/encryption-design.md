@@ -225,3 +225,46 @@ reports `e2ee: false` until `E2EE_ENABLED=true` is set. Phones only start
 encrypting new chats when that flag says so, and a chat that is already
 encrypted keeps working either way. Stage 2 — sealed media and the remaining
 message types, then groups — is what makes the flag safe to turn on.
+
+## 9. Stage 2: everything else a message can be
+
+Stage 1 could only seal text, and an encrypted chat refuses anything the
+server would have to store in the clear — so photos and voice notes would have
+stopped working in exactly the chats that were meant to be safest. Stage 2 is
+the rest of it.
+
+**A message carries its own shape.** What used to be plain text inside the
+ciphertext is now a small record: the type, the body, the metadata (a poll's
+question, a shared contact, a place, a GIF), and, when there is a file, the key
+that opens it. The server keeps type `ENCRYPTED` for all of them, so it cannot
+even tell a photo from a place — only that a message exists and that there are
+bytes behind it.
+
+**Files get their own key.** Each one is encrypted with AES-256-GCM under a key
+used once, uploaded as bytes, and the key travels inside the message. The
+server stores nothing describing it: no mime type, no name, no duration,
+waveform or dimensions — all of that is content and goes inside. Decryption is
+streamed on the phone, because a document can be 25 MB.
+
+**Polls are counted without being read.** Votes stay server-side as option
+*numbers*; the question and the options come out of the sealed message, and the
+phone puts the two together. The server learns that someone chose option 2, and
+nothing about what option 2 says.
+
+**A live location is swapped, not tracked.** Each new position is sealed again
+for every device and replaces what each is holding. The one thing the server
+knows is when the share ends, because the server is what stops carrying it.
+
+### What is still not encrypted, and is said so in the app
+
+- **Loop answers.** The reciprocal reveal — neither of you sees the other's
+  answer until you have both answered — is enforced by the server, which means
+  the server holds the answers. Moving that onto the phones is its own piece of
+  work. Until then the Loop dialog says plainly that Loop answers are not
+  end-to-end encrypted, rather than letting the lock on the chat speak for them.
+- **Reactions.** An emoji on a message is still stored as itself.
+- **Link previews are switched off in encrypted chats**, because asking the
+  server what a link looks like tells it which link is about to be sent. The
+  link still goes, as text.
+- **Groups.** Sender keys are the next piece of work; group chats are not
+  encrypted yet, and nothing claims they are.

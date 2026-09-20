@@ -208,7 +208,9 @@ fun MessageRow(
                     msg.viewOnce -> ViewOnceContent(msg, onOpen = { callbacks.onOpenViewOnce(msg) })
                     msg.type == "VOICE" -> {
                         VoiceContent(msg, media, player, vibe, callbacks.onToggleVoice)
-                        TranscriptLine(msg, transcriptsEnabled, callbacks.onTranscribe)
+                        // An encrypted voice note is noise to the server, so
+                        // there is nothing to offer: no transcript line.
+                        TranscriptLine(msg, transcriptsEnabled && msg.media?.sealedKey == null, callbacks.onTranscribe)
                     }
                     msg.type == "IMAGE" -> ImageContent(msg, media, callbacks.onOpenImage)
                     msg.type == "POLL" -> PollContent(msg, vibe, senderLabel, callbacks.onVote)

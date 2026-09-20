@@ -312,10 +312,12 @@ fun ChatScreen(
         }
     }
 
-    // A link in the draft gets a preview card before it is sent.
-    LaunchedEffect(draftUrl) {
+    // A link in the draft gets a preview card before it is sent — except in an
+    // encrypted chat, where asking the server what a link looks like would
+    // tell it which link is about to be sent. The link still goes, as text.
+    LaunchedEffect(draftUrl, conversation?.encrypted) {
         val url = draftUrl
-        if (url == null || url == dismissedPreviewUrl) {
+        if (url == null || url == dismissedPreviewUrl || conversation?.encrypted == true) {
             draftPreview = null
             return@LaunchedEffect
         }
@@ -1006,6 +1008,7 @@ fun ChatScreen(
                 Vibe.WORK -> "Work"
                 else -> "Friends"
             },
+            encryptedChat = conversation?.encrypted == true,
             onDismiss = { dialog = null },
         ) { body ->
             dialog = null

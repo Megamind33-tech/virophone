@@ -56,7 +56,7 @@ interface ViroMessagingApi {
 
     /** Moves my live location on. */
     @PUT("api/v1/messages/{id}/location")
-    suspend fun updateLocation(@Path("id") id: String, @Body body: LocationPoint): MsgDto
+    suspend fun updateLocation(@Path("id") id: String, @Body body: LocationUpdateBody): MsgDto
 
     /** Ends my live location share. */
     @POST("api/v1/messages/{id}/location/stop")
@@ -240,6 +240,12 @@ data class SendBody(
      * empty.
      */
     val envelopes: List<EnvelopeBody>? = null,
+    /**
+     * For a sealed live location: how long the share runs. Where the person is
+     * goes inside the ciphertext — this only tells the server when to stop
+     * carrying updates.
+     */
+    val liveSeconds: Int? = null,
 )
 
 data class EnvelopeBody(val deviceId: String, val ciphertext: String, val type: Int)
@@ -254,6 +260,17 @@ data class LocationBody(
 )
 
 data class LocationPoint(val lat: Double, val lng: Double, val accuracy: Double? = null)
+
+/**
+ * A new position for a live share — either the coordinates, or, when the chat
+ * is encrypted, sealed copies of them for each device. Never both.
+ */
+data class LocationUpdateBody(
+    val lat: Double? = null,
+    val lng: Double? = null,
+    val accuracy: Double? = null,
+    val envelopes: List<EnvelopeBody>? = null,
+)
 
 data class GroupInviteDto(val code: String?, val url: String?, val createdAt: String? = null)
 data class GroupInvitePreviewDto(
@@ -327,6 +344,14 @@ data class MediaDto(
     val transcriptLang: String? = null,
     /** For documents: the name the sender gave it. */
     val originalName: String? = null,
+    /**
+     * For an end-to-end encrypted file: the key that opens it, taken from
+     * inside the message. The server never sends these and never sees them —
+     * they are written here on this phone once the message is opened, so that
+     * whatever displays the file can decrypt it.
+     */
+    val sealedKey: String? = null,
+    val sealedIv: String? = null,
 )
 
 data class ReplyDto(val id: String, val senderUserId: String?, val type: String?, val body: String?, val deleted: Boolean?)
@@ -359,7 +384,17 @@ data class MsgDto(
     val senderDeviceId: String? = null,
     /** For an encrypted message: the sealed copies addressed to my own devices. */
     val envelopes: List<EnvelopeDto>? = null,
+    /**
+     * For an encrypted poll: who chose which option number. The question and
+     * the options come out of the message itself; this is what the server
+     * counted without being able to read either.
+     */
+    val pollVotes: List<PollVoteDto>? = null,
+    /** When a live location share ends. */
+    val liveUntil: String? = null,
 )
+
+data class PollVoteDto(val userId: String, val optionIndex: Int)
 
 /** One sealed copy of a message, for one device. */
 data class EnvelopeDto(val deviceId: String, val ciphertext: String, val type: Int? = null)

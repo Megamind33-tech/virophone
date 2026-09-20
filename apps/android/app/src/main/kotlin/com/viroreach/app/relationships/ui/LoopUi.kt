@@ -67,6 +67,13 @@ private val DAY_LABELS = listOf("S", "M", "T", "W", "T", "F", "S")
 fun LoopCreateDialog(
     vibe: Vibe,
     suggestedGroup: String,
+    /**
+     * True in an end-to-end encrypted chat. Loop answers are held by the
+     * server, which is what enforces the reciprocal reveal — so they are not
+     * encrypted the way the rest of the chat is, and the dialog says so
+     * rather than letting the lock upstairs speak for them.
+     */
+    encryptedChat: Boolean = false,
     onDismiss: () -> Unit,
     onCreate: (LoopBody) -> Unit,
 ) {
@@ -98,6 +105,15 @@ fun LoopCreateDialog(
                     "A question you both answer on a rhythm. Nobody is punished for missing a day.",
                     color = ViroColors.textSecondary, fontSize = 14.sp,
                 )
+                if (encryptedChat) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Loop answers are held by Viro so that neither of you sees the " +
+                            "other's until you have both answered. Unlike your messages in " +
+                            "this chat, they are not end-to-end encrypted.",
+                        color = ViroColors.textSecondary, fontSize = 13.sp,
+                    )
+                }
                 Spacer(Modifier.height(14.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     LOOP_TEMPLATES.keys.forEach { g ->

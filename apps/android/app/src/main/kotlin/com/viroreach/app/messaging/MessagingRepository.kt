@@ -3,6 +3,7 @@ package com.viroreach.app.messaging
 import android.content.Context
 import android.util.Log
 import com.viroreach.core.e2ee.E2eeEngine
+import com.viroreach.core.e2ee.MediaCrypto
 import com.viroreach.core.database.ConversationEntity
 import com.viroreach.core.database.KvEntity
 import com.viroreach.core.database.MessageEntity
@@ -15,7 +16,7 @@ import com.viroreach.core.network.ContactCardBody
 import com.viroreach.core.network.GroupInviteDto
 import com.viroreach.core.network.GroupInvitePreviewDto
 import com.viroreach.core.network.LocationBody
-import com.viroreach.core.network.LocationPoint
+import com.viroreach.core.network.LocationUpdateBody
 import com.viroreach.core.network.ConvSettingsBody
 import com.viroreach.core.network.EditBody
 import com.viroreach.core.network.MediaDto
@@ -325,15 +326,63 @@ class MessagingRepository(
      */
     private suspend fun opened(dto: MsgDto, existing: MessageEntity?): MsgDto {
         if (dto.type != TYPE_ENCRYPTED) return dto
-        if (existing != null && existing.type != TYPE_ENCRYPTED && existing.body != null) {
-            return dto.copy(type = existing.type, body = existing.body)
-        }
+        // Already opened once. Everything but the votes is kept as it was;
+        // those keep arriving, because the server counts them without being
+        // able to read the poll.
+        if (existing != null && existing.type != TYPE_ENCRYPTED) return asOpenedBefore(dto, existing)
+
         val myDeviceId = e2ee.myDeviceId() ?: return dto
         val envelope = dto.envelopes?.firstOrNull { it.deviceId == myDeviceId } ?: return dto
         val senderDeviceId = dto.senderDeviceId ?: return dto
-        val text = e2ee.open(dto.senderUserId, senderDeviceId, envelope.ciphertext, envelope.type ?: 1)
+        val plain = e2ee.open(dto.senderUserId, senderDeviceId, envelope.ciphertext, envelope.type ?: 1)
             ?: return dto
-        return dto.copy(type = "TEXT", body = text)
+        // A message sealed before messages carried their own shape was just
+        // text, and still opens as text.
+        val payload = SealedMessage.unpack(plain) ?: return dto.copy(type = "TEXT", body = plain)
+        return dto.copy(
+            type = payload.type,
+            body = payload.body,
+            metadata = payload.meta,
+            media = payload.media?.let { SealedMessage.mediaDto(it, payload.type) },
+            poll = pollFrom(payload.meta, dto),
+        )
+    }
+
+    /** The message as this phone already holds it, with the votes brought up to date. */
+    private fun asOpenedBefore(dto: MsgDto, existing: MessageEntity): MsgDto {
+        val meta = ChatJson.map(existing.metadataJson).takeIf { it.isNotEmpty() }
+        return dto.copy(
+            type = existing.type,
+            body = existing.body,
+            metadata = meta,
+            media = ChatJson.media(existing.mediaJson),
+            poll = pollFrom(meta, dto)
+                ?: existing.pollJson?.let { runCatching { ChatJson.gson.fromJson(it, PollDto::class.java) }.getOrNull() },
+        )
+    }
+
+    /**
+     * A poll, put back together: the question and its options come out of the
+     * sealed message, the counts out of what the server tallied. The server
+     * holds option numbers and never learns what they stand for.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun pollFrom(meta: Map<String, Any?>?, dto: MsgDto): PollDto? {
+        val poll = meta?.get("poll") as? Map<String, Any?> ?: return null
+        val question = poll["question"] as? String ?: return null
+        val options = (poll["options"] as? List<Any?>)?.mapNotNull { it as? String } ?: return null
+        val votes = dto.pollVotes.orEmpty()
+        val me = myUserId()
+        return PollDto(
+            question = question,
+            multi = poll["multi"] as? Boolean ?: false,
+            options = options.mapIndexed { index, text ->
+                val chose = votes.filter { it.optionIndex == index }
+                PollOptionDto(text, chose.size, chose.map { it.userId })
+            },
+            totalVoters = votes.map { it.userId }.distinct().size,
+            myVotes = votes.filter { it.userId == me }.map { it.optionIndex }.sorted(),
+        )
     }
 
     // -------------------------------------------------------------- frames
@@ -622,6 +671,13 @@ class MessagingRepository(
     private suspend fun sendOne(row: MessageEntity) {
         val meta = ChatJson.map(row.metadataJson)
         val out = (meta["outbox"] as? Map<String, Any?>) ?: emptyMap()
+        val conversation = dao.conversation(row.conversationId)
+        val peerForSealing = conversation?.peerUserId
+            ?: row.conversationId.takeIf { it.startsWith(PLACEHOLDER) }?.removePrefix(PLACEHOLDER)
+        if (shouldSeal(row, conversation, peerForSealing)) {
+            sendSealed(row, meta, out, peerForSealing!!)
+            return
+        }
         var mediaId: String? = null
         var mediaJson = row.mediaJson
         if (row.type == "VOICE" || row.type == "IMAGE" || row.type == "FILE") {
@@ -652,14 +708,11 @@ class MessagingRepository(
         val convId = row.conversationId
         val toUserId = if (convId.startsWith(PLACEHOLDER)) convId.removePrefix(PLACEHOLDER) else null
         val deliverAt = (out["deliverAt"] as? Number)?.toLong()
-        val sealed = sealIfPossible(row, dao.conversation(convId), toUserId)
         val res = api.send(
             SendBody(
                 toUserId = toUserId,
                 conversationId = if (toUserId == null) convId else null,
-                // Sealed messages carry nothing the server could read.
-                body = if (sealed == null) row.body else null,
-                envelopes = sealed,
+                body = row.body,
                 clientMsgId = row.clientMsgId ?: row.id.removePrefix(LOCAL),
                 type = row.type,
                 replyToId = out["replyToId"] as? String,
@@ -705,12 +758,7 @@ class MessagingRepository(
             ),
         )
         dao.deleteMessages(listOf(row.id))
-        // The server's copy of a sealed message has no body — this phone keeps
-        // the text it just sent, because nothing can give it back later.
-        val stored = res.message.toEntity(row)
-        dao.upsertMessages(
-            listOf(if (sealed == null) stored else stored.copy(type = "TEXT", body = row.body)),
-        )
+        dao.upsertMessages(listOf(res.message.toEntity(row)))
         if (toUserId != null) {
             // The server made the conversation; fetch it and move anything else queued.
             syncNow()
@@ -720,46 +768,180 @@ class MessagingRepository(
     }
 
     /**
-     * Seals a message when it can be, or returns null to send it the ordinary
-     * way.
+     * Whether this message goes out sealed.
      *
-     * Stage 1 covers one-to-one text. Groups need sender keys, and files,
-     * polls and places need their own encryption — until those exist, sending
-     * them sealed would mean claiming more than is true.
-     *
-     * A chat becomes encrypted the first time both sides can manage it, and
-     * stays that way. If the other side then has no keys at all — a reinstall
-     * that has not finished setting up — the send waits in the outbox rather
-     * than going out in the clear.
+     * One-to-one chats only: a group needs sender keys, which is the next
+     * piece of work. A chat becomes encrypted the first time both sides can
+     * manage it and stays that way, so once it has, everything in it is
+     * sealed — which is what makes the promise true rather than mostly true.
      */
-    private suspend fun sealIfPossible(
+    private suspend fun shouldSeal(
         row: MessageEntity,
         conv: ConversationEntity?,
-        toUserId: String?,
-    ): List<EnvelopeBody>? {
-        if (row.type != "TEXT") return null
-        val text = row.body?.takeIf { it.isNotBlank() } ?: return null
-        if (conv != null && conv.kind != "DM") return null
-        // A chat that has gone encrypted refuses anything the server would have
-        // to store in the clear — photos, voice notes, polls. Until those are
-        // sealed too, this deployment decides when chats start encrypting;
-        // a chat that already is stays that way regardless.
-        if (conv?.encrypted != true && _features.value.e2ee != true) return null
-        val peer = conv?.peerUserId ?: toUserId ?: return null
-        val me = myUserId() ?: return null
-        if (!e2ee.isRegistered()) return null
-        val alreadyEncrypted = conv?.encrypted == true
-        if (!alreadyEncrypted && !e2ee.everyoneCanReceive(listOf(peer))) return null
-        val envelopes = e2ee.seal(me, listOf(peer), text)
-        if (envelopes.isEmpty()) {
-            if (alreadyEncrypted) {
-                // The server would refuse this anyway; say something the
-                // person can act on instead of failing silently.
-                throw IllegalStateException("This chat is encrypted — waiting for their phone")
+        peer: String?,
+    ): Boolean {
+        if (peer == null || row.type == "SYSTEM" || row.type == "LOOP") return false
+        if (conv != null && conv.kind != "DM") return false
+        if (conv?.encrypted == true) return true
+        // Otherwise this deployment decides when chats start encrypting.
+        if (_features.value.e2ee != true) return false
+        if (!e2ee.isRegistered()) return false
+        return e2ee.everyoneCanReceive(listOf(peer))
+    }
+
+    /**
+     * Sends a message with everything it is inside the ciphertext.
+     *
+     * A file is encrypted with its own key before it goes anywhere, and that
+     * key travels inside the message — so the server holds bytes it cannot
+     * read and a message it cannot open. What is left outside is the shape of
+     * the thing: who it is for, that there is a file, when a live share ends.
+     */
+    private suspend fun sendSealed(
+        row: MessageEntity,
+        meta: Map<String, Any?>,
+        out: Map<String, Any?>,
+        peer: String,
+    ) {
+        val me = myUserId() ?: throw IllegalStateException("Not signed in")
+        var mediaId: String? = null
+        var mediaRef: SealedMediaRef? = null
+
+        if (row.type == "VOICE" || row.type == "IMAGE" || row.type == "FILE") {
+            val existing = ChatJson.media(row.mediaJson)
+            if (!existing?.id.isNullOrBlank() && existing?.sealedKey != null && existing.sealedIv != null) {
+                // A previous attempt already uploaded it; uploading again would
+                // cost the person their data twice.
+                mediaId = existing.id
+                mediaRef = existing.toSealedRef()
+            } else {
+                val file = row.localMediaPath?.let { File(it) }?.takeIf { it.exists() }
+                    ?: throw IllegalStateException(
+                        if (row.type == "FILE") "That file is no longer on this phone"
+                        else "The recording is no longer on this phone",
+                    )
+                val mime = (out["mime"] as? String) ?: existing?.mime ?: "application/octet-stream"
+                val sealedFile = media.newOutgoingFile("sealed")
+                val key = try {
+                    MediaCrypto.seal(file, sealedFile)
+                } catch (e: Exception) {
+                    sealedFile.delete()
+                    throw e
+                }
+                val uploaded = try {
+                    media.upload(
+                        file = sealedFile,
+                        mime = mime,
+                        kind = when (row.type) {
+                            "FILE" -> "FILE"
+                            "VOICE" -> "VOICE"
+                            else -> "IMAGE"
+                        },
+                        sealed = true,
+                    )
+                } finally {
+                    sealedFile.delete()
+                }
+                mediaId = uploaded.id
+                mediaRef = SealedMediaRef(
+                    id = uploaded.id,
+                    key = key.key,
+                    iv = key.iv,
+                    mime = mime,
+                    name = (out["fileName"] as? String) ?: existing?.originalName,
+                    durationMs = existing?.durationMs,
+                    waveform = existing?.waveform,
+                    width = existing?.width,
+                    height = existing?.height,
+                    sizeBytes = file.length(),
+                )
+                // Held on the row so a retry reuses the upload.
+                dao.upsertMessages(
+                    listOf(row.copy(mediaJson = ChatJson.toJson(SealedMessage.mediaDto(mediaRef, row.type)))),
+                )
             }
-            return null
         }
-        return envelopes.map { EnvelopeBody(it.deviceId, it.ciphertext, it.type) }
+
+        val poll = row.pollJson?.let { runCatching { ChatJson.gson.fromJson(it, PollDto::class.java) }.getOrNull() }
+        val payloadMeta = meta.filterKeys { it != "outbox" && it != "mentions" }.toMutableMap()
+        poll?.let {
+            payloadMeta["poll"] = mapOf(
+                "question" to it.question,
+                "options" to it.options.orEmpty().map { option -> option.text },
+                "multi" to (it.multi == true),
+            )
+        }
+        val envelopes = e2ee.seal(
+            me,
+            listOf(peer),
+            SealedMessage.pack(
+                SealedPayload(
+                    type = row.type,
+                    body = row.body,
+                    meta = payloadMeta.takeIf { it.isNotEmpty() },
+                    media = mediaRef,
+                ),
+            ),
+        )
+        if (envelopes.isEmpty()) {
+            // The server would refuse this anyway; say something the person can
+            // act on rather than failing silently.
+            throw IllegalStateException("This chat is encrypted — waiting for their phone")
+        }
+
+        val convId = row.conversationId
+        val toUserId = if (convId.startsWith(PLACEHOLDER)) convId.removePrefix(PLACEHOLDER) else null
+        val deliverAt = (out["deliverAt"] as? Number)?.toLong()
+        val res = api.send(
+            SendBody(
+                toUserId = toUserId,
+                conversationId = if (toUserId == null) convId else null,
+                // Nothing the server could read: the body and everything that
+                // describes the message are inside the envelopes.
+                body = null,
+                envelopes = envelopes.map { EnvelopeBody(it.deviceId, it.ciphertext, it.type) },
+                clientMsgId = row.clientMsgId ?: row.id.removePrefix(LOCAL),
+                type = row.type,
+                replyToId = out["replyToId"] as? String,
+                mediaId = mediaId,
+                viewOnce = (out["viewOnce"] as? Boolean)?.takeIf { it },
+                forwarded = (out["forwarded"] as? Boolean)?.takeIf { it },
+                deliverAt = deliverAt?.let { Instant.ofEpochMilli(it).toString() },
+                mentions = (meta["mentions"] as? List<Any?>)?.mapNotNull { it as? String }?.takeIf { it.isNotEmpty() },
+                liveSeconds = liveSecondsOf(meta),
+            ),
+        )
+
+        // The server's copy has no body; this phone keeps what it just sent,
+        // because nothing can give it back later.
+        dao.deleteMessages(listOf(row.id))
+        dao.upsertMessages(
+            listOf(
+                res.message.toEntity(row).copy(
+                    type = row.type,
+                    body = row.body,
+                    metadataJson = row.metadataJson,
+                    mediaJson = mediaRef?.let { ChatJson.toJson(SealedMessage.mediaDto(it, row.type)) },
+                    pollJson = row.pollJson,
+                    localMediaPath = row.localMediaPath,
+                ),
+            ),
+        )
+        if (toUserId != null) {
+            syncNow()
+            dao.moveMessages(convId, res.conversationId)
+            _conversationMoved.tryEmit(convId to res.conversationId)
+        }
+    }
+
+    /** How long a live share runs, as the person chose it. */
+    @Suppress("UNCHECKED_CAST")
+    private fun liveSecondsOf(meta: Map<String, Any?>): Int? {
+        val location = meta["location"] as? Map<String, Any?> ?: return null
+        val until = parseIso(location["liveUntil"] as? String) ?: return null
+        val seconds = ((until - System.currentTimeMillis()) / 1000).toInt()
+        // Back to the choice the sender made, even if it waited in the outbox.
+        return listOf(900, 3600, 28800).minByOrNull { kotlin.math.abs(it - seconds) }
     }
 
     /** Marks a security-code change as seen, once the person has been shown it. */
@@ -869,10 +1051,51 @@ class MessagingRepository(
 
     /** Moves my live location on. Quiet on failure: the next tick tries again. */
     suspend fun updateLiveLocation(messageId: String, lat: Double, lng: Double, accuracy: Double?): Boolean =
-        runCatching { api.updateLocation(messageId, LocationPoint(lat, lng, accuracy)) }
+        runCatching {
+            val row = dao.message(messageId)
+            val conv = row?.let { dao.conversation(it.conversationId) }
+            // An encrypted share seals every new position exactly as the first
+            // one was sealed, and the server swaps one for the other without
+            // ever seeing a coordinate.
+            if (conv?.encrypted == true && row != null) {
+                val envelopes = sealedPosition(row, conv, lat, lng, accuracy)
+                    ?: throw IllegalStateException("Cannot seal this position")
+                api.updateLocation(messageId, LocationUpdateBody(envelopes = envelopes))
+            } else {
+                api.updateLocation(messageId, LocationUpdateBody(lat = lat, lng = lng, accuracy = accuracy))
+            }
+        }
             .onSuccess { upsertMessages(listOf(it)) }
             .onFailure { Log.w(TAG, "LIVE_LOCATION_UPDATE_FAILED ${it.message}") }
             .isSuccess
+
+    /** The new position, sealed for every device in the chat. */
+    @Suppress("UNCHECKED_CAST")
+    private suspend fun sealedPosition(
+        row: MessageEntity,
+        conv: ConversationEntity,
+        lat: Double,
+        lng: Double,
+        accuracy: Double?,
+    ): List<EnvelopeBody>? {
+        val me = myUserId() ?: return null
+        val peer = conv.peerUserId ?: return null
+        val meta = ChatJson.map(row.metadataJson).toMutableMap()
+        val was = (meta["location"] as? Map<String, Any?>).orEmpty()
+        meta["location"] = was + mapOf(
+            "lat" to lat,
+            "lng" to lng,
+            "accuracy" to accuracy,
+            "updatedAt" to Instant.now().toString(),
+        )
+        meta.remove("outbox")
+        val payload = SealedPayload(type = "LOCATION", body = row.body, meta = meta)
+        val envelopes = e2ee.seal(me, listOf(peer), SealedMessage.pack(payload))
+        if (envelopes.isEmpty()) return null
+        // Kept locally too, so the map on this phone moves with the share.
+        dao.upsertMessages(listOf(row.copy(metadataJson = ChatJson.toJson(meta), updatedAt = System.currentTimeMillis())))
+        return envelopes.map { EnvelopeBody(it.deviceId, it.ciphertext, it.type) }
+    }
 
     /** Ends my live location share. */
     suspend fun stopLiveLocation(messageId: String) = act("stop sharing") {

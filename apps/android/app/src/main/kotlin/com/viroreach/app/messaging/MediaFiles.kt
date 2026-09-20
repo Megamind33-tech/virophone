@@ -1,6 +1,8 @@
 package com.viroreach.app.messaging
 
 import android.content.Context
+import com.viroreach.core.e2ee.MediaCrypto
+import com.viroreach.core.e2ee.MediaKey
 import com.viroreach.core.network.MediaDto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -41,17 +43,33 @@ class MediaFiles(
         /** "FILE" for a document — it keeps [fileName] and allows document types. */
         kind: String? = null,
         fileName: String? = null,
+        /**
+         * End-to-end encrypted: [file] is already ciphertext. Nothing
+         * describing it is sent, because everything that describes it — its
+         * name, its type, how long it plays — is content, and goes inside the
+         * message instead.
+         */
+        sealed: Boolean = false,
     ): MediaDto = withContext(Dispatchers.IO) {
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
-            .addFormDataPart("file", file.name, file.asRequestBody(mime.toMediaTypeOrNull()))
+            .addFormDataPart(
+                "file",
+                if (sealed) "sealed.bin" else file.name,
+                file.asRequestBody((if (sealed) "application/octet-stream" else mime).toMediaTypeOrNull()),
+            )
             .apply {
-                durationMs?.let { addFormDataPart("durationMs", it.toString()) }
-                waveform?.let { addFormDataPart("waveform", it) }
-                width?.let { addFormDataPart("width", it.toString()) }
-                height?.let { addFormDataPart("height", it.toString()) }
-                kind?.let { addFormDataPart("kind", it) }
-                fileName?.let { addFormDataPart("fileName", it) }
+                if (sealed) {
+                    addFormDataPart("sealed", "1")
+                    addFormDataPart("kind", kind ?: "FILE")
+                } else {
+                    durationMs?.let { addFormDataPart("durationMs", it.toString()) }
+                    waveform?.let { addFormDataPart("waveform", it) }
+                    width?.let { addFormDataPart("width", it.toString()) }
+                    height?.let { addFormDataPart("height", it.toString()) }
+                    kind?.let { addFormDataPart("kind", it) }
+                    fileName?.let { addFormDataPart("fileName", it) }
+                }
             }
             .build()
         val request = Request.Builder().url("${baseUrl}api/v1/messages/media").post(body).build()
@@ -88,7 +106,21 @@ class MediaFiles(
                 if (!res.isSuccessful) return@use null
                 val tmp = File(dir, "${media.id}.part")
                 res.body?.byteStream()?.use { input -> tmp.outputStream().use { input.copyTo(it) } }
-                tmp.renameTo(file)
+                // What arrives for an encrypted message is ciphertext; the key
+                // came inside the message that carried it. Only the opened
+                // copy is kept, so the player and the viewer need no keys.
+                val key = media.sealedKey
+                val iv = media.sealedIv
+                if (key != null && iv != null) {
+                    val opened = MediaCrypto.open(tmp, file, MediaKey(key, iv))
+                    tmp.delete()
+                    if (!opened) {
+                        file.delete()
+                        return@use null
+                    }
+                } else {
+                    tmp.renameTo(file)
+                }
                 file
             }
         }.getOrNull()
