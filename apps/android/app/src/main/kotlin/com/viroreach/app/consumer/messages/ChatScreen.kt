@@ -510,6 +510,17 @@ fun ChatScreen(
                 ContextStrip(flag.text, vibe) { onOpenRelationship(peerUserId, phone, peerName) }
             }
             if (conversation?.encrypted == true) {
+                // Their keys changed since this phone first saw them. It is
+                // usually a reinstall — and it is the one thing worth
+                // interrupting for, because it is also what being listened to
+                // would look like.
+                var codeChanged by remember(peerUserId) { mutableStateOf(false) }
+                LaunchedEffect(peerUserId, conversation?.encrypted) {
+                    codeChanged = peerUserId?.let { repo.e2ee.identityChanged(it) } == true
+                }
+                if (codeChanged) {
+                    ContextStrip("$peerName's security code changed — tap to check", vibe) { dialog = "encryption" }
+                }
                 // Said once, quietly, where WhatsApp says it: this is a claim
                 // the person can check against the safety number in Details.
                 Text(

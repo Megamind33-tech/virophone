@@ -48,6 +48,11 @@ android {
         buildConfigField("String", "WSS_URL", "\"wss://reach.viro3.online/api/v1/signaling/ws\"")
         buildConfigField("boolean", "FORCE_TURN_RELAY", "false")
         buildConfigField("String", "GIT_COMMIT", "\"$gitCommitAbbrev\"")
+
+        // Encryption and calling both ship native code, and each architecture
+        // costs tens of megabytes on a download people here pay for by the
+        // megabyte. Real phones are ARM; the x86 builds exist for emulators.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     buildTypes {
@@ -57,11 +62,6 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Encryption and calling both ship native code, and each extra
-            // architecture is tens of megabytes on a download people pay for
-            // by the megabyte here. Real phones are ARM; the x86 builds exist
-            // for emulators, which only debug builds are used on.
-            ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
         }
         debug {
             isMinifyEnabled = false
@@ -73,6 +73,13 @@ android {
             // libsignal ships a second copy of its native library for its own
             // test suite, the same size as the real one.
             excludes += "**/libsignal_jni_testing.so"
+            // libsignal's library is published with its debug symbols — 60 MB
+            // per architecture — and this machine has no NDK, so AGP cannot
+            // strip them ("Unable to strip the following libraries"). Storing
+            // the libraries compressed cuts the download to about a fifth.
+            // Installing the NDK would be the better fix: then they are
+            // stripped and this line can go.
+            useLegacyPackaging = true
         }
         resources {
             // The libsignal jar carries its desktop builds — Linux, macOS and
@@ -90,6 +97,9 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // libsignal is built against JDK APIs that Android 8 and 9 lack; this
+        // supplies them rather than raising the minimum Android version.
+        isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures {
@@ -108,6 +118,8 @@ dependencies {
     implementation(libs.firebase.messaging)
     // Gives Task<T>.await(), so the FCM token read is a plain suspend call.
     implementation(libs.kotlinx.coroutines.play.services)
+
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     implementation(project(":core:model"))
     implementation(project(":core:network"))
