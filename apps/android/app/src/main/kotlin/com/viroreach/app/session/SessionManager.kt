@@ -61,6 +61,7 @@ class SessionManager private constructor(context: Context) {
         viroApiClient.baseUrl,
         tokenStore,
         callManager,
+        viroApiClient.keys,
     )
     val relationships: RelationshipRepository = RelationshipRepository(appContext, messagingApi)
     /** What downloads by itself, and what Viro is keeping on this phone. */

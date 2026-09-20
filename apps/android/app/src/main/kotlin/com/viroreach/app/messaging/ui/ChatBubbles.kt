@@ -223,6 +223,18 @@ fun MessageRow(
                             onStopSharing = callbacks.onStopSharingLocation,
                         )
                     } ?: Text("Location", color = Color.White, fontSize = 16.sp)
+                    // Sealed, and this phone has no way to open it: sent before
+                    // this device existed, or already opened once. Saying so is
+                    // better than an empty bubble.
+                    msg.type == "ENCRYPTED" -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Lock, null, tint = ViroColors.textSecondary, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "Waiting for this message",
+                            color = ViroColors.textSecondary,
+                            fontStyle = FontStyle.Italic,
+                        )
+                    }
                     msg.type == "CONTACT" -> msg.contactCard?.let { card ->
                         ContactContent(
                             card = card,

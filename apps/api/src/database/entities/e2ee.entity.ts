@@ -30,6 +30,19 @@ export class DeviceIdentityKey {
   @Column({ name: 'signed_prekey_signature', type: 'text' })
   signedPrekeySignature!: string;
 
+  /**
+   * The Kyber half of the handshake. A session cannot be started without it,
+   * and like the signed prekey it is signed by the identity key.
+   */
+  @Column({ name: 'kyber_prekey_id', type: 'integer', nullable: true })
+  kyberPrekeyId!: number | null;
+
+  @Column({ name: 'kyber_prekey', type: 'text', nullable: true })
+  kyberPrekey!: string | null;
+
+  @Column({ name: 'kyber_prekey_signature', type: 'text', nullable: true })
+  kyberPrekeySignature!: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

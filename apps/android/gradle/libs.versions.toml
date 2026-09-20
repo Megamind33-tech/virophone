@@ -18,11 +18,14 @@ securityCrypto = "1.1.0-alpha06"
 datastore = "1.0.0"
 libphonenumber = "8.13.31"
 coil = "2.5.0"
+libsignal = "0.72.0"
 firebaseBom = "33.7.0"
 googleServices = "4.4.2"
 
 [libraries]
 libphonenumber = { group = "com.googlecode.libphonenumber", name = "libphonenumber", version.ref = "libphonenumber" }
+# The audited Signal protocol implementation: X3DH/PQXDH and the Double Ratchet.
+libsignal-android = { group = "org.signal", name = "libsignal-android", version.ref = "libsignal" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { KeyBundleInput, KeysService, PrekeyInput } from './keys.service';
 
@@ -31,9 +31,20 @@ export class KeysController {
     return this.keys.addPrekeys(req.user.deviceId, body?.oneTimePreKeys ?? []);
   }
 
-  /** What a sender needs to start talking to every device this person uses. */
+  /** Which devices this person can be reached on — asking costs no prekey. */
+  @Get(':userId/devices')
+  async devices(@Req() req: Authed, @Param('userId') userId: string) {
+    return this.keys.devicesFor(req.user.sub, userId);
+  }
+
+  /**
+   * What a sender needs to start talking to this person's devices. Each answer
+   * spends one one-time prekey per device, so senders name the devices they
+   * actually need with ?devices=id,id rather than asking about all of them.
+   */
   @Get(':userId')
-  async bundles(@Req() req: Authed, @Param('userId') userId: string) {
-    return this.keys.bundlesFor(req.user.sub, userId);
+  async bundles(@Req() req: Authed, @Param('userId') userId: string, @Query('devices') devices?: string) {
+    const only = (devices ?? '').split(',').map((d) => d.trim()).filter(Boolean);
+    return this.keys.bundlesFor(req.user.sub, userId, only);
   }
 }

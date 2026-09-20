@@ -68,6 +68,9 @@ class ViroApiClient(
     /** Messaging v2, Loops and relationships. */
     val messaging: ViroMessagingApi = retrofit.create(ViroMessagingApi::class.java)
 
+    /** The end-to-end encryption key directory. */
+    val keys: ViroKeysApi = retrofit.create(ViroKeysApi::class.java)
+
     private fun String.ensureTrailingSlash(): String =
         if (endsWith("/")) this else "$this/"
 }

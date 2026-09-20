@@ -496,6 +496,7 @@ fun ChatScreen(
                         disappearing = conversation?.disappearingSeconds,
                         hasConversation = cid != null && !cid.startsWith(MessagingRepository.PLACEHOLDER),
                         hasPeer = peerUserId != null && !isGroup,
+                        encrypted = conversation?.encrypted == true,
                         onPick = { which ->
                             menuOpen = false
                             dialog = which
@@ -507,6 +508,16 @@ fun ChatScreen(
             // A quiet line of context: "Tomorrow is your anniversary ❤️".
             relationship?.flags?.firstOrNull { it.code in setOf("DATE_SOON", "COMMITMENT_DUE", "LOOP_WAITING", "FOLLOW_UP_DUE", "DUE_TODAY") }?.let { flag ->
                 ContextStrip(flag.text, vibe) { onOpenRelationship(peerUserId, phone, peerName) }
+            }
+            if (conversation?.encrypted == true) {
+                // Said once, quietly, where WhatsApp says it: this is a claim
+                // the person can check against the safety number in Details.
+                Text(
+                    "🔒 Messages here are end-to-end encrypted",
+                    color = ViroColors.textSecondary, fontSize = 12.sp,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
             }
             conversation?.disappearingSeconds?.let { secs ->
                 Text(
@@ -1030,6 +1041,7 @@ fun ChatScreen(
             dialog = null
             convId?.let { id -> scope.launch { repo.setMuted(id, secs?.let { System.currentTimeMillis() + it * 1000L }) } }
         }
+        "encryption" -> EncryptionDialog(repo, peerUserId, peerName) { dialog = null }
         "starred" -> StarredDialog(messages.filter { it.starred }, onDismiss = { dialog = null }) { id ->
             dialog = null
             val idx = messages.indexOfFirst { it.id == id }
@@ -1269,6 +1281,8 @@ private fun ChatMenu(
     disappearing: Int?,
     hasConversation: Boolean,
     hasPeer: Boolean,
+    /** End-to-end encrypted: there is a safety number worth showing. */
+    encrypted: Boolean,
     onPick: (String) -> Unit,
 ) {
     @Composable
@@ -1278,6 +1292,7 @@ private fun ChatMenu(
         enabled = enabled,
     )
     if (isGroup) item("Group info", "groupinfo")
+    if (encrypted) item("Encryption", "encryption")
     item("Search in chat", "search", enabled = hasConversation)
     if (hasPeer) item("Relationship & Moments", "relationship")
     if (hasPeer) item("Vibe", "vibe")
@@ -1527,6 +1542,87 @@ private fun ChoiceDialog(
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/**
+ * The safety number, and what it is for.
+ *
+ * The claim "end-to-end encrypted" is only worth anything if two people can
+ * check it, so this shows the number both phones work out independently: if it
+ * matches, no one is in the middle.
+ */
+@Composable
+private fun EncryptionDialog(
+    repo: MessagingRepository,
+    peerUserId: String?,
+    peerName: String,
+    onDismiss: () -> Unit,
+) {
+    var number by remember { mutableStateOf<String?>(null) }
+    var changed by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(true) }
+    LaunchedEffect(peerUserId) {
+        val me = repo.myUserId()
+        if (me != null && peerUserId != null) {
+            number = repo.e2ee.safetyNumber(me, peerUserId)
+            changed = repo.e2ee.identityChanged(peerUserId)
+        }
+        loading = false
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("End-to-end encrypted") },
+        text = {
+            Column {
+                Text(
+                    "Messages in this chat are locked on this phone and opened on theirs. " +
+                        "Viro's servers carry them without being able to read them.",
+                    color = ViroColors.textSecondary,
+                    fontSize = 13.sp,
+                )
+                Spacer(Modifier.height(12.dp))
+                if (changed) {
+                    Text(
+                        "$peerName's security code changed. That happens when someone " +
+                            "reinstalls Viro or changes phone — compare the number below to be sure.",
+                        color = ViroColors.consumerError,
+                        fontSize = 13.sp,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
+                when {
+                    loading -> Text("Working it out…", color = ViroColors.textSecondary, fontSize = 13.sp)
+                    number == null -> Text(
+                        "The security number appears once you have exchanged a message.",
+                        color = ViroColors.textSecondary,
+                        fontSize = 13.sp,
+                    )
+                    else -> {
+                        Text("Security number", color = ViroColors.textSecondary, fontSize = 12.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            number!!.chunked(20).joinToString("\n") { line -> line.chunked(5).joinToString("  ") },
+                            fontSize = 16.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Compare it with $peerName in person or on a call. If both " +
+                                "phones show the same number, no one else is in the middle.",
+                            color = ViroColors.textSecondary,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                peerUserId?.let { id -> repo.acknowledgeIdentityChangeLater(id) }
+                onDismiss()
+            }) { Text("Done") }
+        },
     )
 }
 

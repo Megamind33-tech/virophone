@@ -1,6 +1,7 @@
 # End-to-end encryption for Viro — design and decisions
 
-Status: Stage 0 (encryption at rest) is built and deployed. Stages 1-4 are
+Status: Stage 0 (encryption at rest) is built and deployed. Stage 1 (keys and
+one-to-one text) is being built now — the server half is in. Stages 2-4 are
 still a proposal. Written 2026-09-20, against commit `c431676`.
 
 Today Viro encrypts traffic in transit (HTTPS/WSS) and calls are peer-to-peer
@@ -109,10 +110,10 @@ Each stage ships and is testable on its own.
   converts them. Production refuses to start without the key. Mentions moved to
   their own table, because encrypted metadata cannot be searched. Not end-to-end:
   the server holds the key.
-- **Stage 1 — keys and one-to-one text** (large). Device keys, prekeys, sessions,
-  ratchet, safety numbers, key-change warnings. Behind a flag, pilot chats only.
-  Search goes local-only for encrypted chats; push falls back to "New message"
-  then decrypts on the phone.
+- **Stage 1 — keys and one-to-one text** (large, in progress). Device keys,
+  prekeys, sessions, ratchet, safety numbers, key-change warnings. Search goes
+  local-only for encrypted chats; push falls back to "New message" then
+  decrypts on the phone. See section 8 for what is built and what it costs.
 - **Stage 2 — media and groups** (large). Encrypted files, sender keys for groups.
 - **Stage 3 — history that survives a new phone** (medium). Encrypted backup with
   a recovery key the person keeps, and a clear warning that losing it loses
@@ -148,3 +149,58 @@ use daily: server-side search, transcripts, rich notifications, and history on
 a new phone. Stage 0 removes the most likely real leak in days. Stage 1 then
 earns the word "end-to-end" honestly, on one-to-one chats first, with safety
 numbers so it can be verified rather than trusted.
+
+## 8. Stage 1 as built
+
+### The shape of it
+
+- **Key directory** (`device_identity_keys`, `device_one_time_prekeys`). Each
+  device publishes an identity key, a signed prekey, a Kyber prekey and a batch
+  of one-time prekeys. The server hands each one-time prekey out **once**, in a
+  single `UPDATE … RETURNING` so two senders cannot receive the same one.
+  Asking for someone's *device list* costs no prekey; a sender fetches full
+  bundles only for devices it has no session with yet.
+- **Envelopes** (`message_envelopes`). An encrypted message is stored once per
+  recipient device: the row in `messages` has type `ENCRYPTED`, no body and no
+  metadata. Each device collects its own copy. Envelopes die with their message
+  and with the device they were addressed to.
+- **On the phone**: libsignal, with its state in `viro_e2ee.db` — a database
+  that is never destructively migrated, because nothing in it can be fetched
+  again.
+
+### Two invariants
+
+1. **A chat that has gone encrypted cannot quietly go back.** The server
+   refuses a plaintext send into an encrypted conversation, so an old build or
+   the web companion cannot drop one readable message into it.
+2. **Nobody in the chat may be left without a copy.** A send that does not
+   cover every participant is refused: a message half the room cannot open is
+   worse than no message.
+
+### What it costs, concretely
+
+- **The web companion is read-only in encrypted chats.** It holds no keys of
+  its own (that is Stage 4), so it shows "Encrypted message — open it on your
+  phone" and disables the composer there. This is a real regression for a
+  feature shipped in 0.4.71, and it is the price of the promise.
+- **Server-side search skips encrypted messages**, as decided. The phone still
+  searches what it holds.
+- **Link previews and message effects are dropped** in encrypted chats: they
+  live in metadata, which is not stored for sealed messages. The sender will
+  carry them inside the ciphertext in a later stage.
+- **History does not follow you to a new phone.** An envelope can be opened
+  once, by the device it was addressed to. Stage 3 (encrypted backup with a
+  recovery key) is what fixes this.
+- **Download size**: libsignal's native library adds roughly 14 MB per
+  architecture. Release builds are limited to `arm64-v8a` and `armeabi-v7a`,
+  and the library's desktop builds — which ride along inside its jar — are
+  excluded from packaging.
+
+### Why libsignal 0.72.0 and not the newest
+
+From 0.74.1 on, libsignal is compiled with Kotlin 2.1, whose metadata the
+Kotlin 1.9.22 compiler in this project refuses to read. 0.72.0 is the newest
+release that is still pure Java: it has PQXDH (the Kyber prekey is mandatory in
+a bundle) but not the newer post-quantum *ratchet*. Moving past it means
+moving the whole app to Kotlin 2.x — which also means replacing the Compose
+compiler setup that caused the 0.4.62 crash, so it is its own piece of work.

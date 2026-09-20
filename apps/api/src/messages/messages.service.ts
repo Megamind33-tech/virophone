@@ -147,6 +147,11 @@ export interface MessageDto {
    * device that finds none was not part of the chat when this was sent.
    */
   envelopes: { deviceId: string; ciphertext: string; type: number }[] | null;
+  /**
+   * Which device sealed it. A reader needs this to find the session the
+   * message belongs to, so it is given out for encrypted messages only.
+   */
+  senderDeviceId: string | null;
 }
 
 export interface ConversationSummaryDto {
@@ -417,6 +422,7 @@ export class MessagesService {
         starred: starred.has(m.id),
         metadata: m.metadata,
         poll: m.type === 'POLL' && !deleted ? this.pollDto(m, votes.filter((v) => v.messageId === m.id), viewerId) : null,
+        senderDeviceId: m.type === 'ENCRYPTED' ? m.senderDeviceId : null,
         envelopes:
           m.type === 'ENCRYPTED' && !deleted
             ? sealed

@@ -234,7 +234,15 @@ data class SendBody(
     val location: LocationBody? = null,
     /** User ids named with @ in a group message. */
     val mentions: List<String>? = null,
+    /**
+     * End-to-end encrypted: one sealed copy per recipient device. When these
+     * are present the server stores nothing it could read, so [body] is left
+     * empty.
+     */
+    val envelopes: List<EnvelopeBody>? = null,
 )
+
+data class EnvelopeBody(val deviceId: String, val ciphertext: String, val type: Int)
 
 /** A place, or the start of a live share (liveSeconds: 900, 3600 or 28800). */
 data class LocationBody(
@@ -341,7 +349,14 @@ data class MsgDto(
     val starred: Boolean?,
     val metadata: Map<String, Any?>?,
     val poll: PollDto? = null,
+    /** Which device sealed it — needed to find the session it belongs to. */
+    val senderDeviceId: String? = null,
+    /** For an encrypted message: the sealed copies addressed to my own devices. */
+    val envelopes: List<EnvelopeDto>? = null,
 )
+
+/** One sealed copy of a message, for one device. */
+data class EnvelopeDto(val deviceId: String, val ciphertext: String, val type: Int? = null)
 
 data class ConvDto(
     val id: String,
@@ -370,6 +385,8 @@ data class ConvDto(
     val archived: Boolean? = null,
     val pinnedAt: String? = null,
     val unreadMarked: Boolean? = null,
+    /** End-to-end encrypted: the server carries this chat without reading it. */
+    val encrypted: Boolean? = null,
 )
 
 data class SyncResult(

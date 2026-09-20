@@ -97,6 +97,11 @@ describe('End-to-end encryption (server)', () => {
           publicKey: seal(`signed-${s.deviceId}`),
           signature: seal(`sig-${s.deviceId}`),
         },
+        kyberPreKey: {
+          keyId: 9,
+          publicKey: seal(`kyber-${s.deviceId}`),
+          signature: seal(`kyber-sig-${s.deviceId}`),
+        },
         oneTimePreKeys: prekeyIds.map((keyId) => ({ keyId, publicKey: seal(`otp-${keyId}-${s.deviceId}`) })),
       });
   }
@@ -144,6 +149,10 @@ describe('End-to-end encryption (server)', () => {
     expect(one.registrationId).toBe(4242);
     expect(one.identityKey).toBeTruthy();
     expect(one.signedPreKey.signature).toBeTruthy();
+    // Without the Kyber half a current client cannot start a session at all.
+    expect(one.kyberPreKey.keyId).toBe(9);
+    expect(one.kyberPreKey.publicKey).toBeTruthy();
+    expect(one.kyberPreKey.signature).toBeTruthy();
     expect(one.preKey.keyId).toBeGreaterThan(0);
   });
 
@@ -162,6 +171,26 @@ describe('End-to-end encryption (server)', () => {
     // And the fourth ask gets no prekey at all rather than a repeat.
     const empty = await http().get(`/api/v1/keys/${bobPhone.userId}`).set(as(alicePhone)).expect(200);
     expect(empty.body.devices.find((d: any) => d.deviceId === bobPhone.deviceId).preKey).toBeNull();
+  });
+
+  it('lists someone\'s devices without spending a prekey', async () => {
+    if (skip()) return;
+    // Alice has published three one-time prekeys and none have been asked for.
+    const before = await http().get('/api/v1/keys/status').set(as(alicePhone)).expect(200);
+    const list = await http().get(`/api/v1/keys/${alicePhone.userId}/devices`).set(as(bobPhone)).expect(200);
+    expect(list.body.deviceIds).toEqual([alicePhone.deviceId]);
+    const after = await http().get('/api/v1/keys/status').set(as(alicePhone)).expect(200);
+    expect(after.body.available).toBe(before.body.available);
+  });
+
+  it('fetches a bundle only for the devices the sender names', async () => {
+    if (skip()) return;
+    const res = await http()
+      .get(`/api/v1/keys/${bobPhone.userId}`)
+      .query({ devices: bobLaptop.deviceId })
+      .set(as(alicePhone))
+      .expect(200);
+    expect(res.body.devices.map((d: any) => d.deviceId)).toEqual([bobLaptop.deviceId]);
   });
 
   it('lets a device see how many it has left, and top up', async () => {
@@ -185,6 +214,20 @@ describe('End-to-end encryption (server)', () => {
       .send({
         registrationId: 1,
         identityKey: '<script>alert(1)</script>',
+        signedPreKey: { keyId: 1, publicKey: seal('k'), signature: seal('s') },
+        kyberPreKey: { keyId: 1, publicKey: seal('k'), signature: seal('s') },
+      })
+      .expect(400);
+  });
+
+  it('refuses a bundle with no Kyber prekey, rather than half a handshake', async () => {
+    if (skip()) return;
+    await http()
+      .post('/api/v1/keys')
+      .set(as(alicePhone))
+      .send({
+        registrationId: 4242,
+        identityKey: seal('identity'),
         signedPreKey: { keyId: 1, publicKey: seal('k'), signature: seal('s') },
       })
       .expect(400);
@@ -242,6 +285,8 @@ describe('End-to-end encryption (server)', () => {
     // Bob sees his phone's and his laptop's copies; never Alice's.
     expect(devices).toEqual([bobPhone.deviceId, bobLaptop.deviceId].sort());
     expect(devices).not.toContain(alicePhone.deviceId);
+    // Bob's phone needs to know which of Alice's devices sealed it.
+    expect(msg.senderDeviceId).toBe(alicePhone.deviceId);
     const mine = msg.envelopes.find((e: any) => e.deviceId === bobPhone.deviceId);
     expect(Buffer.from(mine.ciphertext, 'base64').toString('utf-8')).toBe(SECRET);
     expect(mine.type).toBe(3);

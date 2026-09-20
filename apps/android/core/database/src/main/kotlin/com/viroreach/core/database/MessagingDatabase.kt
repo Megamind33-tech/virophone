@@ -12,6 +12,8 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -88,6 +90,11 @@ data class ConversationEntity(
     val unreadMarked: Boolean = false,
     /** Someone named me with @ in a message I haven't read. */
     val mentionedUnread: Boolean = false,
+    /**
+     * End-to-end encrypted: the server carries this chat without being able to
+     * read it. Once true it never goes back to false.
+     */
+    val encrypted: Boolean = false,
 )
 
 @Entity(tableName = "kv")
@@ -256,9 +263,8 @@ interface MessagingDao {
 
 @Database(
     entities = [MessageEntity::class, ConversationEntity::class, KvEntity::class],
-    // v2: polls, group roles and descriptions. A cache of the server plus an
-    // outbox, so the destructive fallback below just triggers a full re-sync.
-    version = 4,
+    // v2: polls, group roles and descriptions. v5: the encrypted flag.
+    version = 5,
     exportSchema = false,
 )
 abstract class MessagingDatabase : RoomDatabase() {
@@ -267,6 +273,21 @@ abstract class MessagingDatabase : RoomDatabase() {
     companion object {
         @Volatile private var instance: MessagingDatabase? = null
 
+        /**
+         * From v5 on, schema changes are migrated rather than rebuilt.
+         *
+         * This used to be a pure cache of the server, so throwing it away cost
+         * nothing but a re-sync. That stopped being true with end-to-end
+         * encryption: an encrypted message can only be opened once, so the
+         * plaintext this phone holds is the only copy it will ever have. The
+         * server still has the sealed envelope, and cannot help.
+         */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE conversations ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun get(context: Context): MessagingDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -274,8 +295,9 @@ abstract class MessagingDatabase : RoomDatabase() {
                     MessagingDatabase::class.java,
                     "viro_messaging.db",
                 )
-                    // Everything here is a cache of the server plus an outbox;
-                    // a schema bump may rebuild it and the next sync refills it.
+                    .addMigrations(MIGRATION_4_5)
+                    // Only for a version pair with no migration above — which
+                    // now means a bug, not a plan.
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { instance = it }

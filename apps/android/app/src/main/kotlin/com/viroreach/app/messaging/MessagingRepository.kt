@@ -2,11 +2,14 @@ package com.viroreach.app.messaging
 
 import android.content.Context
 import android.util.Log
+import com.viroreach.core.e2ee.E2eeEngine
 import com.viroreach.core.database.ConversationEntity
 import com.viroreach.core.database.KvEntity
 import com.viroreach.core.database.MessageEntity
 import com.viroreach.core.database.MessagingDatabase
 import com.viroreach.core.network.ApiDiagnostics
+import com.viroreach.core.network.EnvelopeBody
+import com.viroreach.core.network.ViroKeysApi
 import com.viroreach.core.network.ConvDto
 import com.viroreach.core.network.ContactCardBody
 import com.viroreach.core.network.GroupInviteDto
@@ -91,9 +94,13 @@ class MessagingRepository(
     val baseUrl: String,
     private val tokenStore: TokenStore,
     private val callManager: CallManager,
+    keysApi: ViroKeysApi,
 ) {
     private val appContext = context.applicationContext
     private val dao = MessagingDatabase.get(appContext).dao()
+
+    /** End-to-end encryption: this phone's keys, sessions, and sealing. */
+    val e2ee = E2eeEngine(appContext, keysApi)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val syncMutex = Mutex()
     private val outboxMutex = Mutex()
@@ -175,6 +182,18 @@ class MessagingRepository(
         }
         scope.launch { syncNow() }
         scope.launch { refreshFeatures() }
+        scope.launch { setUpEncryption() }
+    }
+
+    /**
+     * Makes sure this phone has encryption keys and that the server holds
+     * their public half. Cheap and idempotent: after the first run it only
+     * tops up one-time prekeys when the server is running low.
+     */
+    private suspend fun setUpEncryption() {
+        val userId = tokenStore.getUserId() ?: return
+        val deviceId = tokenStore.getDeviceId() ?: return
+        e2ee.ensureRegistered(userId, deviceId)
     }
 
     suspend fun refreshFeatures() {
@@ -185,6 +204,9 @@ class MessagingRepository(
     suspend fun clearLocal() {
         dao.wipeAll()
         media.wipe()
+        // Encryption keys belong to the person who signed in, not the phone.
+        // Leaving them would let the next account inherit their sessions.
+        runCatching { e2ee.wipe() }
     }
 
     // --------------------------------------------------------------- reads
@@ -284,9 +306,34 @@ class MessagingRepository(
                 ?: dto.clientMsgId?.let { dao.byClientMsgId(it) }
             // The outbox copy is replaced by the server's.
             if (existing != null && existing.id != dto.id) dao.deleteMessages(listOf(existing.id))
-            dto.toEntity(existing)
+            opened(dto, existing).toEntity(existing)
         }
         dao.upsertMessages(rows)
+    }
+
+    /**
+     * Turns a sealed message into a readable one, once.
+     *
+     * A sealed copy can only be opened a single time — the ratchet moves on —
+     * so a message this phone has already opened keeps the text it holds
+     * rather than being opened again. That matters because the same message
+     * arrives twice in the ordinary course of things: once on the socket and
+     * once in the next sync.
+     *
+     * When it cannot be opened the message stays sealed and the chat shows
+     * that it could not be read, which is the truth.
+     */
+    private suspend fun opened(dto: MsgDto, existing: MessageEntity?): MsgDto {
+        if (dto.type != TYPE_ENCRYPTED) return dto
+        if (existing != null && existing.type != TYPE_ENCRYPTED && existing.body != null) {
+            return dto.copy(type = existing.type, body = existing.body)
+        }
+        val myDeviceId = e2ee.myDeviceId() ?: return dto
+        val envelope = dto.envelopes?.firstOrNull { it.deviceId == myDeviceId } ?: return dto
+        val senderDeviceId = dto.senderDeviceId ?: return dto
+        val text = e2ee.open(dto.senderUserId, senderDeviceId, envelope.ciphertext, envelope.type ?: 1)
+            ?: return dto
+        return dto.copy(type = "TEXT", body = text)
     }
 
     // -------------------------------------------------------------- frames
@@ -605,11 +652,14 @@ class MessagingRepository(
         val convId = row.conversationId
         val toUserId = if (convId.startsWith(PLACEHOLDER)) convId.removePrefix(PLACEHOLDER) else null
         val deliverAt = (out["deliverAt"] as? Number)?.toLong()
+        val sealed = sealIfPossible(row, dao.conversation(convId), toUserId)
         val res = api.send(
             SendBody(
                 toUserId = toUserId,
                 conversationId = if (toUserId == null) convId else null,
-                body = row.body,
+                // Sealed messages carry nothing the server could read.
+                body = if (sealed == null) row.body else null,
+                envelopes = sealed,
                 clientMsgId = row.clientMsgId ?: row.id.removePrefix(LOCAL),
                 type = row.type,
                 replyToId = out["replyToId"] as? String,
@@ -655,13 +705,61 @@ class MessagingRepository(
             ),
         )
         dao.deleteMessages(listOf(row.id))
-        dao.upsertMessages(listOf(res.message.toEntity(row)))
+        // The server's copy of a sealed message has no body — this phone keeps
+        // the text it just sent, because nothing can give it back later.
+        val stored = res.message.toEntity(row)
+        dao.upsertMessages(
+            listOf(if (sealed == null) stored else stored.copy(type = "TEXT", body = row.body)),
+        )
         if (toUserId != null) {
             // The server made the conversation; fetch it and move anything else queued.
             syncNow()
             dao.moveMessages(convId, res.conversationId)
             _conversationMoved.tryEmit(convId to res.conversationId)
         }
+    }
+
+    /**
+     * Seals a message when it can be, or returns null to send it the ordinary
+     * way.
+     *
+     * Stage 1 covers one-to-one text. Groups need sender keys, and files,
+     * polls and places need their own encryption — until those exist, sending
+     * them sealed would mean claiming more than is true.
+     *
+     * A chat becomes encrypted the first time both sides can manage it, and
+     * stays that way. If the other side then has no keys at all — a reinstall
+     * that has not finished setting up — the send waits in the outbox rather
+     * than going out in the clear.
+     */
+    private suspend fun sealIfPossible(
+        row: MessageEntity,
+        conv: ConversationEntity?,
+        toUserId: String?,
+    ): List<EnvelopeBody>? {
+        if (row.type != "TEXT") return null
+        val text = row.body?.takeIf { it.isNotBlank() } ?: return null
+        if (conv != null && conv.kind != "DM") return null
+        val peer = conv?.peerUserId ?: toUserId ?: return null
+        val me = myUserId() ?: return null
+        if (!e2ee.isRegistered()) return null
+        val alreadyEncrypted = conv?.encrypted == true
+        if (!alreadyEncrypted && !e2ee.everyoneCanReceive(listOf(peer))) return null
+        val envelopes = e2ee.seal(me, listOf(peer), text)
+        if (envelopes.isEmpty()) {
+            if (alreadyEncrypted) {
+                // The server would refuse this anyway; say something the
+                // person can act on instead of failing silently.
+                throw IllegalStateException("This chat is encrypted — waiting for their phone")
+            }
+            return null
+        }
+        return envelopes.map { EnvelopeBody(it.deviceId, it.ciphertext, it.type) }
+    }
+
+    /** Marks a security-code change as seen, once the person has been shown it. */
+    fun acknowledgeIdentityChangeLater(peerUserId: String) {
+        scope.launch { runCatching { e2ee.acknowledgeIdentityChange(peerUserId) } }
     }
 
     // ------------------------------------------------------------- actions
@@ -956,6 +1054,8 @@ class MessagingRepository(
     companion object {
         private const val TAG = "ViroMessaging"
         const val PLACEHOLDER = "peer:"
+        /** The server's type for a message it cannot read. */
+        const val TYPE_ENCRYPTED = "ENCRYPTED"
         const val LOCAL = "local:"
         private const val KEY_CURSOR = "sync_cursor"
         private const val PRESENT_EVERY_MS = 20_000L

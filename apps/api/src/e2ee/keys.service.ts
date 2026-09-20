@@ -23,6 +23,8 @@ export interface KeyBundleInput {
   registrationId: number;
   identityKey: string;
   signedPreKey: { keyId: number; publicKey: string; signature: string };
+  /** The post-quantum half; a session cannot be started without it. */
+  kyberPreKey: { keyId: number; publicKey: string; signature: string };
   oneTimePreKeys?: PrekeyInput[];
 }
 
@@ -31,6 +33,7 @@ export interface DeviceBundle {
   registrationId: number;
   identityKey: string;
   signedPreKey: { keyId: number; publicKey: string; signature: string };
+  kyberPreKey: { keyId: number; publicKey: string; signature: string };
   /** Absent when this device has run out: the session still starts, with weaker forward secrecy. */
   preKey: { keyId: number; publicKey: string } | null;
 }
@@ -83,6 +86,10 @@ export class KeysService {
     const signedPrekeyId = this.keyId(input?.signedPreKey?.keyId, 'signed prekey id');
     const signedPrekey = this.key(input?.signedPreKey?.publicKey, 'signed prekey');
     const signature = this.key(input?.signedPreKey?.signature, 'signed prekey signature');
+    const kyberPrekeyId = this.keyId(input?.kyberPreKey?.keyId, 'kyber prekey id');
+    // Kyber public keys are an order of magnitude larger than curve keys.
+    const kyberPrekey = this.key(input?.kyberPreKey?.publicKey, 'kyber prekey', 4096);
+    const kyberSignature = this.key(input?.kyberPreKey?.signature, 'kyber prekey signature');
 
     const existing = await this.identityRepo.findOne({ where: { deviceId } });
     // The identity key is what the other side's safety number is built from.
@@ -98,6 +105,9 @@ export class KeysService {
         signedPrekeyId,
         signedPrekey,
         signedPrekeySignature: signature,
+        kyberPrekeyId,
+        kyberPrekey,
+        kyberPrekeySignature: kyberSignature,
         updatedAt: new Date(),
       }),
     );
@@ -151,7 +161,11 @@ export class KeysService {
    * uses. One one-time prekey per device is spent here and never handed out
    * again — that is the whole point of it.
    */
-  async bundlesFor(viewerId: string, userId: string): Promise<{ userId: string; devices: DeviceBundle[] }> {
+  async bundlesFor(
+    viewerId: string,
+    userId: string,
+    onlyDeviceIds?: string[],
+  ): Promise<{ userId: string; devices: DeviceBundle[] }> {
     if (viewerId !== userId && (await this.blocks.isBlocked(viewerId, userId))) {
       // Same answer as for someone with no keys: a block should not be
       // detectable by asking a different question.
@@ -159,10 +173,18 @@ export class KeysService {
     }
     const devices = await this.deviceRepo.find({ where: { userId, revokedAt: IsNull() } });
     if (devices.length === 0) return { userId, devices: [] };
-    const identities = await this.identityRepo.find({ where: { deviceId: In(devices.map((d) => d.id)) } });
+    // A one-time prekey is spent by asking, so a caller that already has a
+    // session with some devices asks only about the ones it is missing.
+    const wanted = onlyDeviceIds?.length ? new Set(onlyDeviceIds) : null;
+    const ids = devices.map((d) => d.id).filter((id) => !wanted || wanted.has(id));
+    if (ids.length === 0) return { userId, devices: [] };
+    const identities = await this.identityRepo.find({ where: { deviceId: In(ids) } });
 
     const out: DeviceBundle[] = [];
     for (const identity of identities) {
+      // Without a Kyber prekey there is nothing a current client could do with
+      // this bundle, so leave the device out rather than hand back half of one.
+      if (!identity.kyberPrekey || identity.kyberPrekeyId === null || !identity.kyberPrekeySignature) continue;
       out.push({
         deviceId: identity.deviceId,
         registrationId: identity.registrationId,
@@ -171,6 +193,11 @@ export class KeysService {
           keyId: identity.signedPrekeyId,
           publicKey: identity.signedPrekey,
           signature: identity.signedPrekeySignature,
+        },
+        kyberPreKey: {
+          keyId: identity.kyberPrekeyId,
+          publicKey: identity.kyberPrekey,
+          signature: identity.kyberPrekeySignature,
         },
         preKey: await this.consumePrekey(identity.deviceId),
       });
@@ -206,6 +233,24 @@ export class KeysService {
           : [];
     const row = list[0];
     return row ? { keyId: Number(row.key_id), publicKey: String(row.public_key) } : null;
+  }
+
+  /**
+   * Which devices of this person can receive encrypted messages — without
+   * spending a prekey. This is what a sender asks before every send; the full
+   * bundle is only fetched for devices it has no session with yet.
+   */
+  async devicesFor(viewerId: string, userId: string): Promise<{ userId: string; deviceIds: string[] }> {
+    if (viewerId !== userId && (await this.blocks.isBlocked(viewerId, userId))) {
+      return { userId, deviceIds: [] };
+    }
+    const devices = await this.deviceRepo.find({ where: { userId, revokedAt: IsNull() } });
+    if (devices.length === 0) return { userId, deviceIds: [] };
+    const identities = await this.identityRepo.find({ where: { deviceId: In(devices.map((d) => d.id)) } });
+    return {
+      userId,
+      deviceIds: identities.filter((i) => i.kyberPrekey && i.kyberPrekeyId !== null).map((i) => i.deviceId),
+    };
   }
 
   /** The active devices of these people that can receive encrypted messages. */

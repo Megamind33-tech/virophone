@@ -237,6 +237,9 @@ internal fun ConvDto.toEntity(myUserId: String?, existing: ConversationEntity?):
         pinnedAt = parseIso(pinnedAt) ?: existing?.pinnedAt.takeIf { pinnedAt == null },
         unreadMarked = unreadMarked ?: existing?.unreadMarked ?: false,
         mentionedUnread = mentionedUnread ?: existing?.mentionedUnread ?: false,
+        // Encryption never switches off: an older server that says nothing
+        // must not make an encrypted chat look ordinary.
+        encrypted = encrypted == true || existing?.encrypted == true,
     )
 }
 

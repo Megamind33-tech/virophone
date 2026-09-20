@@ -57,9 +57,33 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Encryption and calling both ship native code, and each extra
+            // architecture is tens of megabytes on a download people pay for
+            // by the megabyte here. Real phones are ARM; the x86 builds exist
+            // for emulators, which only debug builds are used on.
+            ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
         }
         debug {
             isMinifyEnabled = false
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // libsignal ships a second copy of its native library for its own
+            // test suite, the same size as the real one.
+            excludes += "**/libsignal_jni_testing.so"
+        }
+        resources {
+            // The libsignal jar carries its desktop builds — Linux, macOS and
+            // Windows — as plain resources next to the classes. On Android they
+            // are dead weight: three hundred megabytes of it.
+            excludes += listOf(
+                "**/*.dylib",
+                "**/*.dll",
+                "**/libsignal_jni*.so",
+                "**/signal_jni*",
+            )
         }
     }
 
@@ -88,6 +112,7 @@ dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:network"))
     implementation(project(":core:database"))
+    implementation(project(":core:e2ee"))
     implementation(project(":core:security"))
     implementation(project(":core:designsystem"))
     implementation(project(":feature:auth"))
