@@ -1,3 +1,4 @@
+import { encryptedJsonColumn, encryptedTextColumn } from '../../common/crypto/field-cipher';
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn } from 'typeorm';
 
 @Entity('messages')
@@ -21,7 +22,8 @@ export class Message {
   @Column({ type: 'varchar', length: 16, default: 'TEXT' })
   type!: string;
 
-  @Column({ type: 'text', nullable: true })
+  /** Encrypted at rest; the transformer hides and reveals it. */
+  @Column({ type: 'text', nullable: true, transformer: encryptedTextColumn })
   body!: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
@@ -55,6 +57,10 @@ export class Message {
   @Column({ name: 'deliver_at', type: 'timestamptz', nullable: true })
   deliverAt!: Date | null;
 
-  @Column({ type: 'jsonb', nullable: true })
+  /**
+   * Encrypted at rest, so it can no longer be queried inside: anything the
+   * server searches on lives in its own table (see message_mentions).
+   */
+  @Column({ type: 'jsonb', nullable: true, transformer: encryptedJsonColumn })
   metadata!: Record<string, unknown> | null;
 }

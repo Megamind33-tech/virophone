@@ -97,6 +97,9 @@ services:
       OTP_DELIVERY_EMAIL: ${OTP_DELIVERY_EMAIL:-}
       OTP_EMAIL_MAP: ${OTP_EMAIL_MAP:-}
       AVATAR_UPLOAD_DIR: /app/uploads/avatars
+      # Message content is encrypted at rest with this key. Losing it means
+      # losing every encrypted message: keep a copy somewhere safe.
+      MESSAGE_ENCRYPTION_KEY: ${MESSAGE_ENCRYPTION_KEY}
       MEDIA_UPLOAD_DIR: /app/uploads/media
       # Voice-note transcripts: the self-hosted speech model below.
       WHISPER_URL: ${WHISPER_URL:-http://whisper:9000}

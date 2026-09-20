@@ -1,6 +1,7 @@
 # End-to-end encryption for Viro — design and decisions
 
-Status: proposal, nothing built yet. Written 2026-09-20, against commit `c431676`.
+Status: Stage 0 (encryption at rest) is built and deployed. Stages 1-4 are
+still a proposal. Written 2026-09-20, against commit `c431676`.
 
 Today Viro encrypts traffic in transit (HTTPS/WSS) and calls are peer-to-peer
 media, but **messages are stored readable on the server**: `messages.body` and
@@ -102,8 +103,12 @@ end-to-end."
 
 Each stage ships and is testable on its own.
 
-- **Stage 0 — at-rest encryption** (small). Envelope-encrypt `body`, `metadata`
-  and media files. No feature loss. Honest labelling.
+- **Stage 0 — at-rest encryption** — **done** (2026-09-20). `messages.body`,
+  `messages.metadata` and media files are AES-256-GCM encrypted with a key held
+  in the environment. Rows written earlier still read, and `dist/scripts/encrypt-backfill.js`
+  converts them. Production refuses to start without the key. Mentions moved to
+  their own table, because encrypted metadata cannot be searched. Not end-to-end:
+  the server holds the key.
 - **Stage 1 — keys and one-to-one text** (large). Device keys, prekeys, sessions,
   ratchet, safety numbers, key-change warnings. Behind a flag, pilot chats only.
   Search goes local-only for encrypted chats; push falls back to "New message"

@@ -1,5 +1,4 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
-import { readFileSync } from 'fs';
 import { MessagesService } from './messages.service';
 import { ViroException } from '../common/exceptions/viro.exception';
 
@@ -43,7 +42,7 @@ export class TranscriptionService {
     if (this.waiting.length >= 6) {
       throw new ViroException('SERVICE_UNAVAILABLE' as never, 'Transcripts are busy. Try again in a moment.', HttpStatus.SERVICE_UNAVAILABLE);
     }
-    const job = this.run(file.path, file.mime, mediaId).finally(() => this.inFlight.delete(mediaId));
+    const job = this.run(file.data, file.mime, mediaId).finally(() => this.inFlight.delete(mediaId));
     this.inFlight.set(mediaId, job);
     return job;
   }
@@ -62,12 +61,13 @@ export class TranscriptionService {
     this.waiting.shift()?.();
   }
 
-  private async run(path: string, mime: string, mediaId: string) {
+  // The audio arrives decrypted in memory: it is stored encrypted at rest.
+  private async run(audio: Buffer, mime: string, mediaId: string) {
     await this.slot();
     try {
       const form = new FormData();
       const ext = mime.includes('ogg') ? 'ogg' : mime.includes('mpeg') ? 'mp3' : 'm4a';
-      form.append('audio_file', new Blob([readFileSync(path)], { type: mime }), `note.${ext}`);
+      form.append('audio_file', new Blob([new Uint8Array(audio)], { type: mime }), `note.${ext}`);
       const url = `${process.env.WHISPER_URL!.replace(/\/$/, '')}/asr?task=transcribe&output=json&encode=true`;
       const started = Date.now();
       const res = await fetch(url, { method: 'POST', body: form, signal: AbortSignal.timeout(180_000) });

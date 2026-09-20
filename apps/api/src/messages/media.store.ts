@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import { decryptBuffer, encryptBuffer } from '../common/crypto/field-cipher';
 
 const EXT: Record<string, string> = {
   'audio/mp4': '.m4a',
@@ -68,10 +69,21 @@ export class MediaStore {
     return d;
   }
 
+  /** Stored encrypted at rest, so a copied disk or backup gives nothing away. */
   save(buffer: Buffer, mime: string): string {
     const name = `${randomUUID()}${EXT[mime] ?? '.bin'}`;
-    fs.writeFileSync(path.join(this.dir(), name), buffer);
+    fs.writeFileSync(path.join(this.dir(), name), encryptBuffer(buffer));
     return name;
+  }
+
+  /**
+   * The file's real contents. Files written before encryption was switched on
+   * are returned as they are.
+   */
+  read(fileName: string): Buffer | null {
+    const full = this.pathFor(fileName);
+    if (!full) return null;
+    return decryptBuffer(fs.readFileSync(full));
   }
 
   pathFor(fileName: string): string | null {

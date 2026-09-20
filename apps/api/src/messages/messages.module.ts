@@ -7,6 +7,7 @@ import { MediaStore } from './media.store';
 import { Conversation } from '../database/entities/conversation.entity';
 import { ConversationParticipant } from '../database/entities/conversation-participant.entity';
 import { Message } from '../database/entities/message.entity';
+import { MessageMention } from '../database/entities/message-mention.entity';
 import { MessageReceipt } from '../database/entities/message-receipt.entity';
 import {
   ConversationPin,
@@ -41,6 +42,7 @@ import { PushModule } from '../push/push.module';
       ViroConnection,
       Profile,
       PollVote,
+      MessageMention,
     ]),
     BlocksModule,
     PushModule,

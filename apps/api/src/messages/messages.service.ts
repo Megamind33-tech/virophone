@@ -6,6 +6,7 @@ import { In, Repository } from 'typeorm';
 import { Conversation } from '../database/entities/conversation.entity';
 import { ConversationParticipant } from '../database/entities/conversation-participant.entity';
 import { Message } from '../database/entities/message.entity';
+import { MessageMention } from '../database/entities/message-mention.entity';
 import { MessageReceipt } from '../database/entities/message-receipt.entity';
 import {
   ConversationPin,
@@ -65,6 +66,12 @@ export interface PollDto {
   totalVoters: number;
   myVotes: number[];
 }
+
+/**
+ * How far back the server looks when searching. Bodies are decrypted to match
+ * them, so this is deliberately bounded; the phone searches what it holds.
+ */
+const SEARCH_SCAN_LIMIT = 2000;
 
 /** How long a live location may run for. */
 const LIVE_LOCATION_CHOICES = [15 * 60, 60 * 60, 8 * 60 * 60];
@@ -180,6 +187,8 @@ export class MessagesService {
     private readonly partRepo: Repository<ConversationParticipant>,
     @InjectRepository(Message)
     private readonly msgRepo: Repository<Message>,
+    @InjectRepository(MessageMention)
+    private readonly mentionRepo: Repository<MessageMention>,
     @InjectRepository(MessageReceipt)
     private readonly receiptRepo: Repository<MessageReceipt>,
     @InjectRepository(MessageReaction)
@@ -598,6 +607,7 @@ export class MessagesService {
     if (type === 'LOCATION' && location) {
       metadata.location = location;
     }
+    let mentionedUserIds: string[] = [];
     if (input.mentions?.length) {
       // Only people actually in the conversation, and never the sender: an @
       // is a way to reach someone here, not a way to probe who exists.
@@ -605,7 +615,10 @@ export class MessagesService {
       const mentioned = Array.from(new Set(input.mentions.map(String)))
         .filter((id) => id !== senderId && here.has(id))
         .slice(0, 64);
-      if (mentioned.length) metadata.mentions = mentioned;
+      if (mentioned.length) {
+        metadata.mentions = mentioned;
+        mentionedUserIds = mentioned;
+      }
     }
     if (type === 'FILE' && input.mediaId) {
       // Carried on the message so a notification can name the document
@@ -649,6 +662,19 @@ export class MessagesService {
         metadata: Object.keys(metadata).length ? metadata : null,
       }),
     );
+
+    if (mentionedUserIds.length) {
+      await this.mentionRepo.save(
+        mentionedUserIds.map((uid) =>
+          this.mentionRepo.create({
+            messageId: message.id,
+            userId: uid,
+            conversationId: conversation.id,
+            createdAt: message.createdAt,
+          }),
+        ),
+      );
+    }
 
     // A hidden or cleared chat comes back when something new arrives, as in
     // WhatsApp: "delete chat" is not "block".
@@ -1049,13 +1075,14 @@ export class MessagesService {
 
   /** Has anyone named me with @ since I last read this conversation? */
   private async hasUnreadMention(userId: string, conversationId: string, lastReadAt: Date | null): Promise<boolean> {
-    const found = await this.msgRepo
-      .createQueryBuilder('m')
-      .where('m.conversation_id = :cid', { cid: conversationId })
-      .andWhere('m.sender_user_id != :uid', { uid: userId })
+    const found = await this.mentionRepo
+      .createQueryBuilder('mm')
+      .innerJoin(Message, 'm', 'm.id = mm.message_id')
+      .where('mm.user_id = :uid', { uid: userId })
+      .andWhere('mm.conversation_id = :cid', { cid: conversationId })
+      .andWhere('mm.created_at > :since', { since: lastReadAt ?? new Date(0) })
       .andWhere('m.deleted_at IS NULL')
-      .andWhere("m.metadata -> 'mentions' @> :me", { me: JSON.stringify([userId]) })
-      .andWhere('m.created_at > :since', { since: lastReadAt ?? new Date(0) })
+      .andWhere('m.sender_user_id != :uid', { uid: userId })
       .limit(1)
       .getCount();
     return found > 0;
@@ -1334,7 +1361,7 @@ export class MessagesService {
   async mediaFor(
     userId: string,
     mediaId: string,
-  ): Promise<{ path: string; mime: string; originalName: string | null } | null> {
+  ): Promise<{ data: Buffer; mime: string; originalName: string | null } | null> {
     const media = await this.mediaRepo.findOne({ where: { id: mediaId } });
     if (!media) return null;
     if (media.ownerUserId !== userId) {
@@ -1351,8 +1378,8 @@ export class MessagesService {
       if (!allowed) allowed = await this.sharedMediaAllowed(userId, mediaId);
       if (!allowed) return null;
     }
-    const path = this.mediaStore.pathFor(media.fileName);
-    return path ? { path, mime: media.mime, originalName: media.originalName ?? null } : null;
+    const data = this.mediaStore.read(media.fileName);
+    return data ? { data, mime: media.mime, originalName: media.originalName ?? null } : null;
   }
 
   mediaDto(mo: MediaObject): MediaDto {
@@ -1665,19 +1692,30 @@ export class MessagesService {
     let ids = parts.map((p) => p.conversationId);
     if (conversationId) ids = ids.filter((id) => id === conversationId);
     if (ids.length === 0) return [];
-    const like = `%${term.replace(/[\\%_]/g, (c) => `\\${c}`).slice(0, 100)}%`;
-    const rows = await this.msgRepo
+    // Message bodies are encrypted at rest, so the database can no longer
+    // match them. The newest slice of the person's messages is decrypted here
+    // and matched in memory instead. This is the server half of search, and it
+    // goes away entirely when messages become end-to-end encrypted — the phone
+    // already searches what it holds without asking anyone.
+    const needle = term.toLowerCase();
+    const candidates = await this.msgRepo
       .createQueryBuilder('m')
       .where('m.conversation_id IN (:...ids)', { ids })
       .andWhere('m.deleted_at IS NULL')
       .andWhere("m.type IN ('TEXT','IMAGE','POLL')")
-      .andWhere("(m.body ILIKE :like OR (m.metadata -> 'poll' ->> 'question') ILIKE :like)", { like })
       .andWhere('(m.deliver_at IS NULL OR m.sender_user_id = :uid)', { uid: userId })
       .andWhere('(m.view_once = FALSE)')
       .andWhere('NOT EXISTS (SELECT 1 FROM message_hidden h WHERE h.message_id = m.id AND h.user_id = :uid)', { uid: userId })
       .orderBy('m.created_at', 'DESC')
-      .take(60)
+      .take(SEARCH_SCAN_LIMIT)
       .getMany();
+    const rows = candidates
+      .filter((m) => {
+        if ((m.body || '').toLowerCase().includes(needle)) return true;
+        const question = (m.metadata?.poll as { question?: string })?.question;
+        return !!question && question.toLowerCase().includes(needle);
+      })
+      .slice(0, 60);
     const convs = await this.convRepo.find({ where: { id: In(ids) } });
     const visible = rows.filter((m) =>
       this.visibleTo(m, userId, parts.find((p) => p.conversationId === m.conversationId), convs.find((c) => c.id === m.conversationId)),

@@ -9,6 +9,9 @@ describe('Production fail-closed config', () => {
     // into the "proper secrets" case and made it fail for a reason that
     // test is not about. Each case sets what it needs explicitly.
     delete process.env.OTP_PROVIDER;
+    // Message content is encrypted at rest, so production needs a key. The
+    // cases below are about other secrets; the key has its own two tests.
+    process.env.MESSAGE_ENCRYPTION_KEY = Buffer.alloc(32, 1).toString("base64");
   });
 
   afterAll(() => {
@@ -51,6 +54,18 @@ describe('Production fail-closed config', () => {
     process.env.LIVEKIT_API_SECRET = 'f'.repeat(40);
     process.env.LIVEKIT_URL = 'wss://example.test/livekit-rtc';
     expect(() => validateProductionConfig()).not.toThrow();
+  });
+
+  it('refuses production without a message encryption key', () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.MESSAGE_ENCRYPTION_KEY;
+    expect(() => validateProductionConfig()).toThrow(/MESSAGE_ENCRYPTION_KEY/);
+  });
+
+  it('refuses a message encryption key of the wrong size', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.MESSAGE_ENCRYPTION_KEY = Buffer.alloc(16, 1).toString("base64");
+    expect(() => validateProductionConfig()).toThrow(/32 bytes/);
   });
 
   it('refuses production OTP_PROVIDER=test', () => {

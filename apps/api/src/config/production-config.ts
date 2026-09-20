@@ -32,6 +32,13 @@ const DEV_FALLBACK_PATTERNS = [
   /dev_turn_secret/,
 ];
 
+/**
+ * Message content is encrypted at rest, so production must have the key. A
+ * server that starts without it would either write readable messages or fail
+ * to open the ones it has — both worse than refusing to start.
+ */
+const ENCRYPTION_KEY_VAR = 'MESSAGE_ENCRYPTION_KEY';
+
 export function validateProductionConfig(): void {
   const nodeEnv = process.env.NODE_ENV || 'development';
   if (nodeEnv !== 'production') {
@@ -39,6 +46,19 @@ export function validateProductionConfig(): void {
       console.warn('DEVELOPMENT CONFIGURATION — NOT FOR PRODUCTION');
     }
     return;
+  }
+
+  const encryptionKey = (process.env[ENCRYPTION_KEY_VAR] || '').trim();
+  if (!encryptionKey) {
+    throw new Error(
+      `Production startup refused: ${ENCRYPTION_KEY_VAR} is not set. ` +
+        'Message content is encrypted at rest and cannot be read without it. ' +
+        'Generate one with: openssl rand -base64 32 — and keep a copy somewhere safe, ' +
+        'because losing it means losing every encrypted message.',
+    );
+  }
+  if (Buffer.from(encryptionKey, 'base64').length !== 32) {
+    throw new Error(`Production startup refused: ${ENCRYPTION_KEY_VAR} must be 32 bytes, base64 encoded.`);
   }
 
   const missing: string[] = [];

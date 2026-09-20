@@ -429,6 +429,6 @@ export class MessagesController {
       const safe = file.originalName.replace(/["\r\n]/g, '');
       res.setHeader('Content-Disposition', `attachment; filename="${safe}"; filename*=UTF-8''${encodeURIComponent(file.originalName)}`);
     }
-    res.sendFile(file.path);
+    res.send(file.data);
   }
 }
