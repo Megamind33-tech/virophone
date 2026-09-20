@@ -23,6 +23,16 @@ export class Conversation {
   @Column({ name: 'avatar_media_id', type: 'uuid', nullable: true })
   avatarMediaId!: string | null;
 
+  /** The shareable link code for a group; null until an admin makes one. */
+  @Column({ name: 'invite_code', type: 'varchar', length: 32, nullable: true })
+  inviteCode!: string | null;
+
+  @Column({ name: 'invite_created_at', type: 'timestamptz', nullable: true })
+  inviteCreatedAt!: Date | null;
+
+  @Column({ name: 'invite_created_by', type: 'uuid', nullable: true })
+  inviteCreatedBy!: string | null;
+
   @Column({ name: 'dm_key', type: 'varchar', length: 73, nullable: true })
   dmKey!: string | null;
 

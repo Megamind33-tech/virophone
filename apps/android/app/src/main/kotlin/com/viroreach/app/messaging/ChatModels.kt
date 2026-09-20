@@ -80,6 +80,9 @@ data class ChatMessage(
     val fileName: String? get() = media?.originalName ?: obj("file")?.get("name") as? String
     val fileSize: Long? get() = media?.sizeBytes?.toLong() ?: (obj("file")?.get("size") as? Number)?.toLong()
 
+    /** User ids named with @ in this message. */
+    val mentions: List<String> get() = (metadata["mentions"] as? List<Any?>)?.mapNotNull { it as? String }.orEmpty()
+
     /** A place someone sent, or a live share while it runs. */
     val place: SharedPlace? get() = obj("location")?.let { l ->
         val lat = (l["lat"] as? Number)?.toDouble() ?: return@let null
@@ -152,6 +155,7 @@ data class ConversationItem(
     val archived: Boolean = false,
     val pinnedAt: Long? = null,
     val unreadMarked: Boolean = false,
+    val mentionedUnread: Boolean = false,
 ) {
     val isPrivate: Boolean get() = kind == "PRIVATE"
     val isGroup: Boolean get() = kind == "GROUP"
@@ -232,6 +236,7 @@ internal fun ConvDto.toEntity(myUserId: String?, existing: ConversationEntity?):
         archived = archived ?: existing?.archived ?: false,
         pinnedAt = parseIso(pinnedAt) ?: existing?.pinnedAt.takeIf { pinnedAt == null },
         unreadMarked = unreadMarked ?: existing?.unreadMarked ?: false,
+        mentionedUnread = mentionedUnread ?: existing?.mentionedUnread ?: false,
     )
 }
 
@@ -289,6 +294,7 @@ internal fun ConversationRow.toItem(myUserId: String?): ConversationItem = Conve
     archived = archived,
     pinnedAt = pinnedAt,
     unreadMarked = unreadMarked,
+    mentionedUnread = mentionedUnread,
 )
 
 /** One line for the inbox: what the last message was, in words. */

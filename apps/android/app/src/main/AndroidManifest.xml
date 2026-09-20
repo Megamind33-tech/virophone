@@ -105,6 +105,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="viro" android:host="u" />
+                <data android:scheme="viro" android:host="g" />
             </intent-filter>
 
         </activity>

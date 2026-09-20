@@ -37,7 +37,13 @@ import com.viroreach.core.designsystem.ViroColors
 import java.util.Calendar
 
 sealed class ComposerAction {
-    data class Text(val body: String, val deliverAt: Long?, val effect: String?) : ComposerAction()
+    data class Text(
+        val body: String,
+        val deliverAt: Long?,
+        val effect: String?,
+        /** User ids named with @ in this message. */
+        val mentions: List<String> = emptyList(),
+    ) : ComposerAction()
     data class Edit(val messageId: String, val body: String) : ComposerAction()
     data class Voice(val recording: VoiceRecorder.Recording, val viewOnce: Boolean) : ComposerAction()
     object PickPhoto : ComposerAction()
@@ -69,10 +75,14 @@ fun Composer(
     onDraftChanged: (String) -> Unit = {},
     /** Shown above the input: the link preview that will go with the message. */
     aboveInput: (@Composable () -> Unit)? = null,
+    /** Who can be named with @ here. Empty outside groups. */
+    mentionable: List<MentionTarget> = emptyList(),
     stickersOpen: Boolean = false,
 ) {
     val context = LocalContext.current
     var draft by remember { mutableStateOf("") }
+    // Who has been named so far, so the ids survive editing the text around them.
+    val named = remember { mutableStateMapOf<String, String>() }
     var menuOpen by remember { mutableStateOf(false) }
     var attachOpen by remember { mutableStateOf(false) }
     var recording by remember { mutableStateOf(false) }
@@ -118,7 +128,7 @@ fun Composer(
         val body = draft.trim()
         if (body.isEmpty()) return
         if (editing != null) onAction(ComposerAction.Edit(editing.id, body))
-        else onAction(ComposerAction.Text(body, deliverAt, effect))
+        else onAction(ComposerAction.Text(body, deliverAt, effect, mentionsIn(body, named)))
         draft = ""
         onDraftChanged("")
         onTyping("idle")
@@ -157,6 +167,36 @@ fun Composer(
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
             )
         } else {
+            // Naming someone: the list narrows as the @ word is typed.
+            val mentionQuery = mentionPrefix(draft)
+            if (mentionable.isNotEmpty() && mentionQuery != null) {
+                val matches = mentionable
+                    .filter { mentionQuery.isEmpty() || it.name.contains(mentionQuery, ignoreCase = true) }
+                    .take(6)
+                if (matches.isNotEmpty()) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(ViroColors.NavySurface)
+                            .padding(vertical = 4.dp),
+                    ) {
+                        matches.forEach { target ->
+                            Text(
+                                target.name,
+                                color = Color.White,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        draft = replaceMentionPrefix(draft, target.name)
+                                        named[target.name] = target.userId
+                                        onDraftChanged(draft)
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                            )
+                        }
+                    }
+                }
+            }
             aboveInput?.invoke()
             if (recording) {
                 RecordingBar(
@@ -393,3 +433,35 @@ fun previewOf(m: ChatMessage): String = when {
     m.type == "IMAGE" -> if (m.body.isNullOrBlank()) "📷 Photo" else "📷 ${m.body}"
     else -> m.body.orEmpty()
 }
+
+/** Someone who can be named with @ in this conversation. */
+data class MentionTarget(val userId: String, val name: String)
+
+/**
+ * The word being typed after an "@", or null when the cursor isn't in one.
+ * Only at the start or after a space, so an email address is never a mention.
+ */
+fun mentionPrefix(draft: String): String? {
+    val at = draft.lastIndexOf('@')
+    if (at < 0) return null
+    if (at > 0 && !draft[at - 1].isWhitespace()) return null
+    val word = draft.substring(at + 1)
+    if (word.contains('\n') || word.length > 40) return null
+    // Two words is still a name ("Mary Jane"); three means they moved on.
+    if (word.count { it == ' ' } > 1) return null
+    return word
+}
+
+/** Replaces the half-typed @word with the chosen name. */
+fun replaceMentionPrefix(draft: String, name: String): String {
+    val at = draft.lastIndexOf('@')
+    if (at < 0) return draft
+    return draft.substring(0, at) + "@" + name + " "
+}
+
+/** The ids of everyone still named in [body] — someone deleted from the text is dropped. */
+fun mentionsIn(body: String, named: Map<String, String>): List<String> =
+    named.entries
+        .filter { (name, _) -> body.contains("@" + name, ignoreCase = true) }
+        .map { it.value }
+        .distinct()

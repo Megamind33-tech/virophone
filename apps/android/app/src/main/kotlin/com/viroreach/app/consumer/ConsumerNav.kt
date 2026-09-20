@@ -121,6 +121,8 @@ enum class ConsumerOverlay {
 
     FindPeople,
 
+    JoinGroup,
+
     NewGroup,
 
     GroupInfo,
@@ -188,6 +190,8 @@ fun ConsumerNav(
     var groupInfoId by remember { mutableStateOf<String?>(null) }
 
     var findPeopleQuery by remember { mutableStateOf("") }
+
+    var joinGroupCode by remember { mutableStateOf("") }
 
     LaunchedEffect(connectionsRequested) {
         // One-shot: the Messages tab has switched to Connections by now.
@@ -320,6 +324,10 @@ fun ConsumerNav(
             }
             com.viroreach.app.MainActivity.OPEN_CONNECTIONS_REQUESTS -> {
                 overlay = ConsumerOverlay.FindPeople
+            }
+            com.viroreach.app.MainActivity.OPEN_JOIN_GROUP -> {
+                joinGroupCode = target.query.orEmpty()
+                if (joinGroupCode.isNotBlank()) overlay = ConsumerOverlay.JoinGroup
             }
             com.viroreach.app.MainActivity.OPEN_FIND_PEOPLE -> {
                 findPeopleQuery = target.query.orEmpty()
@@ -804,6 +812,30 @@ fun ConsumerNav(
                         }
 
                     }
+
+                },
+
+            )
+
+            return
+
+        }
+
+        ConsumerOverlay.JoinGroup -> {
+
+            com.viroreach.app.consumer.messages.JoinGroupScreen(
+
+                session = session,
+
+                code = joinGroupCode,
+
+                onBack = { overlay = ConsumerOverlay.None },
+
+                onJoined = { conversationId, title ->
+
+                    chatRoute = ChatRoute(conversationId = conversationId, peerName = title, peerUserId = null)
+
+                    overlay = ConsumerOverlay.Chat
 
                 },
 

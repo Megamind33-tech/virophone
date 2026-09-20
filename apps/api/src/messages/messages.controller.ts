@@ -62,6 +62,7 @@ class SendMessageDto {
   @IsObject() @IsOptional() sticker?: { pack: string; id: string };
   @IsObject() @IsOptional() contact?: { name: string; phones?: string[]; viroId?: string; userId?: string };
   @IsObject() @IsOptional() location?: { lat: number; lng: number; accuracy?: number; label?: string; liveSeconds?: number };
+  @IsArray() @IsOptional() @ArrayMaxSize(64) mentions?: string[];
 }
 
 class GroupDto {
@@ -196,6 +197,35 @@ export class MessagesController {
   @Post('conversations/:id/leave')
   async leave(@Req() req: AuthedReq, @Param('id') id: string) {
     return this.messagesService.leaveGroup(req.user.sub, id);
+  }
+
+  /** The group's shareable link (admins only; made on first use). */
+  @Get('conversations/:id/invite')
+  async groupInvite(@Req() req: AuthedReq, @Param('id') id: string) {
+    return this.messagesService.groupInvite(req.user.sub, id);
+  }
+
+  /** A new link; the old one stops working. */
+  @Post('conversations/:id/invite/reset')
+  async resetGroupInvite(@Req() req: AuthedReq, @Param('id') id: string) {
+    return this.messagesService.resetGroupInvite(req.user.sub, id);
+  }
+
+  /** No link at all until an admin makes another. */
+  @Delete('conversations/:id/invite')
+  async revokeGroupInvite(@Req() req: AuthedReq, @Param('id') id: string) {
+    return this.messagesService.revokeGroupInvite(req.user.sub, id);
+  }
+
+  /** What a link shows before you decide to join. */
+  @Get('groups/invite/:code')
+  async invitePreview(@Req() req: AuthedReq, @Param('code') code: string) {
+    return this.messagesService.groupInvitePreview(req.user.sub, code);
+  }
+
+  @Post('groups/invite/:code/join')
+  async joinByInvite(@Req() req: AuthedReq, @Param('code') code: string) {
+    return this.messagesService.joinGroupByInvite(req.user.sub, code);
   }
 
   @Patch('conversations/:id/group')

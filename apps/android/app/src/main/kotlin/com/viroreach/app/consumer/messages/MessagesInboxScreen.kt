@@ -336,7 +336,7 @@ private fun ConversationRow(
                 Text(
                     if (c.isPrivate) "$name · Private" else name,
                     color = Color.White,
-                    fontWeight = if (c.unread > 0 || c.unreadMarked) FontWeight.Bold else FontWeight.SemiBold,
+                    fontWeight = if (c.unread > 0 || c.unreadMarked || c.mentionedUnread) FontWeight.Bold else FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
@@ -399,7 +399,19 @@ private fun ConversationRow(
             (c.lastAt ?: c.updatedAt).let {
                 Text(inboxTime(it), color = if (c.unread > 0) ViroColors.accent else ViroColors.textMuted, fontSize = 12.sp)
             }
-            if (c.unread > 0) {
+            if (c.mentionedUnread) {
+                // Being named is worth more than a count: it says why to look.
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("@", color = ViroColors.accent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    if (c.unread > 0) {
+                        Spacer(Modifier.width(4.dp))
+                        Box(
+                            Modifier.clip(CircleShape).background(ViroColors.accent).padding(horizontal = 7.dp, vertical = 2.dp),
+                        ) { Text(c.unread.toString(), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+                    }
+                }
+            } else if (c.unread > 0) {
                 Spacer(Modifier.height(4.dp))
                 Box(
                     Modifier.clip(CircleShape).background(ViroColors.accent).padding(horizontal = 7.dp, vertical = 2.dp),

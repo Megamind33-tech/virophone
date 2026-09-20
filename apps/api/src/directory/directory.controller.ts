@@ -38,6 +38,27 @@ export class DirectoryController {
  */
 @Controller('api/v1/invite')
 export class InviteController {
+  /**
+   * A shared group link. Like the personal one, it shows nothing about the
+   * group itself — the code alone can't be used to look a group up.
+   */
+  @Get('g/:code')
+  @Header('Cache-Control', 'public, max-age=300')
+  groupInvitePage(@Param('code') raw: string, @Res() res: Response) {
+    const code = (raw || '').trim();
+    if (!/^[A-Za-z0-9_-]{6,32}$/.test(code)) {
+      res.status(404).type('html').send(page('Link not valid', '<p>This group link isn\'t valid. Ask for a new one.</p>'));
+      return;
+    }
+    res.type('html').send(
+      page(
+        'Join a group on Viro',
+        `<a class="btn" href="viro://g/${code}">Open in Viro</a>
+         <p class="hint">Viro will show you the group before you join. Don't have Viro? Install it first, then open this link again.</p>`,
+      ),
+    );
+  }
+
   @Get(':viroId')
   @Header('Cache-Control', 'public, max-age=300')
   invitePage(@Param('viroId') raw: string, @Res() res: Response) {

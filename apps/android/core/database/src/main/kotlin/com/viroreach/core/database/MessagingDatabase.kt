@@ -86,6 +86,8 @@ data class ConversationEntity(
     val pinnedAt: Long? = null,
     /** "Mark as unread", until the chat is opened again. */
     val unreadMarked: Boolean = false,
+    /** Someone named me with @ in a message I haven't read. */
+    val mentionedUnread: Boolean = false,
 )
 
 @Entity(tableName = "kv")
@@ -112,6 +114,7 @@ data class ConversationRow(
     val archived: Boolean,
     val pinnedAt: Long?,
     val unreadMarked: Boolean,
+    val mentionedUnread: Boolean,
     val lastId: String?,
     val lastBody: String?,
     val lastType: String?,
@@ -127,7 +130,7 @@ interface MessagingDao {
         """
         SELECT c.id, c.kind, c.peerUserId, c.title, c.myRole, c.participantsCsv, c.unread, c.updatedAt, c.hidden,
                c.mutedUntil, c.clearedAt, c.disappearingSeconds, c.expiresAt, c.peerLastReadAt,
-               c.peerLastDeliveredAt, c.pinnedCsv, c.locked, c.archived, c.pinnedAt, c.unreadMarked,
+               c.peerLastDeliveredAt, c.pinnedCsv, c.locked, c.archived, c.pinnedAt, c.unreadMarked, c.mentionedUnread,
                m.id AS lastId, m.body AS lastBody, m.type AS lastType, m.senderUserId AS lastSender,
                m.createdAt AS lastAt, m.deletedAt AS lastDeleted, m.status AS lastStatus
         FROM conversations c
@@ -251,7 +254,7 @@ interface MessagingDao {
     entities = [MessageEntity::class, ConversationEntity::class, KvEntity::class],
     // v2: polls, group roles and descriptions. A cache of the server plus an
     // outbox, so the destructive fallback below just triggers a full re-sync.
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class MessagingDatabase : RoomDatabase() {

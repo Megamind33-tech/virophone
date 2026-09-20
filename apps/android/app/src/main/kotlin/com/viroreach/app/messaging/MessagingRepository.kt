@@ -9,6 +9,8 @@ import com.viroreach.core.database.MessagingDatabase
 import com.viroreach.core.network.ApiDiagnostics
 import com.viroreach.core.network.ConvDto
 import com.viroreach.core.network.ContactCardBody
+import com.viroreach.core.network.GroupInviteDto
+import com.viroreach.core.network.GroupInvitePreviewDto
 import com.viroreach.core.network.LocationBody
 import com.viroreach.core.network.LocationPoint
 import com.viroreach.core.network.ConvSettingsBody
@@ -450,6 +452,8 @@ class MessagingRepository(
         val fileName: String? = null,
         val contact: ContactCardBody? = null,
         val location: LocationBody? = null,
+        /** User ids named with @ in this message. */
+        val mentions: List<String> = emptyList(),
     )
 
     /**
@@ -483,6 +487,7 @@ class MessagingRepository(
             meta["contact"] = mapOf<String, Any?>("name" to it.name, "phones" to it.phones, "viroId" to it.viroId, "userId" to it.userId)
         }
         out.fileName?.let { meta["file"] = mapOf<String, Any?>("name" to it, "mime" to out.mime, "size" to out.localFile?.length()) }
+        if (out.mentions.isNotEmpty()) meta["mentions"] = out.mentions
         out.location?.let {
             meta["location"] = mapOf<String, Any?>(
                 "lat" to it.lat,
@@ -620,6 +625,7 @@ class MessagingRepository(
                     GifSendDto(g["url"] as String, g["previewUrl"] as? String, (g["width"] as? Number)?.toInt(), (g["height"] as? Number)?.toInt(), g["provider"] as? String)
                 },
                 sticker = (meta["sticker"] as? Map<String, Any?>)?.let { StickerRef(it["pack"] as String, it["id"] as String) },
+                mentions = (meta["mentions"] as? List<Any?>)?.mapNotNull { it as? String }?.takeIf { it.isNotEmpty() },
                 location = (meta["location"] as? Map<String, Any?>)?.let { l ->
                     LocationBody(
                         lat = (l["lat"] as? Number)?.toDouble() ?: 0.0,
@@ -731,6 +737,31 @@ class MessagingRepository(
             if (seconds == null) ConvSettingsBody(clearDisappearing = true) else ConvSettingsBody(disappearingSeconds = seconds),
         )
         syncNow()
+    }
+
+    /** The group's shareable link. Admins only, server-side. */
+    suspend fun groupInvite(conversationId: String): Result<GroupInviteDto> = act("get the group link") {
+        api.groupInvite(conversationId)
+    }
+
+    suspend fun resetGroupInvite(conversationId: String): Result<GroupInviteDto> = act("reset the group link") {
+        api.resetGroupInvite(conversationId)
+    }
+
+    suspend fun revokeGroupInvite(conversationId: String): Result<GroupInviteDto> = act("turn off the group link") {
+        api.revokeGroupInvite(conversationId)
+    }
+
+    /** What a shared group link leads to. */
+    suspend fun groupInvitePreview(code: String): Result<GroupInvitePreviewDto> = act("open that group link") {
+        api.groupInvitePreview(code)
+    }
+
+    /** Joins the group behind a link and returns its conversation id. */
+    suspend fun joinGroupByInvite(code: String): Result<String> = act("join that group") {
+        val conv = api.joinGroupByInvite(code)
+        syncNow()
+        conv.id
     }
 
     /** Moves my live location on. Quiet on failure: the next tick tries again. */

@@ -37,6 +37,23 @@ interface ViroMessagingApi {
     @POST("api/v1/messages/conversations/{id}/read")
     suspend fun markRead(@Path("id") id: String): OkResult
 
+    /** The group's shareable link (admins only). */
+    @GET("api/v1/messages/conversations/{id}/invite")
+    suspend fun groupInvite(@Path("id") id: String): GroupInviteDto
+
+    @POST("api/v1/messages/conversations/{id}/invite/reset")
+    suspend fun resetGroupInvite(@Path("id") id: String): GroupInviteDto
+
+    @DELETE("api/v1/messages/conversations/{id}/invite")
+    suspend fun revokeGroupInvite(@Path("id") id: String): GroupInviteDto
+
+    /** What a link leads to, before joining. */
+    @GET("api/v1/messages/groups/invite/{code}")
+    suspend fun groupInvitePreview(@Path("code") code: String): GroupInvitePreviewDto
+
+    @POST("api/v1/messages/groups/invite/{code}/join")
+    suspend fun joinGroupByInvite(@Path("code") code: String): ConvDto
+
     /** Moves my live location on. */
     @PUT("api/v1/messages/{id}/location")
     suspend fun updateLocation(@Path("id") id: String, @Body body: LocationPoint): MsgDto
@@ -215,6 +232,8 @@ data class SendBody(
     val sticker: StickerRef? = null,
     val contact: ContactCardBody? = null,
     val location: LocationBody? = null,
+    /** User ids named with @ in a group message. */
+    val mentions: List<String>? = null,
 )
 
 /** A place, or the start of a live share (liveSeconds: 900, 3600 or 28800). */
@@ -227,6 +246,15 @@ data class LocationBody(
 )
 
 data class LocationPoint(val lat: Double, val lng: Double, val accuracy: Double? = null)
+
+data class GroupInviteDto(val code: String?, val url: String?, val createdAt: String? = null)
+data class GroupInvitePreviewDto(
+    val conversationId: String,
+    val title: String?,
+    val description: String?,
+    val memberCount: Int?,
+    val alreadyMember: Boolean?,
+)
 
 /** A shared contact card: a name, plus numbers and/or a Viro ID. */
 data class ContactCardBody(
@@ -336,6 +364,8 @@ data class ConvDto(
     val peerLastReadAt: String?,
     val peerLastDeliveredAt: String?,
     val pinnedMessageIds: List<String>?,
+    /** Someone named me with @ in a message I haven't read. */
+    val mentionedUnread: Boolean? = null,
     /** Inbox state, mine alone (archive / pin / mark unread). */
     val archived: Boolean? = null,
     val pinnedAt: String? = null,

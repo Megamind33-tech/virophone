@@ -78,6 +78,11 @@ class MainActivity : FragmentActivity() {
     /** A notification tap, or a shared Viro ID link: open a chat, Connections, or Add people. */
     private fun handleOpenIntent(intent: Intent?) {
         if (intent?.action == Intent.ACTION_VIEW) {
+            com.viroreach.app.people.ViroLinks.groupCodeFromUrl(intent.dataString)?.let { code ->
+                AppNavigation.request(AppNavigation.Target(screen = OPEN_JOIN_GROUP, query = code))
+                intent.data = null
+                return
+            }
             com.viroreach.app.people.ViroLinks.viroIdFromUrl(intent.dataString)?.let { id ->
                 AppNavigation.request(AppNavigation.Target(screen = OPEN_FIND_PEOPLE, query = "@$id"))
                 intent.data = null
@@ -112,6 +117,7 @@ class MainActivity : FragmentActivity() {
         const val OPEN_CONNECTIONS = "connections"
         const val OPEN_CONNECTIONS_REQUESTS = "connection_requests"
         const val OPEN_FIND_PEOPLE = "find_people"
+        const val OPEN_JOIN_GROUP = "join_group"
         const val EXTRA_QUERY = "extra_query"
 
         fun incomingCallIntent(context: Context, callId: String, callerName: String): Intent =

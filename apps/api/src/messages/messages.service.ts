@@ -1,4 +1,6 @@
 import { Injectable, HttpStatus, Logger } from '@nestjs/common';
+import { randomBytes } from 'crypto';
+import { publicApiBaseUrl } from '../users/avatar.util';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Conversation } from '../database/entities/conversation.entity';
@@ -52,6 +54,8 @@ export interface SendMessageInput {
   contact?: { name: string; phones?: string[]; viroId?: string; userId?: string };
   /** A place, or the start of a live location share. */
   location?: { lat: number; lng: number; accuracy?: number; label?: string; liveSeconds?: number };
+  /** User ids named with @ in a group message. */
+  mentions?: string[];
 }
 
 export interface PollDto {
@@ -141,6 +145,8 @@ export interface ConversationSummaryDto {
   peerLastReadAt: string | null;
   peerLastDeliveredAt: string | null;
   pinnedMessageIds: string[];
+  /** Someone named me with @ in a message I haven't read. */
+  mentionedUnread: boolean;
   /** Inbox state, mine alone: the other side is never told. */
   archived: boolean;
   pinnedAt: string | null;
@@ -382,14 +388,20 @@ export class MessagesService {
         const senderName = sender?.displayName?.trim() || 'Someone';
         const conv = await this.convRepo.findOne({ where: { id: message.conversationId } });
         const group = conv?.isGroup ? conv.title || 'Group' : null;
+        const mentionsMe = Array.isArray(message.metadata?.mentions)
+          && (message.metadata!.mentions as string[]).includes(uid);
         await this.pushService.sendToUser(uid, {
-          title: group ?? (sender?.displayName?.trim() || 'New message'),
+          title: mentionsMe && group
+            ? `${senderName} mentioned you in ${group}`
+            : group ?? (sender?.displayName?.trim() || 'New message'),
           body: group ? `${senderName}: ${this.pushPreview(message)}` : this.pushPreview(message),
           data: {
             type: 'message',
             conversationId: message.conversationId,
             messageId: message.id,
             senderUserId: message.senderUserId,
+            // A mention reaches someone even in a muted group: that is what @ is for.
+            ...(mentionsMe ? { mention: '1' } : {}),
           },
         });
       }
@@ -580,6 +592,15 @@ export class MessagesService {
     }
     if (type === 'LOCATION' && location) {
       metadata.location = location;
+    }
+    if (input.mentions?.length) {
+      // Only people actually in the conversation, and never the sender: an @
+      // is a way to reach someone here, not a way to probe who exists.
+      const here = new Set(await this.participantIds(conversation.id));
+      const mentioned = Array.from(new Set(input.mentions.map(String)))
+        .filter((id) => id !== senderId && here.has(id))
+        .slice(0, 64);
+      if (mentioned.length) metadata.mentions = mentioned;
     }
     if (type === 'FILE' && input.mediaId) {
       // Carried on the message so a notification can name the document
@@ -835,6 +856,7 @@ export class MessagesService {
       peerLastReadAt: iso(minOf(others.map((o) => o.lastReadAt))),
       peerLastDeliveredAt: iso(minOf(others.map((o) => o.lastDeliveredAt ?? o.lastReadAt))),
       pinnedMessageIds: pins.map((p) => p.messageId),
+      mentionedUnread: await this.hasUnreadMention(userId, conv.id, part.lastReadAt),
       archived: part.archivedAt != null,
       pinnedAt: iso(part.pinnedAt),
       unreadMarked: part.unreadMarked,
@@ -1018,6 +1040,20 @@ export class MessagesService {
       location: { ...current, liveUntil: new Date().toISOString(), updatedAt: new Date().toISOString() },
     };
     return this.saveAndBroadcastLocation(userId, message);
+  }
+
+  /** Has anyone named me with @ since I last read this conversation? */
+  private async hasUnreadMention(userId: string, conversationId: string, lastReadAt: Date | null): Promise<boolean> {
+    const found = await this.msgRepo
+      .createQueryBuilder('m')
+      .where('m.conversation_id = :cid', { cid: conversationId })
+      .andWhere('m.sender_user_id != :uid', { uid: userId })
+      .andWhere('m.deleted_at IS NULL')
+      .andWhere("m.metadata -> 'mentions' @> :me", { me: JSON.stringify([userId]) })
+      .andWhere('m.created_at > :since', { since: lastReadAt ?? new Date(0) })
+      .limit(1)
+      .getCount();
+    return found > 0;
   }
 
   private async liveLocationMessage(userId: string, messageId: string) {
@@ -1419,6 +1455,94 @@ export class MessagesService {
     await this.postSystem(conv.id, creatorId, 'group_created', `created the group “${name}”`);
     const part = (await this.partRepo.findOne({ where: { conversationId: conv.id, userId: creatorId } }))!;
     return this.summarize(creatorId, conv, part);
+  }
+
+  /**
+   * The group's shareable link. Admins only: a link is a way into the group,
+   * so handing one out is an admin's decision. Made on first use.
+   */
+  async groupInvite(userId: string, conversationId: string) {
+    const conv = await this.groupAsAdmin(userId, conversationId);
+    if (!conv.inviteCode) {
+      conv.inviteCode = randomBytes(16).toString('base64url').slice(0, 22);
+      conv.inviteCreatedAt = new Date();
+      conv.inviteCreatedBy = userId;
+      await this.convRepo.save(conv);
+    }
+    return this.inviteDto(conv);
+  }
+
+  /** A new link. The old one stops working immediately. */
+  async resetGroupInvite(userId: string, conversationId: string) {
+    const conv = await this.groupAsAdmin(userId, conversationId);
+    conv.inviteCode = randomBytes(16).toString('base64url').slice(0, 22);
+    conv.inviteCreatedAt = new Date();
+    conv.inviteCreatedBy = userId;
+    await this.convRepo.save(conv);
+    await this.postSystem(conversationId, userId, 'group_invite_reset', 'reset the group link');
+    return this.inviteDto(conv);
+  }
+
+  /** No link at all until an admin makes a new one. */
+  async revokeGroupInvite(userId: string, conversationId: string) {
+    const conv = await this.groupAsAdmin(userId, conversationId);
+    conv.inviteCode = null;
+    conv.inviteCreatedAt = null;
+    conv.inviteCreatedBy = null;
+    await this.convRepo.save(conv);
+    await this.postSystem(conversationId, userId, 'group_invite_revoked', 'turned off the group link');
+    return { code: null, url: null, createdAt: null };
+  }
+
+  /** What someone holding a link sees before deciding to join. */
+  async groupInvitePreview(userId: string, code: string) {
+    const conv = await this.inviteTarget(code);
+    const participants = await this.participantIds(conv.id);
+    return {
+      conversationId: conv.id,
+      title: conv.title,
+      description: conv.description,
+      memberCount: participants.length,
+      alreadyMember: participants.includes(userId),
+    };
+  }
+
+  /** Joins the group behind a link. */
+  async joinGroupByInvite(userId: string, code: string) {
+    const conv = await this.inviteTarget(code);
+    const participants = await this.participantIds(conv.id);
+    if (participants.includes(userId)) {
+      const mine = (await this.partRepo.findOne({ where: { conversationId: conv.id, userId } }))!;
+      return this.summarize(userId, conv, mine);
+    }
+    if (participants.length >= 256) {
+      this.fail('VALIDATION_ERROR', 'That group is full.', HttpStatus.BAD_REQUEST);
+    }
+    // Someone the group's owner blocked doesn't get in through a link.
+    if (conv.createdBy && (await this.blocksService.isBlocked(userId, conv.createdBy))) {
+      this.fail('FORBIDDEN', 'You can\'t join that group.', HttpStatus.FORBIDDEN);
+    }
+    await this.partRepo.save(this.partRepo.create({ conversationId: conv.id, userId, role: 'MEMBER' }));
+    await this.postSystem(conv.id, userId, 'group_joined', 'joined using the group link');
+    const part = (await this.partRepo.findOne({ where: { conversationId: conv.id, userId } }))!;
+    return this.summarize(userId, conv, part);
+  }
+
+  private async inviteTarget(code: string): Promise<Conversation> {
+    const clean = (code || '').trim();
+    const conv = clean ? await this.convRepo.findOne({ where: { inviteCode: clean } }) : null;
+    if (!conv || !conv.isGroup) {
+      this.fail('NOT_FOUND', 'That group link doesn\'t work any more.', HttpStatus.NOT_FOUND);
+    }
+    return conv!;
+  }
+
+  private inviteDto(conv: Conversation) {
+    return {
+      code: conv.inviteCode,
+      url: conv.inviteCode ? `${publicApiBaseUrl()}/api/v1/invite/g/${conv.inviteCode}` : null,
+      createdAt: conv.inviteCreatedAt?.toISOString() ?? null,
+    };
   }
 
   async addMembers(adminId: string, conversationId: string, userIds: string[]) {

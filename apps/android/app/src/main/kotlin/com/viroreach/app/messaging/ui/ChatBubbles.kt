@@ -231,7 +231,7 @@ fun MessageRow(
                         )
                     } ?: Text("Shared contact", color = Color.White, fontSize = 16.sp)
                     else -> {
-                        Text(msg.body.orEmpty(), color = Color.White, fontSize = 16.sp)
+                        Text(withMentionsHighlighted(msg.body.orEmpty(), vibe.accent), color = Color.White, fontSize = 16.sp)
                         msg.linkPreview?.let { LinkPreviewCard(it, media, msg.mine) }
                     }
                 }

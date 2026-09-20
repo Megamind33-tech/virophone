@@ -129,6 +129,9 @@ fun GroupInfoScreen(
     var renaming by remember { mutableStateOf(false) }
     var confirmLeave by remember { mutableStateOf(false) }
     var memberMenu by remember { mutableStateOf<MemberDto?>(null) }
+    var inviteUrl by remember { mutableStateOf<String?>(null) }
+    var inviteBusy by remember { mutableStateOf(false) }
+    var confirmRevoke by remember { mutableStateOf(false) }
     val contacts = rememberViroContacts(session)
 
     suspend fun reload() {
@@ -139,6 +142,10 @@ fun GroupInfoScreen(
     }
     LaunchedEffect(conversationId) { reload() }
     val iAmAdmin = members.firstOrNull { it.userId == me }?.role == "ADMIN"
+    // The link is an admin thing; asking for it is what creates it.
+    LaunchedEffect(iAmAdmin) {
+        if (iAmAdmin) session.messaging.groupInvite(conversationId).onSuccess { inviteUrl = it.url }
+    }
 
     BackHandler { onBack() }
     Column(Modifier.fillMaxSize().background(ViroColors.NavyBackground).systemBarsPadding()) {
@@ -169,6 +176,74 @@ fun GroupInfoScreen(
                     }
                 }
             }
+            if (iAmAdmin) {
+                item {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Link, null, tint = ViroColors.accent)
+                            Spacer(Modifier.width(14.dp))
+                            Text("Invite with a link", color = Color.White, modifier = Modifier.weight(1f))
+                        }
+                        Text(
+                            inviteUrl ?: "Making a link…",
+                            color = ViroColors.textSecondary,
+                            fontSize = 12.sp,
+                            maxLines = 2,
+                            modifier = Modifier.padding(top = 4.dp, start = 38.dp),
+                        )
+                        Row(Modifier.padding(start = 30.dp)) {
+                            TextButton(
+                                onClick = {
+                                    inviteUrl?.let { url ->
+                                        val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                            type = "text/plain"
+                                            putExtra(
+                                                android.content.Intent.EXTRA_TEXT,
+                                                "Join " + (conv?.title ?: "our group") + " on Viro: " + url,
+                                            )
+                                        }
+                                        runCatching {
+                                            context.startActivity(android.content.Intent.createChooser(send, "Share group link"))
+                                        }
+                                    }
+                                },
+                                enabled = inviteUrl != null,
+                            ) { Text("Share") }
+                            TextButton(
+                                onClick = {
+                                    inviteUrl?.let { url ->
+                                        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+                                        clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Viro group link", url))
+                                        Toast.makeText(context, "Link copied", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                enabled = inviteUrl != null,
+                            ) { Text("Copy") }
+                            TextButton(
+                                onClick = {
+                                    if (inviteBusy) return@TextButton
+                                    inviteBusy = true
+                                    scope.launch {
+                                        session.messaging.resetGroupInvite(conversationId)
+                                            .onSuccess {
+                                                inviteUrl = it.url
+                                                Toast.makeText(context, "New link made. The old one no longer works.", Toast.LENGTH_LONG).show()
+                                            }
+                                            .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_SHORT).show() }
+                                        inviteBusy = false
+                                    }
+                                },
+                                enabled = !inviteBusy,
+                            ) { Text("Reset") }
+                            if (inviteUrl != null) {
+                                TextButton(onClick = { confirmRevoke = true }, enabled = !inviteBusy) {
+                                    Text("Turn off", color = ViroColors.consumerError)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             items(members, key = { it.userId }) { m ->
                 Row(
                     Modifier.fillMaxWidth().clickable(enabled = iAmAdmin && m.userId != me) { memberMenu = m }
@@ -189,6 +264,25 @@ fun GroupInfoScreen(
                 }
             }
         }
+    }
+
+    if (confirmRevoke) {
+        AlertDialog(
+            onDismissRequest = { confirmRevoke = false },
+            title = { Text("Turn off the group link?") },
+            text = { Text("Nobody can join with the current link any more. You can make a new one later.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRevoke = false
+                    scope.launch {
+                        session.messaging.revokeGroupInvite(conversationId)
+                            .onSuccess { inviteUrl = null }
+                            .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_SHORT).show() }
+                    }
+                }) { Text("Turn off", color = ViroColors.consumerError) }
+            },
+            dismissButton = { TextButton(onClick = { confirmRevoke = false }) { Text("Cancel") } },
+        )
     }
 
     memberMenu?.let { m ->

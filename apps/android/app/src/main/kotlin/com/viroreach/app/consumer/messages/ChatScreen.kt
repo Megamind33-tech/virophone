@@ -684,11 +684,27 @@ fun ChatScreen(
                     }
                 },
                 stickersOpen = stickersOpen,
+                // Naming someone with @ only means something in a group.
+                mentionable = if (isGroup) {
+                    memberNames.filter { (id, _) -> id != me }
+                        .map { (id, name) -> com.viroreach.app.messaging.ui.MentionTarget(id, name) }
+                        .sortedBy { it.name.lowercase() }
+                } else {
+                    emptyList()
+                },
                 onAction = { a ->
                     when (a) {
                         is ComposerAction.Text -> {
                             val preview = draftPreview?.takeIf { p -> a.body.contains(p.url) || draftUrl?.let { a.body.contains(it) } == true }
-                            sendOut(MessagingRepository.Outgoing(body = a.body, deliverAt = a.deliverAt, effect = a.effect, linkPreview = preview))
+                            sendOut(
+                                MessagingRepository.Outgoing(
+                                    body = a.body,
+                                    deliverAt = a.deliverAt,
+                                    effect = a.effect,
+                                    linkPreview = preview,
+                                    mentions = a.mentions,
+                                ),
+                            )
                             draftPreview = null
                             draftUrl = null
                         }

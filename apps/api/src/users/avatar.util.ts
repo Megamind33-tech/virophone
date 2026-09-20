@@ -7,6 +7,15 @@ export function avatarUploadDir(): string {
   return process.env.AVATAR_UPLOAD_DIR || path.join(process.cwd(), 'uploads', 'avatars');
 }
 
+/** The address phones reach this server on, with no trailing slash. */
+export function publicApiBaseUrl(): string {
+  return (
+    process.env.API_PUBLIC_URL ||
+    process.env.API_BASE_URL ||
+    `http://localhost:${process.env.API_PORT || 3001}`
+  ).replace(/\/$/, '');
+}
+
 export function publicAvatarBaseUrl(): string {
   // API_BASE_URL is the one the VPS compose file actually sets; API_PUBLIC_URL
   // was never passed into the container, so production built every avatar URL
