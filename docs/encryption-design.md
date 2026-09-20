@@ -191,10 +191,15 @@ numbers so it can be verified rather than trusted.
 - **History does not follow you to a new phone.** An envelope can be opened
   once, by the device it was addressed to. Stage 3 (encrypted backup with a
   recovery key) is what fixes this.
-- **Download size**: libsignal's native library adds roughly 14 MB per
-  architecture. Release builds are limited to `arm64-v8a` and `armeabi-v7a`,
-  and the library's desktop builds — which ride along inside its jar — are
-  excluded from packaging.
+- **Download size**: libsignal ships its native library with debug symbols —
+  about 60 MB per architecture, and no NDK on the build machine means AGP
+  cannot strip it. Three things keep the download sane: only the two ARM
+  architectures (real phones), the libraries stored compressed rather than
+  page-aligned, and the library's desktop builds — which ride along inside its
+  jar — excluded from packaging. The debug APK went from 114 MB before
+  encryption to 79 MB after, because dropping the two x86 architectures pays
+  for libsignal twice over. Installing an NDK would strip the symbols and cut
+  it further; that is the better fix when there is bandwidth for it.
 
 ### Why libsignal 0.72.0 and not the newest
 
