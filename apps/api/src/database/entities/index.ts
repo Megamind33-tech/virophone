@@ -12,3 +12,4 @@ export { Plan } from './plan.entity';
 export { Subscription } from './subscription.entity';
 export { SecurityEvent } from './security-event.entity';
 export { OtpChallenge } from './otp-challenge.entity';
+export { DeviceIdentityKey, DeviceOneTimePrekey, MessageEnvelope } from './e2ee.entity';

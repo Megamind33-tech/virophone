@@ -262,6 +262,7 @@ export const VIRO_WEB_PAGE = `<!doctype html>
     var m = c.lastMessage;
     if (!m) return '';
     if (m.deletedAt) return 'This message was deleted';
+    if (m.type === 'ENCRYPTED') return '🔒 Encrypted message';
     if (m.type === 'VOICE') return '🎤 Voice message';
     if (m.type === 'IMAGE') return '📷 Photo';
     if (m.type === 'FILE') return '📎 ' + ((m.metadata && m.metadata.file && m.metadata.file.name) || 'Document');
@@ -304,6 +305,12 @@ export const VIRO_WEB_PAGE = `<!doctype html>
     var chat = state.chats.filter(function (c) { return c.id === id; })[0];
     el('peer').textContent = chat ? titleOf(chat) : 'Chat';
     el('composer').style.display = 'flex';
+    // An encrypted chat can only be written to by something that holds keys,
+    // and this page holds none. Reading is still possible; sending is not.
+    var locked = !!(chat && chat.encrypted);
+    el('draft').disabled = locked;
+    el('draft').placeholder = locked ? 'Encrypted chat — reply from your phone' : 'Message';
+    el('composer').querySelector('button').disabled = locked;
     if (window.matchMedia('(max-width: 760px)').matches) {
       el('list').classList.add('hide');
       el('thread').classList.remove('hide');
@@ -343,6 +350,12 @@ export const VIRO_WEB_PAGE = `<!doctype html>
     if (m.deletedAt) {
       body.textContent = 'This message was deleted';
       body.style.fontStyle = 'italic';
+    } else if (m.type === 'ENCRYPTED') {
+      // This computer holds no keys of its own, so it genuinely cannot read
+      // this. Saying so is better than an empty bubble.
+      body.textContent = '🔒 Encrypted message — open it on your phone';
+      body.style.fontStyle = 'italic';
+      body.style.opacity = '0.75';
     } else if (m.type === 'IMAGE' && m.media) {
       var img = document.createElement('img');
       img.alt = 'Photo';

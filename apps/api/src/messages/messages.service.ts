@@ -17,8 +17,10 @@ import {
   MessageView,
   PollVote,
 } from '../database/entities/messaging-extras.entity';
+import { MessageEnvelope } from '../database/entities/e2ee.entity';
 import { ViroConnection } from '../database/entities/viro-connection.entity';
 import { Profile } from '../database/entities/profile.entity';
+import { KeysService } from '../e2ee/keys.service';
 import { BlocksService } from '../blocks/blocks.service';
 import { PushService } from '../push/push.service';
 import { RealtimeRegistry } from '../realtime/realtime.registry';
@@ -57,6 +59,12 @@ export interface SendMessageInput {
   location?: { lat: number; lng: number; accuracy?: number; label?: string; liveSeconds?: number };
   /** User ids named with @ in a group message. */
   mentions?: string[];
+  /**
+   * End-to-end encrypted sends: one sealed copy per recipient device,
+   * including the sender's own other devices. The server stores these as they
+   * arrive and never holds a key that could open one.
+   */
+  envelopes?: { deviceId: string; ciphertext: string; type?: number }[];
 }
 
 export interface PollDto {
@@ -78,6 +86,11 @@ const LIVE_LOCATION_CHOICES = [15 * 60, 60 * 60, 8 * 60 * 60];
 
 /** ~11 cm of precision: enough to find someone, and no more than that. */
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
+
+/** A sealed text message, generously: the ciphertext of 4000 characters plus its headers. */
+const MAX_ENVELOPE_CHARS = 24_000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const BASE64_RE = /^[A-Za-z0-9+/=]+$/;
 
 /** GIFs play straight from the provider's CDN; nothing else is accepted. */
 const GIF_HOSTS = /^https:\/\/([a-z0-9-]+\.)*(giphy\.com|tenor\.com)\//i;
@@ -128,6 +141,12 @@ export interface MessageDto {
   starred: boolean;
   metadata: Record<string, unknown> | null;
   poll: PollDto | null;
+  /**
+   * For an encrypted message: the sealed copies addressed to the reader's own
+   * devices. A device opens the one matching its id and ignores the rest; a
+   * device that finds none was not part of the chat when this was sent.
+   */
+  envelopes: { deviceId: string; ciphertext: string; type: number }[] | null;
 }
 
 export interface ConversationSummaryDto {
@@ -158,6 +177,8 @@ export interface ConversationSummaryDto {
   archived: boolean;
   pinnedAt: string | null;
   unreadMarked: boolean;
+  /** End-to-end encrypted: the server carries this chat without reading it. */
+  encrypted: boolean;
 }
 
 /**
@@ -179,6 +200,8 @@ const iso = (d: Date | string | null | undefined): string | null =>
 @Injectable()
 export class MessagesService {
   private readonly logger = new Logger('Messages');
+  /** Spent prekeys are swept from here, but only now and then. */
+  private lastPrekeySweep = 0;
 
   constructor(
     @InjectRepository(Conversation)
@@ -209,6 +232,9 @@ export class MessagesService {
     private readonly profileRepo: Repository<Profile>,
     @InjectRepository(PollVote)
     private readonly pollRepo: Repository<PollVote>,
+    @InjectRepository(MessageEnvelope)
+    private readonly envelopeRepo: Repository<MessageEnvelope>,
+    private readonly keysService: KeysService,
     private readonly blocksService: BlocksService,
     private readonly pushService: PushService,
     private readonly realtime: RealtimeRegistry,
@@ -219,6 +245,41 @@ export class MessagesService {
 
   private fail(code: string, message: string, status: HttpStatus): never {
     throw new ViroException(code as never, message, status);
+  }
+
+  /**
+   * Reads the sealed copies off a send, or null for an ordinary message.
+   *
+   * Only their shape is checked — a device id, some ciphertext, and which kind
+   * of envelope it is. The contents are meaningless here by design.
+   */
+  private sealedEnvelopes(
+    input: SendMessageInput,
+    type: string,
+  ): { deviceId: string; ciphertext: string; type: number }[] | null {
+    const raw = Array.isArray(input.envelopes) ? input.envelopes : [];
+    if (raw.length === 0) return null;
+    if (type !== 'TEXT' || input.mediaId || input.poll || input.gif || input.sticker || input.contact || input.location) {
+      // Files, polls and places follow in Stage 2; sending them now would mean
+      // storing them in the clear next to a message that claims to be sealed.
+      this.fail('VALIDATION_ERROR', 'Only text can be sent encrypted for now.', HttpStatus.BAD_REQUEST);
+    }
+    const out: { deviceId: string; ciphertext: string; type: number }[] = [];
+    const seen = new Set<string>();
+    for (const e of raw) {
+      const deviceId = String(e?.deviceId ?? '').trim();
+      const ciphertext = String(e?.ciphertext ?? '').trim();
+      const kind = Number(e?.type);
+      if (!UUID_RE.test(deviceId) || seen.has(deviceId)) {
+        this.fail('VALIDATION_ERROR', 'Invalid envelope.', HttpStatus.BAD_REQUEST);
+      }
+      if (!ciphertext || ciphertext.length > MAX_ENVELOPE_CHARS || !BASE64_RE.test(ciphertext)) {
+        this.fail('VALIDATION_ERROR', 'Invalid envelope.', HttpStatus.BAD_REQUEST);
+      }
+      seen.add(deviceId);
+      out.push({ deviceId, ciphertext, type: Number.isInteger(kind) && kind > 0 ? kind : 1 });
+    }
+    return out;
   }
 
   /** Finds or creates the canonical 1:1 conversation for two users. */
@@ -290,6 +351,13 @@ export class MessagesService {
     const mediaIds = [...new Set(msgs.map((m) => m.mediaId).filter((x): x is string => !!x))];
     const pollIds = msgs.filter((m) => m.type === 'POLL').map((m) => m.id);
     const votes = pollIds.length ? await this.pollRepo.find({ where: { messageId: In(pollIds) } }) : [];
+    // Sealed copies addressed to this reader's own devices. All of them are
+    // returned rather than only the asking device's, because a websocket frame
+    // goes to every device at once and each picks out its own.
+    const sealedIds = msgs.filter((m) => m.type === 'ENCRYPTED').map((m) => m.id);
+    const sealed = sealedIds.length
+      ? await this.envelopeRepo.find({ where: { messageId: In(sealedIds), userId: viewerId } })
+      : [];
     const [reactions, replies, media, views, stars] = await Promise.all([
       this.reactionRepo.find({ where: { messageId: In(ids) } }),
       replyIds.length ? this.msgRepo.find({ where: { id: In(replyIds) } }) : Promise.resolve([]),
@@ -349,6 +417,12 @@ export class MessagesService {
         starred: starred.has(m.id),
         metadata: m.metadata,
         poll: m.type === 'POLL' && !deleted ? this.pollDto(m, votes.filter((v) => v.messageId === m.id), viewerId) : null,
+        envelopes:
+          m.type === 'ENCRYPTED' && !deleted
+            ? sealed
+                .filter((e) => e.messageId === m.id)
+                .map((e) => ({ deviceId: e.deviceId, ciphertext: e.ciphertext, type: e.envelopeType }))
+            : null,
       };
     });
   }
@@ -418,6 +492,9 @@ export class MessagesService {
   }
 
   private pushPreview(m: Message): string {
+    // The server cannot read an encrypted message, so it cannot preview one.
+    // The phone decrypts on wake and replaces this with the real text.
+    if (m.type === 'ENCRYPTED') return 'New message';
     if (m.viewOnce) return 'View once message';
     if (m.type === 'VOICE') return '🎤 Voice message';
     if (m.type === 'IMAGE') return m.body ? `📷 ${m.body.slice(0, 100)}` : '📷 Photo';
@@ -448,8 +525,12 @@ export class MessagesService {
     if (!['TEXT', 'VOICE', 'IMAGE', 'LOOP', 'POLL', 'GIF', 'STICKER', 'FILE', 'CONTACT', 'LOCATION'].includes(type)) {
       this.fail('VALIDATION_ERROR', 'Unsupported message type.', HttpStatus.BAD_REQUEST);
     }
-    const body = (input.body || '').trim();
-    if (type === 'TEXT' && !body) {
+    // An end-to-end encrypted send. The content arrives already sealed, once
+    // per recipient device, so none of the plaintext handling below applies:
+    // there is nothing here for the server to read, validate or preview.
+    const sealed = this.sealedEnvelopes(input, type);
+    const body = sealed ? '' : (input.body || '').trim();
+    if (type === 'TEXT' && !body && !sealed) {
       this.fail('VALIDATION_ERROR', 'Message body is required.', HttpStatus.BAD_REQUEST);
     }
     if ((type === 'VOICE' || type === 'IMAGE' || type === 'FILE') && !input.mediaId) {
@@ -542,6 +623,41 @@ export class MessagesService {
       if (await this.blocksService.isBlocked(senderId, rid)) {
         this.fail('FORBIDDEN', 'This person is unavailable.', HttpStatus.FORBIDDEN);
       }
+    }
+
+    // A chat does not quietly stop being encrypted. Once it is, a client that
+    // cannot encrypt — an old build, or the web companion — is refused rather
+    // than allowed to drop one readable message into it.
+    if (!sealed && conversation.encrypted) {
+      this.fail(
+        'E2EE_NOT_AVAILABLE',
+        'This chat is end-to-end encrypted. Send from a device that can encrypt.',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    // Every sealed copy must be addressed to a device that belongs in this
+    // conversation, and everyone here must have been given one: a message half
+    // the chat cannot open would be worse than no message at all.
+    let sealedRows: { deviceId: string; userId: string; ciphertext: string; type: number }[] = [];
+    if (sealed) {
+      const known = await this.keysService.encryptableDevices([senderId, ...recipientIds]);
+      const ownerOf = new Map(known.map((d) => [d.deviceId, d.userId]));
+      for (const e of sealed) {
+        if (!ownerOf.has(e.deviceId)) {
+          this.fail('VALIDATION_ERROR', 'That device is not part of this conversation.', HttpStatus.BAD_REQUEST);
+        }
+      }
+      const covered = new Set(sealed.map((e) => ownerOf.get(e.deviceId)));
+      for (const uid of recipientIds) {
+        if (!known.some((d) => d.userId === uid)) {
+          this.fail('E2EE_NOT_AVAILABLE', 'This person cannot receive encrypted messages yet.', HttpStatus.CONFLICT);
+        }
+        if (!covered.has(uid)) {
+          this.fail('VALIDATION_ERROR', 'Everyone in this chat needs their own copy.', HttpStatus.BAD_REQUEST);
+        }
+      }
+      sealedRows = sealed.map((e) => ({ ...e, userId: ownerOf.get(e.deviceId)! }));
     }
 
     // Idempotency on client-supplied id (safe retries / offline outbox flush).
@@ -650,7 +766,7 @@ export class MessagesService {
         senderUserId: senderId,
         senderDeviceId: senderDeviceId ?? null,
         clientMsgId: input.clientMsgId ?? null,
-        type,
+        type: sealed ? 'ENCRYPTED' : type,
         body: body || null,
         updatedAt: now,
         replyToId: input.replyToId ?? null,
@@ -659,11 +775,30 @@ export class MessagesService {
         forwarded: !!input.forwarded,
         deliverAt,
         expiresAt,
-        metadata: Object.keys(metadata).length ? metadata : null,
+        metadata: sealed ? null : Object.keys(metadata).length ? metadata : null,
       }),
     );
 
-    if (mentionedUserIds.length) {
+    if (sealedRows.length) {
+      await this.envelopeRepo.save(
+        sealedRows.map((e) =>
+          this.envelopeRepo.create({
+            messageId: message.id,
+            deviceId: e.deviceId,
+            userId: e.userId,
+            ciphertext: e.ciphertext,
+            envelopeType: e.type,
+          }),
+        ),
+      );
+      // From here on this chat is encrypted, and stays that way.
+      if (!conversation.encrypted) {
+        await this.convRepo.update({ id: conversation.id }, { encrypted: true });
+        conversation.encrypted = true;
+      }
+    }
+
+    if (mentionedUserIds.length && !sealed) {
       await this.mentionRepo.save(
         mentionedUserIds.map((uid) =>
           this.mentionRepo.create({
@@ -790,6 +925,9 @@ export class MessagesService {
     m.metadata = null;
     await this.msgRepo.save(m);
     await this.reactionRepo.delete({ messageId: m.id });
+    // Deleted for everyone means gone: the sealed copies go with it, or the
+    // ciphertext would sit on the server after the message it holds is gone.
+    if (m.type === 'ENCRYPTED') await this.envelopeRepo.delete({ messageId: m.id });
     if (mediaId) await this.deleteMedia([mediaId]);
     await this.emitMessage('message.updated', m, await this.participantIds(m.conversationId));
     return { ok: true };
@@ -891,6 +1029,7 @@ export class MessagesService {
       archived: part.archivedAt != null,
       pinnedAt: iso(part.pinnedAt),
       unreadMarked: part.unreadMarked,
+      encrypted: !!conv.encrypted,
     };
   }
 
@@ -1325,6 +1464,13 @@ export class MessagesService {
           messageIds,
         });
       }
+    }
+
+    // Prekeys that were handed out a month ago are dead weight. Once an hour
+    // is plenty; the sweeper itself runs every fifteen seconds.
+    if (Date.now() - this.lastPrekeySweep > 3600_000) {
+      this.lastPrekeySweep = Date.now();
+      await this.keysService.sweepConsumedPrekeys();
     }
   }
 

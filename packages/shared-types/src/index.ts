@@ -103,6 +103,8 @@ export type ApiErrorCode =
   | 'TOKEN_REUSE_DETECTED'
   | 'DEVICE_REVOKED'
   | 'ACCOUNT_SUSPENDED'
+  /** The other side has no published keys yet, so this cannot be sent encrypted. */
+  | 'E2EE_NOT_AVAILABLE'
   | 'INTERNAL_ERROR';
 
 export interface ApiError {

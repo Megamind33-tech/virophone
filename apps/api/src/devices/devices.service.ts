@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { Device } from '../database/entities/device.entity';
+import { KeysService } from '../e2ee/keys.service';
 import { ViroException } from '../common/exceptions/viro.exception';
 import { HttpStatus } from '@nestjs/common';
 
@@ -9,6 +10,7 @@ import { HttpStatus } from '@nestjs/common';
 export class DevicesService {
   constructor(
     @InjectRepository(Device) private readonly deviceRepo: Repository<Device>,
+    private readonly keys: KeysService,
   ) {}
 
   async register(userId: string, publicKey: string, platform: string, appVersion: string) {
@@ -30,6 +32,10 @@ export class DevicesService {
       throw new ViroException('NOT_FOUND', 'Device not found.', HttpStatus.NOT_FOUND);
     }
     device.revokedAt = new Date();
-    return this.deviceRepo.save(device);
+    const saved = await this.deviceRepo.save(device);
+    // A revoked device must stop being a destination: its published keys go,
+    // so nobody starts a new session with something this person no longer has.
+    await this.keys.forgetDevice(device.id);
+    return saved;
   }
 }

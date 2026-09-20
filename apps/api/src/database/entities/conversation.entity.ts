@@ -52,6 +52,14 @@ export class Conversation {
   @Column({ name: 'reset_at', type: 'timestamptz', nullable: true })
   resetAt!: Date | null;
 
+  /**
+   * Set the first time an end-to-end encrypted message arrives here, so every
+   * device of everyone in the chat knows to keep sending that way. It is never
+   * unset: a chat does not quietly stop being encrypted.
+   */
+  @Column({ type: 'boolean', default: false })
+  encrypted!: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

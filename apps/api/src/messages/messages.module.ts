@@ -23,8 +23,10 @@ import { GifService } from './gif.service';
 import { TranscriptionService } from './transcription.service';
 import { ViroConnection } from '../database/entities/viro-connection.entity';
 import { Profile } from '../database/entities/profile.entity';
+import { MessageEnvelope } from '../database/entities/e2ee.entity';
 import { BlocksModule } from '../blocks/blocks.module';
 import { PushModule } from '../push/push.module';
+import { E2eeModule } from '../e2ee/e2ee.module';
 
 @Module({
   imports: [
@@ -43,9 +45,11 @@ import { PushModule } from '../push/push.module';
       Profile,
       PollVote,
       MessageMention,
+      MessageEnvelope,
     ]),
     BlocksModule,
     PushModule,
+    E2eeModule,
   ],
   controllers: [MessagesController],
   providers: [MessagesService, MessagesSweeper, MediaStore, LinkPreviewService, GifService, TranscriptionService],

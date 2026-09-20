@@ -72,3 +72,6 @@ infra/livekit/livekit.vps.yaml
 livekit-tls/
 apps/android/app/google-services.json
 secrets/
+
+# Media written by the encryption-at-rest integration test
+.tmp-encrypted-media/

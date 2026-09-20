@@ -63,6 +63,12 @@ class SendMessageDto {
   @IsObject() @IsOptional() contact?: { name: string; phones?: string[]; viroId?: string; userId?: string };
   @IsObject() @IsOptional() location?: { lat: number; lng: number; accuracy?: number; label?: string; liveSeconds?: number };
   @IsArray() @IsOptional() @ArrayMaxSize(64) mentions?: string[];
+  /**
+   * One sealed copy per recipient device. When these are present the server
+   * stores nothing else: no body, no metadata, nothing it could read.
+   */
+  @IsArray() @IsOptional() @ArrayMaxSize(64)
+  envelopes?: { deviceId: string; ciphertext: string; type?: number }[];
 }
 
 class GroupDto {
