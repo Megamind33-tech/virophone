@@ -365,7 +365,7 @@ describe('End-to-end encryption (server)', () => {
     expect(res.body.code).toBe('E2EE_NOT_AVAILABLE');
   });
 
-  it('refuses to seal anything but text for now', async () => {
+  it('refuses content sent beside the ciphertext rather than inside it', async () => {
     if (skip()) return;
     await http()
       .post('/api/v1/messages')
@@ -374,10 +374,160 @@ describe('End-to-end encryption (server)', () => {
         conversationId: cid,
         type: 'LOCATION',
         clientMsgId: 'enc-loc',
+        // Where someone is belongs inside the sealed message, not next to it.
         location: { lat: -15.4, lng: 28.3 },
         envelopes: [{ deviceId: bobPhone.deviceId, ciphertext: seal('x') }],
       })
       .expect(400);
+  });
+
+  // ------------------------------------------------------- files and places
+
+  /** Every device of both people, so a send is never refused for missing one. */
+  const everyone = (text: string) =>
+    [bobPhone, bobLaptop, alicePhone].map((s) => ({ deviceId: s.deviceId, ciphertext: seal(text), type: 1 }));
+
+  it('stores a sealed file as bytes, describing none of it', async () => {
+    if (skip()) return;
+    // What the phone uploads is ciphertext: not a JPEG, not anything.
+    const ciphertext = Buffer.from('VIROSEALED not-a-real-photo');
+    const upload = await http()
+      .post('/api/v1/messages/media')
+      .set(as(alicePhone))
+      .field('kind', 'IMAGE')
+      .field('sealed', '1')
+      .field('fileName', 'holiday.jpg')
+      .attach('file', ciphertext, { filename: 'holiday.jpg', contentType: 'image/jpeg' })
+      .expect(201);
+
+    const rows = await sql(
+      'SELECT kind, mime, original_name, duration_ms, waveform, width, height, sealed FROM media_objects WHERE id = $1',
+      [upload.body.id],
+    );
+    expect(rows[0].sealed).toBe(true);
+    expect(rows[0].mime).toBe('application/octet-stream');
+    // The name the sender saw is content; it travels inside the message.
+    expect(rows[0].original_name).toBeNull();
+    expect(rows[0].width).toBeNull();
+    expect(rows[0].duration_ms).toBeNull();
+
+    const sent = await http()
+      .post('/api/v1/messages')
+      .set(as(alicePhone))
+      .send({
+        conversationId: cid,
+        type: 'IMAGE',
+        clientMsgId: 'enc-photo',
+        mediaId: upload.body.id,
+        envelopes: everyone('the photo key and its real name'),
+      })
+      .expect(201);
+    expect(sent.body.message.type).toBe('ENCRYPTED');
+
+    // Bob can fetch the bytes, and they are exactly what Alice uploaded.
+    const download = await http().get(`/api/v1/messages/media/${upload.body.id}`).set(as(bobPhone)).expect(200);
+    expect(Buffer.from(download.body).equals(ciphertext)).toBe(true);
+  });
+
+  it('will not try to transcribe a voice note it cannot hear', async () => {
+    if (skip()) return;
+    const upload = await http()
+      .post('/api/v1/messages/media')
+      .set(as(alicePhone))
+      .field('kind', 'VOICE')
+      .field('sealed', '1')
+      .attach('file', Buffer.from('sealed audio bytes'), { filename: 'note.m4a', contentType: 'audio/mp4' })
+      .expect(201);
+    const res = await http()
+      .post(`/api/v1/messages/media/${upload.body.id}/transcribe`)
+      .set(as(alicePhone))
+      .expect(409);
+    expect(res.body.code).toBe('E2EE_NOT_AVAILABLE');
+  });
+
+  it('counts votes on a poll it cannot read', async () => {
+    if (skip()) return;
+    const sent = await http()
+      .post('/api/v1/messages')
+      .set(as(alicePhone))
+      .send({
+        conversationId: cid,
+        type: 'POLL',
+        clientMsgId: 'enc-poll',
+        envelopes: everyone('Where shall we meet? | Cairo Road | Manda Hill'),
+      })
+      .expect(201);
+    const id = sent.body.message.id;
+
+    await http().put(`/api/v1/messages/${id}/vote`).set(as(bobPhone)).send({ options: [1] }).expect(200);
+    const history = await http().get(`/api/v1/messages/conversations/${cid}`).set(as(alicePhone)).expect(200);
+    const poll = history.body.find((m: any) => m.clientMsgId === 'enc-poll');
+    expect(poll.pollVotes).toEqual([{ userId: bobPhone.userId, optionIndex: 1 }]);
+    // The server holds a number and a person, and nothing that says what the
+    // number means.
+    const rows = await sql('SELECT body, metadata::text AS meta FROM messages WHERE id = $1', [id]);
+    expect(rows[0].body).toBeNull();
+    expect(rows[0].meta).toBeNull();
+  });
+
+  it('carries a live location without ever seeing where', async () => {
+    if (skip()) return;
+    const sent = await http()
+      .post('/api/v1/messages')
+      .set(as(alicePhone))
+      .send({
+        conversationId: cid,
+        type: 'LOCATION',
+        clientMsgId: 'enc-live',
+        liveSeconds: 900,
+        envelopes: everyone('-15.386, 28.317'),
+      })
+      .expect(201);
+    const id = sent.body.message.id;
+    expect(sent.body.message.liveUntil).toBeTruthy();
+
+    // Moving on replaces what each device holds.
+    await http()
+      .put(`/api/v1/messages/${id}/location`)
+      .set(as(alicePhone))
+      .send({ envelopes: everyone('-15.400, 28.320') })
+      .expect(200);
+    const after = await sql('SELECT ciphertext FROM message_envelopes WHERE message_id = $1', [id]);
+    expect(after).toHaveLength(3);
+    for (const row of after) {
+      expect(Buffer.from(row.ciphertext, 'base64').toString()).toBe('-15.400, 28.320');
+    }
+
+    // Ending the share closes the window the server knows about.
+    await http().post(`/api/v1/messages/${id}/location/stop`).set(as(alicePhone)).expect(201);
+    const stopped = await sql('SELECT live_until FROM messages WHERE id = $1', [id]);
+    expect(new Date(stopped[0].live_until).getTime()).toBeLessThanOrEqual(Date.now());
+    await http()
+      .put(`/api/v1/messages/${id}/location`)
+      .set(as(alicePhone))
+      .send({ envelopes: everyone('-15.500, 28.400') })
+      .expect(400);
+  });
+
+  it('lets an @ reach someone in a message the server cannot read', async () => {
+    if (skip()) return;
+    const group = await http().post('/api/v1/messages/groups').set(as(alicePhone))
+      .send({ title: 'Plans', memberIds: [bobPhone.userId] }).expect(201);
+    // Groups are not encrypted yet, so this is the mention table doing its job
+    // for a sealed direct message instead.
+    expect(group.body.id).toBeTruthy();
+    const sent = await http()
+      .post('/api/v1/messages')
+      .set(as(alicePhone))
+      .send({
+        conversationId: cid,
+        clientMsgId: 'enc-mention',
+        mentions: [bobPhone.userId],
+        envelopes: everyone('@Bob are you coming'),
+      })
+      .expect(201);
+    const rows = await sql('SELECT user_id FROM message_mentions WHERE message_id = $1', [sent.body.message.id]);
+    expect(rows.map((r: any) => r.user_id)).toEqual([bobPhone.userId]);
   });
 
   it('takes the ciphertext away when the sender deletes for everyone', async () => {

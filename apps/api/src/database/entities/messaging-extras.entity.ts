@@ -126,6 +126,14 @@ export class MediaObject {
   @Column({ type: 'integer', nullable: true })
   height!: number | null;
 
+  /**
+   * End-to-end encrypted: these bytes are ciphertext the server cannot read.
+   * Nothing here may be interpreted — not the mime type, not the size beyond
+   * billing it, and certainly not transcription.
+   */
+  @Column({ type: 'boolean', default: false })
+  sealed!: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 }

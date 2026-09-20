@@ -30,6 +30,16 @@ export class TranscriptionService {
     const media = await this.messages.media(mediaId);
     if (!file || !media) throw new ViroException('NOT_FOUND' as never, 'Voice note not available.', HttpStatus.NOT_FOUND);
     if (media.kind !== 'VOICE') throw new ViroException('VALIDATION_ERROR' as never, 'Only voice notes can be transcribed.', HttpStatus.BAD_REQUEST);
+    // An end-to-end encrypted voice note is noise to this server, and saying
+    // so plainly is better than sending noise to Whisper and returning
+    // whatever it makes of it.
+    if (media.sealed) {
+      throw new ViroException(
+        'E2EE_NOT_AVAILABLE',
+        'This voice note is end-to-end encrypted, so it cannot be transcribed here.',
+        HttpStatus.CONFLICT,
+      );
+    }
     if (media.transcript !== null && media.transcript !== undefined) {
       return { text: media.transcript, language: media.transcriptLang };
     }

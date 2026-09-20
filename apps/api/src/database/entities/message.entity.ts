@@ -58,6 +58,13 @@ export class Message {
   deliverAt!: Date | null;
 
   /**
+   * When a live location share ends. For sealed messages this is the only
+   * thing the server knows about it: when, never where.
+   */
+  @Column({ name: 'live_until', type: 'timestamptz', nullable: true })
+  liveUntil!: Date | null;
+
+  /**
    * Encrypted at rest, so it can no longer be queried inside: anything the
    * server searches on lives in its own table (see message_mentions).
    */

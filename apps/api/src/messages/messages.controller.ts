@@ -69,6 +69,11 @@ class SendMessageDto {
    */
   @IsArray() @IsOptional() @ArrayMaxSize(64)
   envelopes?: { deviceId: string; ciphertext: string; type?: number }[];
+  /**
+   * For a sealed live location: how long the share runs. Where the person is
+   * goes inside the ciphertext — this says only when to stop carrying updates.
+   */
+  @IsInt() @IsOptional() liveSeconds?: number;
 }
 
 class GroupDto {
@@ -94,6 +99,18 @@ class LocationPointDto {
   @IsNumber() @Min(-90) @Max(90) lat!: number;
   @IsNumber() @Min(-180) @Max(180) lng!: number;
   @IsNumber() @IsOptional() @Min(0) accuracy?: number;
+}
+
+/**
+ * Either a position, or — when the share is encrypted — sealed copies of it,
+ * one per device. Never both: a sealed share has no coordinates to send.
+ */
+class LiveLocationUpdateDto {
+  @IsNumber() @IsOptional() @Min(-90) @Max(90) lat?: number;
+  @IsNumber() @IsOptional() @Min(-180) @Max(180) lng?: number;
+  @IsNumber() @IsOptional() @Min(0) accuracy?: number;
+  @IsArray() @IsOptional() @ArrayMaxSize(64)
+  envelopes?: { deviceId: string; ciphertext: string; type?: number }[];
 }
 
 class VoteDto {
@@ -253,10 +270,18 @@ export class MessagesController {
     return this.messagesService.updateGroup(req.user.sub, id, body);
   }
 
-  /** Moves a live location on — its sender only, while the share is running. */
+  /**
+   * Moves a live location on — its sender only, while the share is running.
+   *
+   * An encrypted share sends sealed copies instead of coordinates: the server
+   * swaps what each device is holding without ever seeing a position.
+   */
   @Put(':id/location')
-  async updateLocation(@Req() req: AuthedReq, @Param("id") id: string, @Body() body: LocationPointDto) {
-    return this.messagesService.updateLiveLocation(req.user.sub, id, body);
+  async updateLocation(@Req() req: AuthedReq, @Param("id") id: string, @Body() body: LiveLocationUpdateDto) {
+    if (body?.envelopes?.length) {
+      return this.messagesService.updateSealedLiveLocation(req.user.sub, req.user.deviceId ?? null, id, body.envelopes);
+    }
+    return this.messagesService.updateLiveLocation(req.user.sub, id, body as LocationPointDto);
   }
 
   /** Ends a live location share early. */
@@ -401,10 +426,37 @@ export class MessagesController {
   async upload(
     @Req() req: AuthedReq,
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { durationMs?: string; waveform?: string; width?: string; height?: string; kind?: string; fileName?: string },
+    @Body() body: {
+      durationMs?: string;
+      waveform?: string;
+      width?: string;
+      height?: string;
+      kind?: string;
+      fileName?: string;
+      /** "1" when the bytes are end-to-end encrypted. */
+      sealed?: string;
+    },
   ) {
     if (!file?.buffer?.length) {
       throw new ViroException('VALIDATION_ERROR', 'A file is required.', HttpStatus.BAD_REQUEST);
+    }
+    // An end-to-end encrypted file arrives as ciphertext: there is no mime
+    // type to check, because there is nothing here to recognise. What kind of
+    // thing it is, what it was called and how long it plays travel inside the
+    // message. All the server enforces is how big it may be.
+    const sealed = String(body.sealed ?? '') === '1' || String(body.sealed ?? '') === 'true';
+    if (sealed) {
+      const kind = String(body.kind || '').toUpperCase();
+      if (!['VOICE', 'IMAGE', 'FILE'].includes(kind)) {
+        throw new ViroException('VALIDATION_ERROR', 'Unsupported file type.', HttpStatus.BAD_REQUEST);
+      }
+      if (kind !== 'FILE' && file.size > MAX_MEDIA_BYTES) {
+        throw new ViroException('VALIDATION_ERROR', 'That file is too large.', HttpStatus.BAD_REQUEST);
+      }
+      return this.messagesService.registerMedia(req.user.sub, file, {
+        kind: kind as 'VOICE' | 'IMAGE' | 'FILE',
+        sealed: true,
+      });
     }
     const isVoice = ALLOWED_VOICE_MIME.has(file.mimetype);
     const isImage = !isVoice && ALLOWED_IMAGE_MIME.has(file.mimetype);

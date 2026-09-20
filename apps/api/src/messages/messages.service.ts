@@ -65,6 +65,12 @@ export interface SendMessageInput {
    * arrive and never holds a key that could open one.
    */
   envelopes?: { deviceId: string; ciphertext: string; type?: number }[];
+  /**
+   * For a sealed live location: how long the share runs. Where the person is
+   * travels inside the ciphertext; the server is told only when to stop
+   * carrying updates.
+   */
+  liveSeconds?: number;
 }
 
 export interface PollDto {
@@ -83,6 +89,9 @@ const SEARCH_SCAN_LIMIT = 2000;
 
 /** How long a live location may run for. */
 const LIVE_LOCATION_CHOICES = [15 * 60, 60 * 60, 8 * 60 * 60];
+
+/** The most options a poll may have — the only thing a sealed vote is checked against. */
+const MAX_POLL_OPTIONS = 12;
 
 /** ~11 cm of precision: enough to find someone, and no more than that. */
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
@@ -152,6 +161,14 @@ export interface MessageDto {
    * message belongs to, so it is given out for encrypted messages only.
    */
   senderDeviceId: string | null;
+  /** When a live location share ends; the where of it is inside the message. */
+  liveUntil: string | null;
+  /**
+   * For a sealed poll: who chose which option number. The phone reads the
+   * question and the options out of the message itself and puts the two
+   * together — the server only ever holds the numbers.
+   */
+  pollVotes: { userId: string; optionIndex: number }[] | null;
 }
 
 export interface ConversationSummaryDto {
@@ -264,10 +281,16 @@ export class MessagesService {
   ): { deviceId: string; ciphertext: string; type: number }[] | null {
     const raw = Array.isArray(input.envelopes) ? input.envelopes : [];
     if (raw.length === 0) return null;
-    if (type !== 'TEXT' || input.mediaId || input.poll || input.gif || input.sticker || input.contact || input.location) {
-      // Files, polls and places follow in Stage 2; sending them now would mean
-      // storing them in the clear next to a message that claims to be sealed.
-      this.fail('VALIDATION_ERROR', 'Only text can be sent encrypted for now.', HttpStatus.BAD_REQUEST);
+    // Everything a message is made of — its text, the question of a poll, the
+    // name of a file, where someone is — travels inside the ciphertext. What
+    // the server keeps is the shape of the thing: that there is a message, and
+    // a file behind it, and who it is for.
+    if (input.poll || input.gif || input.sticker || input.contact || input.location) {
+      this.fail(
+        'VALIDATION_ERROR',
+        'An encrypted message carries its own content; send it sealed.',
+        HttpStatus.BAD_REQUEST,
+      );
     }
     const out: { deviceId: string; ciphertext: string; type: number }[] = [];
     const seen = new Set<string>();
@@ -354,7 +377,10 @@ export class MessagesService {
     const ids = msgs.map((m) => m.id);
     const replyIds = [...new Set(msgs.map((m) => m.replyToId).filter((x): x is string => !!x))];
     const mediaIds = [...new Set(msgs.map((m) => m.mediaId).filter((x): x is string => !!x))];
-    const pollIds = msgs.filter((m) => m.type === 'POLL').map((m) => m.id);
+    // A sealed poll looks like any other sealed message from here, so its
+    // votes are fetched alongside: the server holds option numbers, never the
+    // options themselves.
+    const pollIds = msgs.filter((m) => m.type === 'POLL' || m.type === 'ENCRYPTED').map((m) => m.id);
     const votes = pollIds.length ? await this.pollRepo.find({ where: { messageId: In(pollIds) } }) : [];
     // Sealed copies addressed to this reader's own devices. All of them are
     // returned rather than only the asking device's, because a websocket frame
@@ -423,6 +449,13 @@ export class MessagesService {
         metadata: m.metadata,
         poll: m.type === 'POLL' && !deleted ? this.pollDto(m, votes.filter((v) => v.messageId === m.id), viewerId) : null,
         senderDeviceId: m.type === 'ENCRYPTED' ? m.senderDeviceId : null,
+        liveUntil: iso(m.liveUntil),
+        pollVotes:
+          m.type === 'ENCRYPTED' && !deleted
+            ? votes
+                .filter((v) => v.messageId === m.id)
+                .map((v) => ({ userId: v.userId, optionIndex: v.optionIndex }))
+            : null,
         envelopes:
           m.type === 'ENCRYPTED' && !deleted
             ? sealed
@@ -477,8 +510,12 @@ export class MessagesService {
         const senderName = sender?.displayName?.trim() || 'Someone';
         const conv = await this.convRepo.findOne({ where: { id: message.conversationId } });
         const group = conv?.isGroup ? conv.title || 'Group' : null;
-        const mentionsMe = Array.isArray(message.metadata?.mentions)
-          && (message.metadata!.mentions as string[]).includes(uid);
+        // A sealed message has no readable metadata, so who was named lives in
+        // its own table — which is exactly why that table exists.
+        const mentionsMe = message.type === 'ENCRYPTED'
+          ? (await this.mentionRepo.count({ where: { messageId: message.id, userId: uid } })) > 0
+          : Array.isArray(message.metadata?.mentions)
+            && (message.metadata!.mentions as string[]).includes(uid);
         await this.pushService.sendToUser(uid, {
           title: mentionsMe && group
             ? `${senderName} mentioned you in ${group}`
@@ -550,7 +587,7 @@ export class MessagesService {
       liveUntil: string | null;
       updatedAt: string;
     } | null = null;
-    if (type === 'LOCATION') {
+    if (type === 'LOCATION' && !sealed) {
       // A coordinate must actually be a number. JSON has no NaN, so a phone
       // that couldn't read its position sends null — which Number() would
       // otherwise turn into 0, a real place in the Gulf of Guinea.
@@ -576,7 +613,7 @@ export class MessagesService {
       };
     }
     let contact: { name: string; phones: string[]; viroId: string | null; userId: string | null } | null = null;
-    if (type === 'CONTACT') {
+    if (type === 'CONTACT' && !sealed) {
       const name = (input.contact?.name || '').trim().slice(0, 100);
       const phones = (input.contact?.phones || [])
         .map((p) => String(p).trim().slice(0, 24))
@@ -593,7 +630,7 @@ export class MessagesService {
       };
     }
     let poll: { question: string; options: string[]; multi: boolean } | null = null;
-    if (type === 'POLL') {
+    if (type === 'POLL' && !sealed) {
       const question = (input.poll?.question || '').trim().slice(0, 200);
       const options = (input.poll?.options || []).map((o) => String(o).trim().slice(0, 100)).filter(Boolean);
       if (!question || options.length < 2 || options.length > 12 || new Set(options).size !== options.length) {
@@ -601,10 +638,10 @@ export class MessagesService {
       }
       poll = { question, options, multi: !!input.poll?.multi };
     }
-    if (type === 'GIF' && !(input.gif?.url && GIF_HOSTS.test(input.gif.url))) {
+    if (type === 'GIF' && !sealed && !(input.gif?.url && GIF_HOSTS.test(input.gif.url))) {
       this.fail('VALIDATION_ERROR', 'Unsupported GIF.', HttpStatus.BAD_REQUEST);
     }
-    if (type === 'STICKER' && !(input.sticker?.pack && input.sticker?.id && body)) {
+    if (type === 'STICKER' && !sealed && !(input.sticker?.pack && input.sticker?.id && body)) {
       this.fail('VALIDATION_ERROR', 'Unsupported sticker.', HttpStatus.BAD_REQUEST);
     }
 
@@ -690,6 +727,18 @@ export class MessagesService {
       }
     }
 
+    // A live share has an end time the server must know, because the server is
+    // what stops carrying updates once it passes. For a plaintext location it
+    // is in the metadata as well; for a sealed one this column is all there is.
+    let liveUntil: Date | null = null;
+    const liveSeconds = sealed ? input.liveSeconds : input.location?.liveSeconds;
+    if (type === 'LOCATION' && liveSeconds !== undefined && liveSeconds !== null) {
+      if (!LIVE_LOCATION_CHOICES.includes(liveSeconds)) {
+        this.fail('VALIDATION_ERROR', 'Share live location for 15 minutes, 1 hour or 8 hours.', HttpStatus.BAD_REQUEST);
+      }
+      liveUntil = new Date(Date.now() + liveSeconds * 1000);
+    }
+
     let deliverAt: Date | null = null;
     if (input.deliverAt) {
       const at = new Date(input.deliverAt);
@@ -742,7 +791,7 @@ export class MessagesService {
         mentionedUserIds = mentioned;
       }
     }
-    if (type === 'FILE' && input.mediaId) {
+    if (type === 'FILE' && input.mediaId && !sealed) {
       // Carried on the message so a notification can name the document
       // without loading the file record.
       const doc = await this.mediaRepo.findOne({ where: { id: input.mediaId, ownerUserId: senderId } });
@@ -781,6 +830,7 @@ export class MessagesService {
         forwarded: !!input.forwarded,
         deliverAt,
         expiresAt,
+        liveUntil,
         metadata: sealed ? null : Object.keys(metadata).length ? metadata : null,
       }),
     );
@@ -804,7 +854,9 @@ export class MessagesService {
       }
     }
 
-    if (mentionedUserIds.length && !sealed) {
+    // Mentions work in sealed messages too: the rows hold who was named, never
+    // the words that named them.
+    if (mentionedUserIds.length) {
       await this.mentionRepo.save(
         mentionedUserIds.map((uid) =>
           this.mentionRepo.create({
@@ -1180,6 +1232,67 @@ export class MessagesService {
    * Moves a live location on. Only its sender, only while the share is still
    * running — an expired share can't be quietly resumed.
    */
+  /**
+   * A new position for a sealed live share.
+   *
+   * The position itself is sealed again for every device, exactly as the first
+   * one was, and replaces what each device is holding. The server moves
+   * ciphertext from one shape to another and learns nothing by it.
+   */
+  async updateSealedLiveLocation(
+    userId: string,
+    senderDeviceId: string | null,
+    messageId: string,
+    envelopes: { deviceId: string; ciphertext: string; type?: number }[],
+  ) {
+    const message = await this.msgRepo.findOne({ where: { id: messageId } });
+    if (!message || message.deletedAt) {
+      this.fail('NOT_FOUND', 'That location is no longer here.', HttpStatus.NOT_FOUND);
+    }
+    if (message!.senderUserId !== userId) {
+      this.fail('FORBIDDEN', 'Only the person sharing can change it.', HttpStatus.FORBIDDEN);
+    }
+    if (message!.type !== 'ENCRYPTED' || !message!.liveUntil) {
+      this.fail('VALIDATION_ERROR', 'That message is not a live location.', HttpStatus.BAD_REQUEST);
+    }
+    if (message!.liveUntil!.getTime() <= Date.now()) {
+      this.fail('VALIDATION_ERROR', 'That live location has ended.', HttpStatus.BAD_REQUEST);
+    }
+    const sealed = this.sealedEnvelopes({ envelopes } as SendMessageInput, 'TEXT');
+    if (!sealed) this.fail('VALIDATION_ERROR', 'An update needs its sealed copies.', HttpStatus.BAD_REQUEST);
+
+    const audience = await this.participantIds(message!.conversationId);
+    const known = await this.keysService.encryptableDevices(audience);
+    const ownerOf = new Map(known.map((d) => [d.deviceId, d.userId]));
+    for (const e of sealed) {
+      if (!ownerOf.has(e.deviceId)) {
+        this.fail('VALIDATION_ERROR', 'That device is not part of this conversation.', HttpStatus.BAD_REQUEST);
+      }
+    }
+    // Each device holds one copy of where this person is; a new one replaces it.
+    await this.envelopeRepo.delete({ messageId: message!.id });
+    await this.envelopeRepo.save(
+      sealed.map((e) =>
+        this.envelopeRepo.create({
+          messageId: message!.id,
+          deviceId: e.deviceId,
+          userId: ownerOf.get(e.deviceId)!,
+          ciphertext: e.ciphertext,
+          envelopeType: e.type,
+        }),
+      ),
+    );
+    message!.senderDeviceId = senderDeviceId ?? message!.senderDeviceId;
+    message!.updatedAt = new Date();
+    await this.msgRepo.update(
+      { id: message!.id },
+      { updatedAt: message!.updatedAt, senderDeviceId: message!.senderDeviceId },
+    );
+    const hydrated = (await this.hydrate(userId, [message!]))[0];
+    await this.emitMessage('message.updated', message!, audience);
+    return hydrated;
+  }
+
   async updateLiveLocation(
     userId: string,
     messageId: string,
@@ -1210,6 +1323,20 @@ export class MessagesService {
 
   /** Ends a live location share early. */
   async stopLiveLocation(userId: string, messageId: string) {
+    // A sealed share ends by closing the window the server knows about; the
+    // last position each device holds is simply never replaced again.
+    const sealedShare = await this.msgRepo.findOne({ where: { id: messageId, type: 'ENCRYPTED' } });
+    if (sealedShare) {
+      if (sealedShare.senderUserId !== userId) {
+        this.fail('FORBIDDEN', 'Only the person sharing can change it.', HttpStatus.FORBIDDEN);
+      }
+      const now = new Date();
+      await this.msgRepo.update({ id: sealedShare.id }, { liveUntil: now, updatedAt: now });
+      sealedShare.liveUntil = now;
+      sealedShare.updatedAt = now;
+      await this.emitMessage('message.updated', sealedShare, await this.participantIds(sealedShare.conversationId));
+      return (await this.hydrate(userId, [sealedShare]))[0];
+    }
     const { message, current } = await this.liveLocationMessage(userId, messageId);
     message.metadata = {
       ...(message.metadata ?? {}),
@@ -1485,9 +1612,34 @@ export class MessagesService {
   async registerMedia(
     userId: string,
     file: { buffer: Buffer; mimetype: string; size: number },
-    meta: { kind: 'VOICE' | 'IMAGE' | 'FILE'; durationMs?: number; waveform?: string; width?: number; height?: number; originalName?: string },
+    meta: {
+      kind: 'VOICE' | 'IMAGE' | 'FILE';
+      durationMs?: number;
+      waveform?: string;
+      width?: number;
+      height?: number;
+      originalName?: string;
+      /** Ciphertext: nothing about it may be recorded or interpreted. */
+      sealed?: boolean;
+    },
   ): Promise<MediaDto> {
     const saved = await this.mediaStore.save(file.buffer, file.mimetype);
+    if (meta.sealed) {
+      // A sealed file keeps nothing describing it: no name, no mime type, no
+      // duration or waveform or dimensions. The recipient gets all of that
+      // from inside the message, which is the only place it belongs.
+      const opaque = await this.mediaRepo.save(
+        this.mediaRepo.create({
+          ownerUserId: userId,
+          kind: meta.kind,
+          mime: 'application/octet-stream',
+          sizeBytes: file.size,
+          fileName: saved,
+          sealed: true,
+        }),
+      );
+      return this.mediaDto(opaque);
+    }
     const media = await this.mediaRepo.save(
       this.mediaRepo.create({
         ownerUserId: userId,
@@ -1818,12 +1970,24 @@ export class MessagesService {
 
   async vote(userId: string, messageId: string, options: number[]) {
     const m = await this.ownMessage(userId, messageId);
-    if (m.type !== 'POLL' || m.deletedAt) this.fail('VALIDATION_ERROR', 'Not a poll.', HttpStatus.BAD_REQUEST);
-    const poll = m.metadata?.poll as { options?: string[]; multi?: boolean } | undefined;
-    const count = poll?.options?.length ?? 0;
+    const encrypted = m.type === 'ENCRYPTED';
+    if ((m.type !== 'POLL' && !encrypted) || m.deletedAt) {
+      this.fail('VALIDATION_ERROR', 'Not a poll.', HttpStatus.BAD_REQUEST);
+    }
     const chosen = [...new Set((options || []).map((o) => Math.floor(Number(o))))];
-    if (chosen.some((i) => !(i >= 0 && i < count))) this.fail('VALIDATION_ERROR', 'Invalid option.', HttpStatus.BAD_REQUEST);
-    if (!poll?.multi && chosen.length > 1) this.fail('VALIDATION_ERROR', 'Choose one option.', HttpStatus.BAD_REQUEST);
+    if (encrypted) {
+      // The question and its options are sealed, so the server cannot check a
+      // vote against them — only that it is a plausible option number. The
+      // phones, which can read the poll, do the rest.
+      if (chosen.some((i) => !(i >= 0 && i < MAX_POLL_OPTIONS))) {
+        this.fail('VALIDATION_ERROR', 'Invalid option.', HttpStatus.BAD_REQUEST);
+      }
+    } else {
+      const poll = m.metadata?.poll as { options?: string[]; multi?: boolean } | undefined;
+      const count = poll?.options?.length ?? 0;
+      if (chosen.some((i) => !(i >= 0 && i < count))) this.fail('VALIDATION_ERROR', 'Invalid option.', HttpStatus.BAD_REQUEST);
+      if (!poll?.multi && chosen.length > 1) this.fail('VALIDATION_ERROR', 'Choose one option.', HttpStatus.BAD_REQUEST);
+    }
     await this.pollRepo.delete({ messageId: m.id, userId });
     if (chosen.length) {
       await this.pollRepo.save(chosen.map((optionIndex) => this.pollRepo.create({ messageId: m.id, userId, optionIndex })));
