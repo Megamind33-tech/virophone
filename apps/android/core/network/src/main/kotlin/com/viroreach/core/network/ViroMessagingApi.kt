@@ -450,7 +450,8 @@ data class ConvSettingsBody(
 )
 
 data class PrivateBody(val toUserId: String, val durationSeconds: Int)
-data class EditBody(val body: String)
+/** New words for a message: in the clear, or sealed for each device. */
+data class EditBody(val body: String? = null, val envelopes: List<EnvelopeBody>? = null)
 data class ReactBody(val emoji: String)
 
 // --- loops --------------------------------------------------------------

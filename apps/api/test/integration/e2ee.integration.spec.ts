@@ -530,6 +530,31 @@ describe('End-to-end encryption (server)', () => {
     expect(rows.map((r: any) => r.user_id)).toEqual([bobPhone.userId]);
   });
 
+  it('edits a sealed message by replacing what each device holds', async () => {
+    if (skip()) return;
+    const sent = await http()
+      .post('/api/v1/messages')
+      .set(as(alicePhone))
+      .send({ conversationId: cid, clientMsgId: 'enc-edit', envelopes: everyone('see you at six') })
+      .expect(201);
+    const id = sent.body.message.id;
+
+    const edited = await http()
+      .patch(`/api/v1/messages/${id}`)
+      .set(as(alicePhone))
+      .send({ envelopes: everyone('see you at seven') })
+      .expect(200);
+    expect(edited.body.editedAt).toBeTruthy();
+
+    const bobs = await http().get(`/api/v1/messages/conversations/${cid}`).set(as(bobPhone)).expect(200);
+    const message = bobs.body.find((m: any) => m.clientMsgId === 'enc-edit');
+    const mine = message.envelopes.find((e: any) => e.deviceId === bobPhone.deviceId);
+    expect(Buffer.from(mine.ciphertext, 'base64').toString()).toBe('see you at seven');
+    // The row itself still says nothing.
+    const rows = await sql('SELECT body FROM messages WHERE id = $1', [id]);
+    expect(rows[0].body).toBeNull();
+  });
+
   it('takes the ciphertext away when the sender deletes for everyone', async () => {
     if (skip()) return;
     const sent = await http()

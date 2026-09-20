@@ -118,7 +118,11 @@ class VoteDto {
 }
 
 class EditMessageDto {
-  @IsString() @IsNotEmpty() @MaxLength(4000) body!: string;
+  // Empty for an encrypted edit: the new words are inside the envelopes.
+  @IsString() @IsOptional() @MaxLength(4000) body?: string;
+  /** Sealed copies of the edited message, one per device. */
+  @IsArray() @IsOptional() @ArrayMaxSize(64)
+  envelopes?: { deviceId: string; ciphertext: string; type?: number }[];
 }
 
 class ReactDto {
@@ -369,7 +373,7 @@ export class MessagesController {
 
   @Patch(':id')
   async edit(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: EditMessageDto) {
-    return this.messagesService.editMessage(req.user.sub, id, body.body);
+    return this.messagesService.editMessage(req.user.sub, id, body.body ?? '', body.envelopes);
   }
 
   @Delete(':id')

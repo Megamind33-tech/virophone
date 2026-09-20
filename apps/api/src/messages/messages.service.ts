@@ -941,10 +941,51 @@ export class MessagesService {
     return m;
   }
 
-  async editMessage(userId: string, messageId: string, body: string) {
+  async editMessage(
+    userId: string,
+    messageId: string,
+    body: string,
+    envelopes?: { deviceId: string; ciphertext: string; type?: number }[],
+  ) {
     const m = await this.ownMessage(userId, messageId);
     const text = (body || '').trim();
     if (m.senderUserId !== userId) this.fail('FORBIDDEN', 'You can only edit your own messages.', HttpStatus.FORBIDDEN);
+    // An encrypted message is edited the way it was sent: the new words are
+    // sealed again for every device and replace what each one holds. The
+    // server swaps ciphertext for ciphertext and learns nothing either time.
+    if (m.type === 'ENCRYPTED') {
+      if (m.deletedAt) this.fail('VALIDATION_ERROR', 'This message cannot be edited.', HttpStatus.BAD_REQUEST);
+      if (Date.now() - m.createdAt.getTime() > EDIT_WINDOW_MS) {
+        this.fail('VALIDATION_ERROR', 'Messages can only be edited within 15 minutes.', HttpStatus.BAD_REQUEST);
+      }
+      const sealed = this.sealedEnvelopes({ envelopes } as SendMessageInput, 'TEXT');
+      if (!sealed) this.fail('VALIDATION_ERROR', 'An edit needs its sealed copies.', HttpStatus.BAD_REQUEST);
+      const audience = await this.participantIds(m.conversationId);
+      const ownerOf = new Map((await this.keysService.encryptableDevices(audience)).map((d) => [d.deviceId, d.userId]));
+      for (const e of sealed) {
+        if (!ownerOf.has(e.deviceId)) {
+          this.fail('VALIDATION_ERROR', 'That device is not part of this conversation.', HttpStatus.BAD_REQUEST);
+        }
+      }
+      await this.envelopeRepo.delete({ messageId: m.id });
+      await this.envelopeRepo.save(
+        sealed.map((e) =>
+          this.envelopeRepo.create({
+            messageId: m.id,
+            deviceId: e.deviceId,
+            userId: ownerOf.get(e.deviceId)!,
+            ciphertext: e.ciphertext,
+            envelopeType: e.type,
+          }),
+        ),
+      );
+      const editedAt = new Date();
+      m.editedAt = editedAt;
+      m.updatedAt = editedAt;
+      await this.msgRepo.update({ id: m.id }, { editedAt, updatedAt: editedAt });
+      await this.emitMessage('message.updated', m, audience);
+      return (await this.hydrate(userId, [m]))[0];
+    }
     if (m.type !== 'TEXT' || m.deletedAt) this.fail('VALIDATION_ERROR', 'This message cannot be edited.', HttpStatus.BAD_REQUEST);
     if (!text) this.fail('VALIDATION_ERROR', 'Message body is required.', HttpStatus.BAD_REQUEST);
     if (Date.now() - m.createdAt.getTime() > EDIT_WINDOW_MS) {

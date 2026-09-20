@@ -960,7 +960,34 @@ class MessagingRepository(
     }
 
     suspend fun edit(messageId: String, body: String) = act("edit message") {
-        val dto = api.edit(messageId, EditBody(body.trim()))
+        val text = body.trim()
+        val row = dao.message(messageId)
+        val conv = row?.let { dao.conversation(it.conversationId) }
+        // An encrypted message is edited the way it was sent: the new words
+        // are sealed again and replace the copies each device holds.
+        val dto = if (conv?.encrypted == true && row != null) {
+            val me = myUserId() ?: throw IllegalStateException("Not signed in")
+            val peer = conv.peerUserId ?: throw IllegalStateException("Nobody to send to")
+            val meta = ChatJson.map(row.metadataJson).filterKeys { it != "outbox" && it != "mentions" }
+            val envelopes = e2ee.seal(
+                me,
+                listOf(peer),
+                SealedMessage.pack(
+                    SealedPayload(
+                        type = row.type,
+                        body = text,
+                        meta = meta.takeIf { it.isNotEmpty() },
+                        media = ChatJson.media(row.mediaJson)?.toSealedRef(),
+                    ),
+                ),
+            )
+            if (envelopes.isEmpty()) throw IllegalStateException("This chat is encrypted — waiting for their phone")
+            // Kept here too: the server's copy of the edit is unreadable.
+            dao.upsertMessages(listOf(row.copy(body = text, editedAt = System.currentTimeMillis())))
+            api.edit(messageId, EditBody(envelopes = envelopes.map { EnvelopeBody(it.deviceId, it.ciphertext, it.type) }))
+        } else {
+            api.edit(messageId, EditBody(body = text))
+        }
         upsertMessages(listOf(dto))
     }
 
