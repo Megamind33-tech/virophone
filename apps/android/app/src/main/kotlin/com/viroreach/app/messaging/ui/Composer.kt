@@ -45,6 +45,7 @@ sealed class ComposerAction {
     object CreatePoll : ComposerAction()
     object SendDocument : ComposerAction()
     object ShareContact : ComposerAction()
+    object ShareLocation : ComposerAction()
     object OpenStickers : ComposerAction()
 }
 
@@ -197,6 +198,10 @@ fun Composer(
                                 DropdownMenuItem(text = { Text("Contact") }, leadingIcon = { Icon(Icons.Default.Person, null) }, onClick = {
                                     attachOpen = false
                                     onAction(ComposerAction.ShareContact)
+                                })
+                                DropdownMenuItem(text = { Text("Location") }, leadingIcon = { Icon(Icons.Default.LocationOn, null) }, onClick = {
+                                    attachOpen = false
+                                    onAction(ComposerAction.ShareLocation)
                                 })
                                 DropdownMenuItem(text = { Text("Poll") }, leadingIcon = { Icon(Icons.Default.Poll, null) }, onClick = {
                                     attachOpen = false

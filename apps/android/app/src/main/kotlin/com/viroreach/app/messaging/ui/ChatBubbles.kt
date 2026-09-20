@@ -75,6 +75,8 @@ data class BubbleCallbacks(
     val onTranscribe: (ChatMessage) -> Unit = {},
     /** Opens a document with whatever app on the phone handles it. */
     val onOpenFile: (ChatMessage) -> Unit = {},
+    val onOpenPlace: (com.viroreach.app.messaging.SharedPlace) -> Unit = {},
+    val onStopSharingLocation: (ChatMessage) -> Unit = {},
     val onMessageContact: (com.viroreach.app.messaging.ContactCard) -> Unit = {},
     val onCallContact: (com.viroreach.app.messaging.ContactCard) -> Unit = {},
     val onSaveContact: (com.viroreach.app.messaging.ContactCard) -> Unit = {},
@@ -212,6 +214,14 @@ fun MessageRow(
                     msg.type == "GIF" -> GifContent(msg)
                     msg.type == "STICKER" -> StickerContent(msg)
                     msg.type == "FILE" -> FileContent(msg, downloading = false, onOpen = callbacks.onOpenFile)
+                    msg.type == "LOCATION" -> msg.place?.let { place ->
+                        LocationContent(
+                            msg = msg,
+                            place = place,
+                            onOpen = callbacks.onOpenPlace,
+                            onStopSharing = callbacks.onStopSharingLocation,
+                        )
+                    } ?: Text("Location", color = Color.White, fontSize = 16.sp)
                     msg.type == "CONTACT" -> msg.contactCard?.let { card ->
                         ContactContent(
                             card = card,

@@ -37,6 +37,14 @@ interface ViroMessagingApi {
     @POST("api/v1/messages/conversations/{id}/read")
     suspend fun markRead(@Path("id") id: String): OkResult
 
+    /** Moves my live location on. */
+    @PUT("api/v1/messages/{id}/location")
+    suspend fun updateLocation(@Path("id") id: String, @Body body: LocationPoint): MsgDto
+
+    /** Ends my live location share. */
+    @POST("api/v1/messages/{id}/location/stop")
+    suspend fun stopLocation(@Path("id") id: String): MsgDto
+
     @PATCH("api/v1/messages/conversations/{id}/settings")
     suspend fun settings(@Path("id") id: String, @Body body: ConvSettingsBody): ConvDto
 
@@ -206,7 +214,19 @@ data class SendBody(
     val gif: GifSendDto? = null,
     val sticker: StickerRef? = null,
     val contact: ContactCardBody? = null,
+    val location: LocationBody? = null,
 )
+
+/** A place, or the start of a live share (liveSeconds: 900, 3600 or 28800). */
+data class LocationBody(
+    val lat: Double,
+    val lng: Double,
+    val accuracy: Double? = null,
+    val label: String? = null,
+    val liveSeconds: Int? = null,
+)
+
+data class LocationPoint(val lat: Double, val lng: Double, val accuracy: Double? = null)
 
 /** A shared contact card: a name, plus numbers and/or a Viro ID. */
 data class ContactCardBody(

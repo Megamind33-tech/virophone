@@ -394,6 +394,12 @@ class SessionManager private constructor(context: Context) {
             runCatching { registerPushToken() }
             runCatching { messaging.syncNow() }
             runCatching { relationships.refresh(force = true) }
+            // A live location survives the app being closed: pick it back up.
+            runCatching {
+                if (messaging.myLiveLocations().isNotEmpty()) {
+                    com.viroreach.app.messaging.location.LiveLocationService.start(appContext)
+                }
+            }
         }
         // A cold first sync on a phone with hundreds of contacts genuinely takes
         // longer than this. When that happens the app opens on whatever is

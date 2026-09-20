@@ -27,6 +27,7 @@ import {
   IsInt,
   IsIn,
   IsISO8601,
+  IsNumber,
   Min,
   Max,
   ValidateIf,
@@ -46,8 +47,8 @@ class SendMessageDto {
   @IsString() @IsOptional() @MaxLength(4000) body?: string;
   @IsString() @IsOptional() @MaxLength(64) clientMsgId?: string;
   @IsString() @IsOptional() @IsIn([
-    'TEXT', 'VOICE', 'IMAGE', 'LOOP', 'POLL', 'GIF', 'STICKER', 'FILE', 'CONTACT',
-    'text', 'voice', 'image', 'loop', 'poll', 'gif', 'sticker', 'file', 'contact',
+    'TEXT', 'VOICE', 'IMAGE', 'LOOP', 'POLL', 'GIF', 'STICKER', 'FILE', 'CONTACT', 'LOCATION',
+    'text', 'voice', 'image', 'loop', 'poll', 'gif', 'sticker', 'file', 'contact', 'location',
   ]) type?: string;
   @IsString() @IsOptional() replyToId?: string;
   @IsString() @IsOptional() mediaId?: string;
@@ -60,6 +61,7 @@ class SendMessageDto {
   @IsObject() @IsOptional() gif?: { url: string; previewUrl?: string; width?: number; height?: number; provider?: string };
   @IsObject() @IsOptional() sticker?: { pack: string; id: string };
   @IsObject() @IsOptional() contact?: { name: string; phones?: string[]; viroId?: string; userId?: string };
+  @IsObject() @IsOptional() location?: { lat: number; lng: number; accuracy?: number; label?: string; liveSeconds?: number };
 }
 
 class GroupDto {
@@ -79,6 +81,12 @@ class MembersDto {
 
 class RoleDto {
   @IsString() @IsIn(['ADMIN', 'MEMBER']) role!: 'ADMIN' | 'MEMBER';
+}
+
+class LocationPointDto {
+  @IsNumber() @Min(-90) @Max(90) lat!: number;
+  @IsNumber() @Min(-180) @Max(180) lng!: number;
+  @IsNumber() @IsOptional() @Min(0) accuracy?: number;
 }
 
 class VoteDto {
@@ -193,6 +201,18 @@ export class MessagesController {
   @Patch('conversations/:id/group')
   async updateGroup(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: GroupPatchDto) {
     return this.messagesService.updateGroup(req.user.sub, id, body);
+  }
+
+  /** Moves a live location on — its sender only, while the share is running. */
+  @Put(':id/location')
+  async updateLocation(@Req() req: AuthedReq, @Param("id") id: string, @Body() body: LocationPointDto) {
+    return this.messagesService.updateLiveLocation(req.user.sub, id, body);
+  }
+
+  /** Ends a live location share early. */
+  @Post(':id/location/stop')
+  async stopLocation(@Req() req: AuthedReq, @Param("id") id: string) {
+    return this.messagesService.stopLiveLocation(req.user.sub, id);
   }
 
   @Put(':id/vote')

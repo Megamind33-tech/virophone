@@ -370,6 +370,40 @@ fun ChatScreen(
         }
     }
 
+    // Location: asked for only when someone actually shares one.
+    fun shareLocation(liveSeconds: Int?) {
+        scope.launch {
+            if (!com.viroreach.app.messaging.location.ViroLocation.enabled(context)) {
+                Toast.makeText(context, "Turn on location on this phone first.", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            Toast.makeText(context, "Finding your location…", Toast.LENGTH_SHORT).show()
+            val fix = com.viroreach.app.messaging.location.ViroLocation.current(context)
+            if (fix == null) {
+                Toast.makeText(context, "Couldn't find your location. Try again outside or near a window.", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            sendOut(
+                MessagingRepository.Outgoing(
+                    type = "LOCATION",
+                    location = com.viroreach.core.network.LocationBody(
+                        lat = fix.latitude,
+                        lng = fix.longitude,
+                        accuracy = fix.accuracy.takeIf { it > 0f }?.toDouble(),
+                        liveSeconds = liveSeconds,
+                    ),
+                ),
+            )
+            if (liveSeconds != null) com.viroreach.app.messaging.location.LiveLocationService.start(context)
+        }
+    }
+    val locationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { granted ->
+        if (granted.values.any { it }) dialog = "location"
+        else Toast.makeText(context, "Viro needs location permission to share where you are.", Toast.LENGTH_LONG).show()
+    }
+
     // A document: copied into Viro's own storage first, because the picked
     // Uri is only readable while this screen holds the grant.
     val pickDocument = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -565,6 +599,12 @@ fun ChatScreen(
                                     card.userId?.let { id -> onCall(id, card.phones.firstOrNull(), card.name) }
                                 },
                                 onSaveContact = { card -> saveContactToPhone(context, card) },
+                                onOpenPlace = { place ->
+                                    if (!com.viroreach.app.messaging.location.ViroLocation.openInMaps(context, place.lat, place.lng, place.label)) {
+                                        Toast.makeText(context, "No maps app on this phone.", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                onStopSharingLocation = { m -> scope.launch { repo.stopLiveLocation(m.id) } },
                                 onJumpTo = { id ->
                                     val idx = messages.indexOfFirst { it.id == id }
                                     if (idx >= 0) {
@@ -673,6 +713,11 @@ fun ChatScreen(
                         ComposerAction.SendDocument -> runCatching { pickDocument.launch(arrayOf("*/*")) }
                             .onFailure { Toast.makeText(context, "No file picker on this phone.", Toast.LENGTH_SHORT).show() }
                         ComposerAction.ShareContact -> dialog = "share_contact"
+                        ComposerAction.ShareLocation ->
+                            if (com.viroreach.app.messaging.location.ViroLocation.hasPermission(context)) dialog = "location"
+                            else locationPermission.launch(
+                                arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION),
+                            )
                     }
                 },
             )
@@ -878,6 +923,17 @@ fun ChatScreen(
     }
 
     when (dialog) {
+        "location" -> ShareLocationDialog(
+            onDismiss = { dialog = null },
+            onSendOnce = {
+                dialog = null
+                shareLocation(null)
+            },
+            onShareLive = { seconds ->
+                dialog = null
+                shareLocation(seconds)
+            },
+        )
         "share_contact" -> ShareContactDialog(
             session = session,
             onDismiss = { dialog = null },
@@ -1636,3 +1692,50 @@ private fun ShareContactDialog(
 
 private fun com.viroreach.app.messaging.ContactCard.toBody() =
     com.viroreach.core.network.ContactCardBody(name = name, phones = phones, viroId = viroId, userId = userId)
+
+/** Send where I am now, or keep it moving for a while. */
+@Composable
+private fun ShareLocationDialog(
+    onDismiss: () -> Unit,
+    onSendOnce: () -> Unit,
+    onShareLive: (Int) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Share location") },
+        text = {
+            Column {
+                Text(
+                    "Send where you are now, or share live so it keeps up with you.",
+                    color = ViroColors.textSecondary,
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Send my current location",
+                    color = Color.White,
+                    modifier = Modifier.fillMaxWidth().clickable { onSendOnce() }.padding(vertical = 12.dp),
+                )
+                HorizontalDivider(color = ViroColors.NavySurfaceElevated)
+                Text(
+                    "Share live for…",
+                    color = ViroColors.textMuted,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                )
+                com.viroreach.app.messaging.location.ViroLocation.LIVE_CHOICES.forEach { (seconds, label) ->
+                    Text(
+                        label,
+                        color = Color.White,
+                        modifier = Modifier.fillMaxWidth().clickable { onShareLive(seconds) }.padding(vertical = 12.dp),
+                    )
+                }
+                Text(
+                    "While you share live, Viro shows a notification you can stop it from.",
+                    color = ViroColors.textMuted,
+                    fontSize = 12.sp,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}

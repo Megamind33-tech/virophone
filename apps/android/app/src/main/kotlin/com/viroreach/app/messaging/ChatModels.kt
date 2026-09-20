@@ -16,6 +16,19 @@ import java.time.Instant
 /** What a single tick row says about my own message. */
 enum class Delivery { SCHEDULED, SENDING, FAILED, SENT, DELIVERED, READ, INCOMING }
 
+/** A place in a chat. [liveUntil] in the future means it is still moving. */
+data class SharedPlace(
+    val lat: Double,
+    val lng: Double,
+    val accuracy: Double? = null,
+    val label: String? = null,
+    val liveUntil: Long? = null,
+    val updatedAt: Long? = null,
+) {
+    val isLive: Boolean get() = (liveUntil ?: 0L) > System.currentTimeMillis()
+    val hasEnded: Boolean get() = liveUntil != null && !isLive
+}
+
 /** A contact someone shared in a chat. */
 data class ContactCard(
     val name: String,
@@ -30,7 +43,7 @@ data class ChatMessage(
     val conversationId: String,
     val senderUserId: String,
     val mine: Boolean,
-    /** TEXT | VOICE | IMAGE | SYSTEM | LOOP | POLL | GIF | STICKER | FILE | CONTACT */
+    /** TEXT | VOICE | IMAGE | SYSTEM | LOOP | POLL | GIF | STICKER | FILE | CONTACT | LOCATION */
     val type: String,
     val body: String?,
     val createdAt: Long,
@@ -66,6 +79,20 @@ data class ChatMessage(
     /** Documents: the sender's file name, and its size in bytes. */
     val fileName: String? get() = media?.originalName ?: obj("file")?.get("name") as? String
     val fileSize: Long? get() = media?.sizeBytes?.toLong() ?: (obj("file")?.get("size") as? Number)?.toLong()
+
+    /** A place someone sent, or a live share while it runs. */
+    val place: SharedPlace? get() = obj("location")?.let { l ->
+        val lat = (l["lat"] as? Number)?.toDouble() ?: return@let null
+        val lng = (l["lng"] as? Number)?.toDouble() ?: return@let null
+        SharedPlace(
+            lat = lat,
+            lng = lng,
+            accuracy = (l["accuracy"] as? Number)?.toDouble(),
+            label = l["label"] as? String,
+            liveUntil = parseIso(l["liveUntil"] as? String),
+            updatedAt = parseIso(l["updatedAt"] as? String),
+        )
+    }
 
     /** A shared contact card. */
     val contactCard: ContactCard? get() = obj("contact")?.let { c ->
@@ -275,6 +302,7 @@ fun ConversationItem.preview(): String = when {
     lastType == "GIF" -> "GIF"
     lastType == "FILE" -> "📎 " + (lastBody?.takeIf { it.isNotBlank() } ?: "Document")
     lastType == "CONTACT" -> "👤 " + (lastBody?.takeIf { it.isNotBlank() } ?: "Contact")
+    lastType == "LOCATION" -> "📍 " + (lastBody?.takeIf { it.isNotBlank() } ?: "Location")
     lastType == "STICKER" -> "${lastBody ?: ""} Sticker".trim()
     lastType == "SYSTEM" -> lastBody?.replaceFirstChar { it.uppercase() } ?: ""
     else -> lastBody.orEmpty()

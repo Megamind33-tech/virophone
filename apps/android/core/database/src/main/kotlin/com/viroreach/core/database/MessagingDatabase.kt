@@ -169,6 +169,10 @@ interface MessagingDao {
     @Query("UPDATE conversations SET peerLastDeliveredAt = MAX(COALESCE(peerLastDeliveredAt, 0), :at) WHERE id = :id")
     suspend fun bumpPeerDelivered(id: String, at: Long)
 
+    /** Recent locations, for keeping my own live shares moving. */
+    @Query("SELECT * FROM messages WHERE type = 'LOCATION' AND deletedAt IS NULL ORDER BY createdAt DESC LIMIT 50")
+    suspend fun liveLocations(): List<MessageEntity>
+
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt ASC")
     fun observeMessages(conversationId: String): Flow<List<MessageEntity>>
 

@@ -9,6 +9,8 @@ import com.viroreach.core.database.MessagingDatabase
 import com.viroreach.core.network.ApiDiagnostics
 import com.viroreach.core.network.ConvDto
 import com.viroreach.core.network.ContactCardBody
+import com.viroreach.core.network.LocationBody
+import com.viroreach.core.network.LocationPoint
 import com.viroreach.core.network.ConvSettingsBody
 import com.viroreach.core.network.EditBody
 import com.viroreach.core.network.MediaDto
@@ -447,6 +449,7 @@ class MessagingRepository(
         /** A document's name as the sender's phone knows it. */
         val fileName: String? = null,
         val contact: ContactCardBody? = null,
+        val location: LocationBody? = null,
     )
 
     /**
@@ -480,6 +483,19 @@ class MessagingRepository(
             meta["contact"] = mapOf<String, Any?>("name" to it.name, "phones" to it.phones, "viroId" to it.viroId, "userId" to it.userId)
         }
         out.fileName?.let { meta["file"] = mapOf<String, Any?>("name" to it, "mime" to out.mime, "size" to out.localFile?.length()) }
+        out.location?.let {
+            meta["location"] = mapOf<String, Any?>(
+                "lat" to it.lat,
+                "lng" to it.lng,
+                "accuracy" to it.accuracy,
+                "label" to it.label,
+                // Shown as live straight away; the server sets the real end time.
+                "liveUntil" to it.liveSeconds?.let { s ->
+                    java.time.Instant.now().plusSeconds(s.toLong()).toString()
+                },
+                "updatedAt" to java.time.Instant.now().toString(),
+            )
+        }
         out.linkPreview?.let { meta["linkPreview"] = mapOf("url" to it.url, "title" to it.title, "description" to it.description, "siteName" to it.siteName, "mediaId" to it.mediaId) }
         // Everything the outbox needs to retry lives on the row itself.
         meta["outbox"] = mapOf(
@@ -604,6 +620,21 @@ class MessagingRepository(
                     GifSendDto(g["url"] as String, g["previewUrl"] as? String, (g["width"] as? Number)?.toInt(), (g["height"] as? Number)?.toInt(), g["provider"] as? String)
                 },
                 sticker = (meta["sticker"] as? Map<String, Any?>)?.let { StickerRef(it["pack"] as String, it["id"] as String) },
+                location = (meta["location"] as? Map<String, Any?>)?.let { l ->
+                    LocationBody(
+                        lat = (l["lat"] as? Number)?.toDouble() ?: 0.0,
+                        lng = (l["lng"] as? Number)?.toDouble() ?: 0.0,
+                        accuracy = (l["accuracy"] as? Number)?.toDouble(),
+                        label = l["label"] as? String,
+                        liveSeconds = (l["liveUntil"] as? String)?.let { until ->
+                            val ms = parseIso(until) ?: return@let null
+                            val seconds = ((ms - System.currentTimeMillis()) / 1000).toInt()
+                            // Back to the choice the sender made, even if the
+                            // message waited in the outbox first.
+                            listOf(900, 3600, 28800).minByOrNull { c -> kotlin.math.abs(c - seconds) }
+                        },
+                    )
+                },
                 contact = (meta["contact"] as? Map<String, Any?>)?.let { c ->
                     ContactCardBody(
                         name = c["name"] as? String ?: "",
@@ -700,6 +731,26 @@ class MessagingRepository(
             if (seconds == null) ConvSettingsBody(clearDisappearing = true) else ConvSettingsBody(disappearingSeconds = seconds),
         )
         syncNow()
+    }
+
+    /** Moves my live location on. Quiet on failure: the next tick tries again. */
+    suspend fun updateLiveLocation(messageId: String, lat: Double, lng: Double, accuracy: Double?): Boolean =
+        runCatching { api.updateLocation(messageId, LocationPoint(lat, lng, accuracy)) }
+            .onSuccess { upsertMessages(listOf(it)) }
+            .onFailure { Log.w(TAG, "LIVE_LOCATION_UPDATE_FAILED ${it.message}") }
+            .isSuccess
+
+    /** Ends my live location share. */
+    suspend fun stopLiveLocation(messageId: String) = act("stop sharing") {
+        api.stopLocation(messageId).also { upsertMessages(listOf(it)) }
+    }
+
+    /** Live shares of mine that are still running — what the service keeps going. */
+    suspend fun myLiveLocations(): List<ChatMessage> {
+        val me = myUserId() ?: return emptyList()
+        val now = System.currentTimeMillis()
+        return dao.liveLocations().map { it.toChat(me) }
+            .filter { it.mine && (it.place?.liveUntil ?: 0L) > now }
     }
 
     /** Archive or bring back a chat. Mine alone — the other side is never told. */

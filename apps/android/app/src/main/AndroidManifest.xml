@@ -14,6 +14,8 @@
 
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
 
         android:usesPermissionFlags="neverForLocation" />
@@ -37,6 +39,9 @@
          silently kill call-signaling after the app sits backgrounded a while.
          phoneCall has no such limit — it's meant for exactly this. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+
+    <!-- Shown while a live location is being shared, with a Stop action. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
 
@@ -130,6 +135,11 @@
         <!-- Wakes the app for an incoming call when the signaling socket is
              not connected. Must be exported="false"; FCM delivers through the
              Play services binding, not an outside caller. -->
+        <service
+            android:name=".messaging.location.LiveLocationService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
         <service
             android:name=".push.ViroFirebaseMessagingService"
             android:exported="false">

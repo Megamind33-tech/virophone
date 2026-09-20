@@ -50,6 +50,8 @@ export interface SendMessageInput {
   sticker?: { pack: string; id: string };
   /** A shared contact card: a name plus numbers and/or a Viro ID. */
   contact?: { name: string; phones?: string[]; viroId?: string; userId?: string };
+  /** A place, or the start of a live location share. */
+  location?: { lat: number; lng: number; accuracy?: number; label?: string; liveSeconds?: number };
 }
 
 export interface PollDto {
@@ -59,6 +61,12 @@ export interface PollDto {
   totalVoters: number;
   myVotes: number[];
 }
+
+/** How long a live location may run for. */
+const LIVE_LOCATION_CHOICES = [15 * 60, 60 * 60, 8 * 60 * 60];
+
+/** ~11 cm of precision: enough to find someone, and no more than that. */
+const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
 
 /** GIFs play straight from the provider's CDN; nothing else is accepted. */
 const GIF_HOSTS = /^https:\/\/([a-z0-9-]+\.)*(giphy\.com|tenor\.com)\//i;
@@ -398,6 +406,10 @@ export class MessagesService {
     if (m.type === 'STICKER') return `${m.body ?? ''} Sticker`.trim();
     if (m.type === 'FILE') return `📎 ${(m.metadata?.file as { name?: string })?.name ?? 'Document'}`;
     if (m.type === 'CONTACT') return `👤 ${(m.metadata?.contact as { name?: string })?.name ?? 'Contact'}`;
+    if (m.type === 'LOCATION') {
+      const live = (m.metadata?.location as { liveUntil?: string })?.liveUntil;
+      return live && new Date(live).getTime() > Date.now() ? '📍 Live location' : '📍 Location';
+    }
     return (m.body || '').slice(0, 120);
   }
 
@@ -412,7 +424,7 @@ export class MessagesService {
 
   async sendMessage(senderId: string, senderDeviceId: string | null, input: SendMessageInput) {
     const type = (input.type || 'TEXT').toUpperCase();
-    if (!['TEXT', 'VOICE', 'IMAGE', 'LOOP', 'POLL', 'GIF', 'STICKER', 'FILE', 'CONTACT'].includes(type)) {
+    if (!['TEXT', 'VOICE', 'IMAGE', 'LOOP', 'POLL', 'GIF', 'STICKER', 'FILE', 'CONTACT', 'LOCATION'].includes(type)) {
       this.fail('VALIDATION_ERROR', 'Unsupported message type.', HttpStatus.BAD_REQUEST);
     }
     const body = (input.body || '').trim();
@@ -421,6 +433,34 @@ export class MessagesService {
     }
     if ((type === 'VOICE' || type === 'IMAGE' || type === 'FILE') && !input.mediaId) {
       this.fail('VALIDATION_ERROR', 'This message needs its file.', HttpStatus.BAD_REQUEST);
+    }
+    let location: {
+      lat: number;
+      lng: number;
+      accuracy: number | null;
+      label: string | null;
+      liveUntil: string | null;
+      updatedAt: string;
+    } | null = null;
+    if (type === 'LOCATION') {
+      const lat = Number(input.location?.lat);
+      const lng = Number(input.location?.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+        this.fail('VALIDATION_ERROR', 'That location is not valid.', HttpStatus.BAD_REQUEST);
+      }
+      const seconds = input.location?.liveSeconds;
+      if (seconds !== undefined && !LIVE_LOCATION_CHOICES.includes(seconds)) {
+        this.fail('VALIDATION_ERROR', 'Share live location for 15 minutes, 1 hour or 8 hours.', HttpStatus.BAD_REQUEST);
+      }
+      const accuracy = Number(input.location?.accuracy);
+      location = {
+        lat: round6(lat),
+        lng: round6(lng),
+        accuracy: Number.isFinite(accuracy) && accuracy > 0 ? Math.round(accuracy) : null,
+        label: input.location?.label?.trim().slice(0, 120) || null,
+        liveUntil: seconds ? new Date(Date.now() + seconds * 1000).toISOString() : null,
+        updatedAt: new Date().toISOString(),
+      };
     }
     let contact: { name: string; phones: string[]; viroId: string | null; userId: string | null } | null = null;
     if (type === 'CONTACT') {
@@ -537,6 +577,9 @@ export class MessagesService {
     }
     if (type === 'CONTACT' && contact) {
       metadata.contact = contact;
+    }
+    if (type === 'LOCATION' && location) {
+      metadata.location = location;
     }
     if (type === 'FILE' && input.mediaId) {
       // Carried on the message so a notification can name the document
@@ -934,6 +977,85 @@ export class MessagesService {
   }
 
   // ------------------------------------------------- conversation controls
+
+  /**
+   * Moves a live location on. Only its sender, only while the share is still
+   * running — an expired share can't be quietly resumed.
+   */
+  async updateLiveLocation(
+    userId: string,
+    messageId: string,
+    point: { lat: number; lng: number; accuracy?: number },
+  ) {
+    const { message, current } = await this.liveLocationMessage(userId, messageId);
+    if (!current.liveUntil || new Date(current.liveUntil).getTime() <= Date.now()) {
+      this.fail('VALIDATION_ERROR', 'That live location has ended.', HttpStatus.BAD_REQUEST);
+    }
+    const lat = Number(point.lat);
+    const lng = Number(point.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      this.fail('VALIDATION_ERROR', 'That location is not valid.', HttpStatus.BAD_REQUEST);
+    }
+    const accuracy = Number(point.accuracy);
+    message.metadata = {
+      ...(message.metadata ?? {}),
+      location: {
+        ...current,
+        lat: round6(lat),
+        lng: round6(lng),
+        accuracy: Number.isFinite(accuracy) && accuracy > 0 ? Math.round(accuracy) : null,
+        updatedAt: new Date().toISOString(),
+      },
+    };
+    return this.saveAndBroadcastLocation(userId, message);
+  }
+
+  /** Ends a live location share early. */
+  async stopLiveLocation(userId: string, messageId: string) {
+    const { message, current } = await this.liveLocationMessage(userId, messageId);
+    message.metadata = {
+      ...(message.metadata ?? {}),
+      location: { ...current, liveUntil: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    };
+    return this.saveAndBroadcastLocation(userId, message);
+  }
+
+  private async liveLocationMessage(userId: string, messageId: string) {
+    const message = await this.msgRepo.findOne({ where: { id: messageId } });
+    if (!message || message.deletedAt) {
+      this.fail('NOT_FOUND', 'That location is no longer here.', HttpStatus.NOT_FOUND);
+    }
+    if (message!.senderUserId !== userId) {
+      this.fail('FORBIDDEN', 'Only the person sharing can change it.', HttpStatus.FORBIDDEN);
+    }
+    if (message!.type !== 'LOCATION') {
+      this.fail('VALIDATION_ERROR', 'That message is not a location.', HttpStatus.BAD_REQUEST);
+    }
+    const current = (message!.metadata?.location ?? {}) as {
+      lat?: number;
+      lng?: number;
+      accuracy?: number | null;
+      label?: string | null;
+      liveUntil?: string | null;
+      updatedAt?: string;
+    };
+    if (!current.liveUntil) {
+      this.fail('VALIDATION_ERROR', 'That location was sent once, not shared live.', HttpStatus.BAD_REQUEST);
+    }
+    return { message: message!, current };
+  }
+
+  private async saveAndBroadcastLocation(userId: string, message: Message) {
+    const saved = await this.msgRepo.save(message);
+    const ids = await this.participantIds(saved.conversationId);
+    const hydrated = (await this.hydrate(userId, [saved]))[0];
+    await this.emitFrame(ids, {
+      type: 'message.updated',
+      conversationId: saved.conversationId,
+      message: hydrated,
+    });
+    return hydrated;
+  }
 
   async updateSettings(
     userId: string,
