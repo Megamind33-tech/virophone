@@ -27,6 +27,25 @@ export class Profile {
   })
   allowCallsFromViroId!: string;
 
+  /** A short line about themselves, shown on their contact page. */
+  @Column({ type: "varchar", length: 139, nullable: true })
+  about!: string | null;
+
+  /** EVERYONE | CONTACTS | NOBODY — who may read [about]. */
+  @Column({ name: "about_visibility", type: "varchar", length: 16, default: "EVERYONE" })
+  aboutVisibility!: string;
+
+  /** EVERYONE | CONTACTS | NOBODY — who may see their photo. */
+  @Column({ name: "photo_visibility", type: "varchar", length: 16, default: "EVERYONE" })
+  photoVisibility!: string;
+
+  /** EVERYONE | CONTACTS | NOBODY — who may see when they were last here. */
+  @Column({ name: "last_seen_visibility", type: "varchar", length: 16, default: "CONTACTS" })
+  lastSeenVisibility!: string;
+
+  @Column({ name: "last_seen_at", type: "timestamptz", nullable: true })
+  lastSeenAt!: Date | null;
+
   /** Set once the person has chosen their name and Viro ID; NULL shows the setup step. */
   @Column({ name: 'profile_completed_at', type: 'timestamptz', nullable: true })
   profileCompletedAt!: Date | null;

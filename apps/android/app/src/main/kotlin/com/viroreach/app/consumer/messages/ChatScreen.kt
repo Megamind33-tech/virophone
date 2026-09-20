@@ -171,10 +171,14 @@ fun ChatScreen(
 
     // ---- presence -----------------------------------------------------------
     var peerPresence by remember(peerUserId) { mutableStateOf<String?>(null) }
+    var peerLastSeen by remember(peerUserId) { mutableStateOf<Long?>(null) }
     LaunchedEffect(peerUserId) {
         val target = peerUserId ?: return@LaunchedEffect
         while (true) {
-            runCatching { session.api.getPresence(target) }.onSuccess { peerPresence = it.state }
+            runCatching { session.api.getPresence(target) }.onSuccess {
+                peerPresence = it.state
+                peerLastSeen = com.viroreach.app.messaging.parseIso(it.lastSeenAt)
+            }
             delay(30_000)
         }
     }
@@ -464,6 +468,8 @@ fun ChatScreen(
                     cid != null && present.containsKey(cid) -> "💫 Together now"
                     peerPresence == "ONLINE" -> "Online"
                     peerPresence == "BUSY" -> "On a call"
+                    // Only when they share it; otherwise nothing is said at all.
+                    peerLastSeen != null -> com.viroreach.app.people.lastSeenLabel(peerLastSeen)
                     else -> relationship?.let { labelOf(it.relationshipType, it.customLabel) }
                 },
                 subtitleActive = cid != null && (typing.containsKey(cid) || present.containsKey(cid)),

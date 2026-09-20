@@ -7,6 +7,7 @@ import {
   Body,
   UseGuards,
   Req,
+  Param,
   Query,
   UploadedFile,
   UseInterceptors,
@@ -15,7 +16,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { IsString, IsOptional, IsIn, IsBoolean, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsIn, IsBoolean, MaxLength, ValidateIf } from 'class-validator';
 
 class UpdateMeDto {
   @IsString()
@@ -45,6 +46,17 @@ class UpdateMeDto {
   @IsBoolean()
   @IsOptional()
   completeProfile?: boolean;
+
+  /** A short line about yourself. Null or "" clears it. */
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @IsOptional()
+  @MaxLength(139)
+  about?: string | null;
+
+  @IsString() @IsOptional() @IsIn(['EVERYONE', 'CONTACTS', 'NOBODY']) aboutVisibility?: string;
+  @IsString() @IsOptional() @IsIn(['EVERYONE', 'CONTACTS', 'NOBODY']) photoVisibility?: string;
+  @IsString() @IsOptional() @IsIn(['EVERYONE', 'CONTACTS', 'NOBODY']) lastSeenVisibility?: string;
 }
 
 @Controller('api/v1/me')
@@ -61,6 +73,12 @@ export class UsersController {
   @Get('viro-id/check')
   async checkViroId(@Req() req: { user: { sub: string } }, @Query('id') id?: string, @Query('name') name?: string) {
     return this.usersService.checkViroId(req.user.sub, id, name);
+  }
+
+  /** Someone else's profile, trimmed to what they allow me to see. */
+  @Get("profile/:userId")
+  async publicProfile(@Req() req: { user: { sub: string } }, @Param("userId") userId: string) {
+    return this.usersService.publicProfile(req.user.sub, userId);
   }
 
   @Get('export')

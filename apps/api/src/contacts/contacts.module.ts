@@ -8,13 +8,13 @@ import { ContactMatch } from '../database/entities/contact-match.entity';
 import { Block } from '../database/entities/block.entity';
 import { ViroConnection } from '../database/entities/viro-connection.entity';
 import { SecurityModule } from '../security/security.module';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([
-      PhoneIdentity, Profile, ContactMatch, Block, ViroConnection,
-    ]),
+    TypeOrmModule.forFeature([PhoneIdentity, Profile, ContactMatch, Block, ViroConnection]),
     SecurityModule,
+    UsersModule,
   ],
   controllers: [ContactsController],
   providers: [ContactsService],

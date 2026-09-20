@@ -4,6 +4,8 @@ import { In, Repository } from 'typeorm';
 import * as fs from 'fs';
 import { Profile } from '../database/entities/profile.entity';
 import { EmailIdentity } from '../database/entities/email-identity.entity';
+import { ContactMatch } from '../database/entities/contact-match.entity';
+import { VisibilityService, VISIBILITY_CHOICES } from './visibility.service';
 import { PhoneIdentity } from '../database/entities/phone-identity.entity';
 import { User } from '../database/entities/user.entity';
 import { Device } from '../database/entities/device.entity';
@@ -40,6 +42,8 @@ export class UsersService {
     @InjectRepository(ConversationParticipant)
     private readonly partRepo: Repository<ConversationParticipant>,
     @InjectRepository(Message) private readonly msgRepo: Repository<Message>,
+    @InjectRepository(ContactMatch) private readonly matchRepo: Repository<ContactMatch>,
+    private readonly visibility: VisibilityService,
   ) {}
 
   async getMe(userId: string) {
@@ -60,6 +64,10 @@ export class UsersService {
       allowCallsFromViroId: profile.allowCallsFromViroId,
       discoverableByEmail: profile.discoverableByEmail,
       profileCompleted: profile.profileCompletedAt != null,
+      about: profile.about,
+      aboutVisibility: profile.aboutVisibility,
+      photoVisibility: profile.photoVisibility,
+      lastSeenVisibility: profile.lastSeenVisibility,
     };
   }
 
@@ -70,6 +78,10 @@ export class UsersService {
     allowCallsFromViroId?: string;
     discoverableByEmail?: boolean;
     completeProfile?: boolean;
+    about?: string | null;
+    aboutVisibility?: string;
+    photoVisibility?: string;
+    lastSeenVisibility?: string;
   }) {
     const profile = await this.profileRepo.findOne({ where: { userId } });
     if (!profile) {
@@ -84,6 +96,21 @@ export class UsersService {
       profile.displayName = name.slice(0, 60);
     }
     if (updates.discoverableByEmail !== undefined) profile.discoverableByEmail = updates.discoverableByEmail;
+    if (updates.about !== undefined) {
+      profile.about = updates.about?.replace(/\s+/g, ' ').trim().slice(0, 139) || null;
+    }
+    for (const [key, value] of [
+      ['aboutVisibility', updates.aboutVisibility],
+      ['photoVisibility', updates.photoVisibility],
+      ['lastSeenVisibility', updates.lastSeenVisibility],
+    ] as const) {
+      if (value === undefined) continue;
+      const choice = String(value).toUpperCase();
+      if (!VISIBILITY_CHOICES.includes(choice as never)) {
+        throw new ViroException('VALIDATION_ERROR', 'Choose everyone, my contacts, or nobody.', HttpStatus.BAD_REQUEST);
+      }
+      (profile as unknown as Record<string, string>)[key] = choice;
+    }
     if (updates.avatarUrl !== undefined) profile.avatarUrl = updates.avatarUrl;
     if (updates.allowCallsFromViroId !== undefined) {
       profile.allowCallsFromViroId = updates.allowCallsFromViroId;
@@ -159,6 +186,49 @@ export class UsersService {
     const taken = await this.profileRepo.find({ where: { viroIdNormalized: In(candidates) } });
     const takenSet = new Set(taken.filter((p) => p.userId !== userId).map((p) => p.viroIdNormalized));
     return candidates.filter((c) => !takenSet.has(c)).slice(0, 4).map(formatViroId);
+  }
+
+  /**
+   * Someone else's profile, trimmed to what they allow this viewer to see.
+   * Blocked either way, and there is nothing to show.
+   */
+  async publicProfile(viewerId: string, ownerId: string) {
+    const profile = await this.profileRepo.findOne({ where: { userId: ownerId } });
+    if (!profile) {
+      throw new ViroException('NOT_FOUND', 'Profile not found.', HttpStatus.NOT_FOUND);
+    }
+    const blocked = await this.blockRepo.findOne({
+      where: [
+        { blockerUserId: ownerId, blockedUserId: viewerId },
+        { blockerUserId: viewerId, blockedUserId: ownerId },
+      ],
+    });
+    const hidden = !!blocked;
+    const [showPhoto, showAbout, showLastSeen] = hidden
+      ? [false, false, false]
+      : await Promise.all([
+          this.visibility.canSee(viewerId, ownerId, profile.photoVisibility),
+          this.visibility.canSee(viewerId, ownerId, profile.aboutVisibility),
+          this.visibility.canSeeLastSeen(viewerId, profile),
+        ]);
+    return {
+      userId: ownerId,
+      displayName: profile.displayName,
+      viroId: profile.viroId,
+      avatarUrl: showPhoto ? publicAvatarUrl(profile.avatarUrl) : null,
+      about: showAbout ? profile.about : null,
+      lastSeenAt: showLastSeen ? profile.lastSeenAt?.toISOString() ?? null : null,
+    };
+  }
+
+  /** Remembers when someone was last connected; written at most once a minute. */
+  async touchLastSeen(userId: string): Promise<void> {
+    const profile = await this.profileRepo.findOne({ where: { userId } });
+    if (!profile) return;
+    const now = new Date();
+    if (profile.lastSeenAt && now.getTime() - profile.lastSeenAt.getTime() < 60_000) return;
+    profile.lastSeenAt = now;
+    await this.profileRepo.save(profile);
   }
 
   /** GDPR data export for the authenticated user. */

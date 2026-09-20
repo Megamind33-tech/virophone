@@ -1,4 +1,6 @@
 import { publicAvatarUrl } from '../users/avatar.util';
+import { VisibilityService } from '../users/visibility.service';
+
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -26,6 +28,7 @@ export class ContactsService {
     @InjectRepository(Block) private readonly blockRepo: Repository<Block>,
     @InjectRepository(ViroConnection) private readonly connectionRepo: Repository<ViroConnection>,
     private readonly securityService: SecurityService,
+    private readonly visibility: VisibilityService,
   ) {}
 
   /**
@@ -126,7 +129,9 @@ export class ContactsService {
         userId: identity.userId,
         viroId: profile.viroId || '',
         displayName: profile.displayName,
-        avatarUrl: publicAvatarUrl(profile.avatarUrl),
+        avatarUrl: (await this.visibility.canSee(userId, profile.userId, profile.photoVisibility))
+          ? publicAvatarUrl(profile.avatarUrl)
+          : null,
         relationshipState,
       });
 

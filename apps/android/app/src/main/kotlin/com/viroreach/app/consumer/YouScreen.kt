@@ -9,8 +9,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.FileProvider
+import com.viroreach.app.people.visibilityLabel
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.designsystem.ViroColors
 import com.viroreach.core.designsystem.ViroSpacing
@@ -43,6 +45,9 @@ fun YouScreen(
     val viewModel = remember(session, showDeveloperEntry) {
         YouViewModel(session, showDeveloperEntry)
     }
+    // My own profile as the server knows it: About line and privacy settings.
+    val me by session.people.me.collectAsState()
+    LaunchedEffect(Unit) { session.people.refreshMe() }
     val profile by session.profileRepository.profile.collectAsState(
         initial = com.viroreach.app.personalization.UserProfile(),
     )
@@ -53,6 +58,8 @@ fun YouScreen(
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var exporting by remember { mutableStateOf(false) }
     var callingPrivacyExpanded by remember { mutableStateOf(false) }
+    var editingAbout by remember { mutableStateOf<String?>(null) }
+    var visibilityFor by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         viewModel.refresh()
         session.profileRepository.refreshFromServer()
@@ -158,6 +165,22 @@ fun YouScreen(
                             }
                         }
                     }
+                    val about = me?.about
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable { editingAbout = about.orEmpty() },
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("About", style = MaterialTheme.typography.bodyLarge, color = ViroColors.textPrimary)
+                        Text(
+                            about?.takeIf { it.isNotBlank() } ?: "Add a line",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (about.isNullOrBlank()) ViroColors.accent else ViroColors.textSecondary,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(start = ViroSpacing.md).weight(1f, fill = false),
+                        )
+                    }
                     SettingsNavRow("Subscription", onSubscription)
                 }
                 SettingsSection(title = "Preferences") {
@@ -167,10 +190,13 @@ fun YouScreen(
                     SettingsRow(label = "Notifications", value = "Coming soon")
                 }
                 SettingsSection(title = "Privacy & Security") {
+                    // Who sees what about me.
+                    SettingsRowClickable("Last seen", visibilityLabel(me?.lastSeenVisibility)) { visibilityFor = "lastSeen" }
+                    SettingsRowClickable("Profile photo", visibilityLabel(me?.photoVisibility)) { visibilityFor = "photo" }
+                    SettingsRowClickable("About", visibilityLabel(me?.aboutVisibility)) { visibilityFor = "about" }
                     SettingsNavRow("Add people", onAddPeople)
                     SettingsNavRow("Connections", onConnections)
                     // Exact-match only, and only for a verified address.
-                    val me by session.people.me.collectAsState()
                     val findableByEmail = me?.discoverableByEmail ?: true
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -322,6 +348,89 @@ fun YouScreen(
         )
     }
 
+    editingAbout?.let { current ->
+        var text by remember(current) { mutableStateOf(current) }
+        AlertDialog(
+            onDismissRequest = { editingAbout = null },
+            title = { Text("About") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { if (it.length <= 139) text = it },
+                        label = { Text("Say something about yourself") },
+                        singleLine = false,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "${text.length} of 139",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ViroColors.textMuted,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    editingAbout = null
+                    scope.launch {
+                        session.people.update(com.viroreach.core.network.UpdateMeBody(about = text.trim()))
+                    }
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { editingAbout = null }) { Text("Cancel") } },
+        )
+    }
+
+    visibilityFor?.let { which ->
+        val title = when (which) {
+            "lastSeen" -> "Who can see when you were last seen"
+            "photo" -> "Who can see your profile photo"
+            else -> "Who can read your About line"
+        }
+        val current = when (which) {
+            "lastSeen" -> me?.lastSeenVisibility
+            "photo" -> me?.photoVisibility
+            else -> me?.aboutVisibility
+        }
+        AlertDialog(
+            onDismissRequest = { visibilityFor = null },
+            title = { Text(title) },
+            text = {
+                Column {
+                    com.viroreach.app.people.VISIBILITY_LABELS.forEach { (value, label) ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable {
+                                visibilityFor = null
+                                scope.launch {
+                                    session.people.update(
+                                        when (which) {
+                                            "lastSeen" -> com.viroreach.core.network.UpdateMeBody(lastSeenVisibility = value)
+                                            "photo" -> com.viroreach.core.network.UpdateMeBody(photoVisibility = value)
+                                            else -> com.viroreach.core.network.UpdateMeBody(aboutVisibility = value)
+                                        },
+                                    )
+                                }
+                            }.padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = (current ?: "EVERYONE").uppercase() == value, onClick = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(label, color = ViroColors.textPrimary)
+                        }
+                    }
+                    if (which == "lastSeen") {
+                        Text(
+                            "If you don't share when you were last seen, you won't see it for other people either.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ViroColors.textMuted,
+                        )
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { visibilityFor = null }) { Text("Close") } },
+        )
+    }
+
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { if (!deleting) confirmDelete = false },
@@ -389,6 +498,18 @@ private fun SettingsNavRow(label: String, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(vertical = ViroSpacing.sm),
     )
+}
+
+@Composable
+private fun SettingsRowClickable(label: String, value: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyLarge, color = ViroColors.textPrimary)
+        Text(value, style = MaterialTheme.typography.bodyMedium, color = ViroColors.accent)
+    }
 }
 
 @Composable

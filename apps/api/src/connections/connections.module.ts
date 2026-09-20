@@ -6,9 +6,10 @@ import { ViroConnection } from '../database/entities/viro-connection.entity';
 import { Block } from '../database/entities/block.entity';
 import { Profile } from '../database/entities/profile.entity';
 import { PushModule } from '../push/push.module';
+import { UsersModule } from '../users/users.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ViroConnection, Block, Profile]), PushModule],
+  imports: [TypeOrmModule.forFeature([ViroConnection, Block, Profile]), PushModule, UsersModule],
   controllers: [ConnectionsController],
   providers: [ConnectionsService],
   exports: [ConnectionsService],

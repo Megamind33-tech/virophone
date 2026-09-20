@@ -8,6 +8,8 @@ import { ViroException } from '../common/exceptions/viro.exception';
 import { HttpStatus } from '@nestjs/common';
 import { PushService } from '../push/push.service';
 import { publicAvatarUrl } from '../users/avatar.util';
+import { VisibilityService } from '../users/visibility.service';
+
 
 /**
  * Connections are how people reach each other without a phone number: find
@@ -26,6 +28,7 @@ export class ConnectionsService {
     @InjectRepository(Block) private readonly blockRepo: Repository<Block>,
     @InjectRepository(Profile) private readonly profileRepo: Repository<Profile>,
     private readonly pushService: PushService,
+    private readonly visibility: VisibilityService,
   ) {}
 
   async list(userId: string) {
@@ -49,9 +52,16 @@ export class ConnectionsService {
     const blocked = new Set(blocks.map((b) => (b.blockerUserId === userId ? b.blockedUserId : b.blockerUserId)));
     const profiles = peerIds.length ? await this.profileRepo.find({ where: { userId: In(peerIds) } }) : [];
     const byId = new Map(profiles.map((p) => [p.userId, p]));
+    const photoOk = await this.visibility.filterVisible(
+      userId,
+      profiles.map((p) => ({ userId: p.userId, setting: p.photoVisibility })),
+    );
     return visible
       .filter((c) => !blocked.has(c.requesterUserId === userId ? c.recipientUserId : c.requesterUserId))
-      .map((c) => this.toDto(c, userId, byId.get(c.requesterUserId === userId ? c.recipientUserId : c.requesterUserId)));
+      .map((c) => {
+        const peerId = c.requesterUserId === userId ? c.recipientUserId : c.requesterUserId;
+        return this.toDto(c, userId, byId.get(peerId), photoOk.has(peerId));
+      });
   }
 
   async create(requesterId: string, targetUserId: string) {
@@ -168,6 +178,7 @@ export class ConnectionsService {
     c: { id: string; requesterUserId: string; recipientUserId: string; status: string; createdAt?: Date; acceptedAt?: Date | null },
     viewerUserId: string,
     peer?: Profile,
+    showPhoto = true,
   ) {
     const outgoing = c.requesterUserId === viewerUserId;
     return {
@@ -179,7 +190,7 @@ export class ConnectionsService {
       direction: outgoing ? 'OUTGOING' : 'INCOMING',
       peerUserId: outgoing ? c.recipientUserId : c.requesterUserId,
       peerDisplayName: peer?.displayName || null,
-      peerAvatarUrl: peer ? publicAvatarUrl(peer.avatarUrl) : null,
+      peerAvatarUrl: peer && showPhoto ? publicAvatarUrl(peer.avatarUrl) : null,
       peerViroId: peer?.viroId ?? null,
       createdAt: c.createdAt ?? null,
       acceptedAt: c.acceptedAt ?? null,

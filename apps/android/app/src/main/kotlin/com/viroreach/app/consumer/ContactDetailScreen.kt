@@ -52,6 +52,12 @@ fun ContactDetailScreen(
     var isEditingName by remember { mutableStateOf(false) }
     var editedName by remember(profile.effectiveDisplayName) { mutableStateOf(profile.effectiveDisplayName) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
+    // What they let me see: About line, and when they were last here.
+    var publicProfile by remember(contact.userId) { mutableStateOf<com.viroreach.core.network.PublicProfileDto?>(null) }
+    LaunchedEffect(contact.userId) {
+        val id = contact.userId ?: return@LaunchedEffect
+        publicProfile = runCatching { session.api.publicProfile(id) }.getOrNull()
+    }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showBlockConfirm by remember { mutableStateOf(false) }
     var showPhotoOptions by remember { mutableStateOf(false) }
@@ -273,6 +279,21 @@ fun ContactDetailScreen(
                     }
                     if (profile.isReachable) {
                         Text("On Viro", color = ViroColors.success, style = MaterialTheme.typography.labelMedium)
+                    }
+                    // Only what this person allows: an empty About or a hidden
+                    // last seen simply isn't there.
+                    publicProfile?.about?.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ViroColors.textPrimary,
+                            modifier = Modifier.padding(top = ViroSpacing.sm),
+                        )
+                    }
+                    com.viroreach.app.people.lastSeenLabel(
+                        com.viroreach.app.messaging.parseIso(publicProfile?.lastSeenAt),
+                    )?.let {
+                        Text(it, style = MaterialTheme.typography.labelMedium, color = ViroColors.textSecondary)
                     }
                     statusMessage?.let {
                         Text(it, color = ViroColors.textSecondary, style = MaterialTheme.typography.labelMedium)

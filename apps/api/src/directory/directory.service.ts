@@ -7,6 +7,7 @@ import { Block } from '../database/entities/block.entity';
 import { ViroConnection } from '../database/entities/viro-connection.entity';
 import { EmailIdentity } from '../database/entities/email-identity.entity';
 import { ContactMatch } from '../database/entities/contact-match.entity';
+import { VisibilityService } from '../users/visibility.service';
 import { normalizeViroId, formatViroId } from '../common/utils/viro-id.util';
 import { ViroException } from '../common/exceptions/viro.exception';
 import { HttpStatus } from '@nestjs/common';
@@ -17,6 +18,8 @@ export interface FoundPerson {
   displayName: string;
   avatarUrl: string | null;
   viroId: string | null;
+  /** Their About line, when they let this viewer read it. */
+  about: string | null;
   /** How the query matched. The email itself is never returned. */
   matchedBy: 'VIRO_ID' | 'EMAIL';
   /** The connection between the two, from the searcher's side. REJECTED is reported as PENDING. */
@@ -40,6 +43,7 @@ export class DirectoryService {
     @InjectRepository(ViroConnection) private readonly connectionRepo: Repository<ViroConnection>,
     @InjectRepository(EmailIdentity) private readonly emailRepo: Repository<EmailIdentity>,
     @InjectRepository(ContactMatch) private readonly matchRepo: Repository<ContactMatch>,
+    private readonly visibility: VisibilityService,
   ) {}
 
   /**
@@ -70,7 +74,9 @@ export class DirectoryService {
     return {
       userId: profile.userId,
       displayName: profile.displayName,
-      avatarUrl: publicAvatarUrl(profile.avatarUrl),
+      avatarUrl: (await this.visibility.canSee(requesterId, profile.userId, profile.photoVisibility))
+        ? publicAvatarUrl(profile.avatarUrl)
+        : null,
       viroId: profile.viroId || formatViroId(normalized),
     };
   }
@@ -136,7 +142,10 @@ export class DirectoryService {
     return {
       userId: profile.userId,
       displayName: profile.displayName,
-      avatarUrl: publicAvatarUrl(profile.avatarUrl),
+      avatarUrl: (await this.visibility.canSee(requesterId, profile.userId, profile.photoVisibility))
+        ? publicAvatarUrl(profile.avatarUrl)
+        : null,
+      about: (await this.visibility.canSee(requesterId, profile.userId, profile.aboutVisibility)) ? profile.about : null,
       viroId: profile.viroId,
       matchedBy,
       connection,

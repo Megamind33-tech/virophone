@@ -111,6 +111,10 @@ interface ViroApiService {
     @POST("api/v1/contacts/discover")
     suspend fun discoverContacts(@Body body: DiscoverBody): DiscoverResponse
 
+    /** Someone else's profile, as they allow me to see it. */
+    @GET("api/v1/me/profile/{userId}")
+    suspend fun publicProfile(@Path("userId") userId: String): PublicProfileDto
+
     /** Is this Viro ID valid and free for me? Always carries a few free suggestions. */
     @GET("api/v1/me/viro-id/check")
     suspend fun checkViroId(@Query("id") id: String?, @Query("name") name: String?): ViroIdCheck
@@ -283,6 +287,12 @@ data class MeResponse(
     val email: String? = null,
     val emailVerified: Boolean? = null,
     val discoverableByEmail: Boolean? = null,
+    /** A short line about me. */
+    val about: String? = null,
+    /** EVERYONE | CONTACTS | NOBODY. */
+    val aboutVisibility: String? = null,
+    val photoVisibility: String? = null,
+    val lastSeenVisibility: String? = null,
     /** False until the one-time name + Viro ID step is done. Null from an older server: treat as done. */
     val profileCompleted: Boolean? = null,
 )
@@ -329,6 +339,10 @@ data class UpdateMeBody(
     val allowCallsFromViroId: String? = null,
     val discoverableByEmail: Boolean? = null,
     val completeProfile: Boolean? = null,
+    val about: String? = null,
+    val aboutVisibility: String? = null,
+    val photoVisibility: String? = null,
+    val lastSeenVisibility: String? = null,
 )
 data class BlockUserBody(val blockedUserId: String)
 data class BlockedUser(val blockedUserId: String)
@@ -463,4 +477,18 @@ data class ConferenceParticipantDto(val userId: String, val deviceId: String)
 
 // Presence
 data class UpdatePresenceBody(val state: String)
-data class PresenceResponse(val state: String)
+data class PresenceResponse(
+    val state: String,
+    /** When they were last here, if they let me see it. */
+    val lastSeenAt: String? = null,
+)
+
+/** Someone else's profile, already trimmed by the server to what I may see. */
+data class PublicProfileDto(
+    val userId: String,
+    val displayName: String?,
+    val viroId: String?,
+    val avatarUrl: String?,
+    val about: String?,
+    val lastSeenAt: String?,
+)

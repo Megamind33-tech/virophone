@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { UsersService } from './users.service';
+import { VisibilityService } from './visibility.service';
 import { UsersController } from './users.controller';
+import { ContactMatch } from '../database/entities/contact-match.entity';
 import { EmailIdentity } from '../database/entities/email-identity.entity';
 import { Profile } from '../database/entities/profile.entity';
 import { PhoneIdentity } from '../database/entities/phone-identity.entity';
@@ -20,6 +22,7 @@ import { Message } from '../database/entities/message.entity';
     TypeOrmModule.forFeature([
       Profile,
       EmailIdentity,
+      ContactMatch,
       PhoneIdentity,
       User,
       Device,
@@ -33,7 +36,7 @@ import { Message } from '../database/entities/message.entity';
     ]),
   ],
   controllers: [UsersController],
-  providers: [UsersService],
-  exports: [UsersService],
+  providers: [UsersService, VisibilityService],
+  exports: [UsersService, VisibilityService],
 })
 export class UsersModule {}

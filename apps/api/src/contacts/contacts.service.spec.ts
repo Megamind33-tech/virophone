@@ -20,6 +20,8 @@ describe('ContactsService - Discovery Privacy', () => {
       mockBlockRepo as any,
       mockConnectionRepo as any,
       mockSecurity,
+      // Photo visibility: this suite is about matching, so everything is visible.
+      { canSee: jest.fn().mockResolvedValue(true) } as any,
     );
   });
 
