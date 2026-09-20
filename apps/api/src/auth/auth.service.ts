@@ -758,6 +758,14 @@ export class AuthService {
     });
     return this.listIdentities(userId);
   }
+  /**
+   * Tokens for a device the user has just approved from another one they are
+   * already signed in on (the web companion). No OTP: the approval is the proof.
+   */
+  async createSessionForDevice(userId: string, deviceId: string) {
+    return this.createSession(userId, deviceId);
+  }
+
   private async createSession(userId: string, deviceId: string, familyId?: string) {
     const family = familyId || uuidv4();
     const refreshToken = uuidv4() + '.' + uuidv4();

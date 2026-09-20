@@ -93,6 +93,10 @@ interface ViroApiService {
     @DELETE("api/v1/connections/{id}")
     suspend fun revokeConnection(@Path("id") id: String)
 
+    /** Approves a device someone is linking, by the code it shows. */
+    @POST("api/v1/devices/link/approve")
+    suspend fun approveDeviceLink(@Body body: ApproveLinkBody): ApproveLinkResponse
+
     @GET("api/v1/devices")
     suspend fun listDevices(): List<DeviceSummary>
 
@@ -359,6 +363,9 @@ data class ConnectionDto(
     val peerAvatarUrl: String? = null,
     val peerViroId: String? = null,
 )
+data class ApproveLinkBody(val code: String)
+data class ApproveLinkResponse(val linked: Boolean?, val deviceId: String?, val label: String?)
+
 data class DeviceSummary(
     val id: String,
     val platform: String,

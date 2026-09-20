@@ -455,8 +455,13 @@ export class MessagesService {
       updatedAt: string;
     } | null = null;
     if (type === 'LOCATION') {
-      const lat = Number(input.location?.lat);
-      const lng = Number(input.location?.lng);
+      // A coordinate must actually be a number. JSON has no NaN, so a phone
+      // that couldn't read its position sends null — which Number() would
+      // otherwise turn into 0, a real place in the Gulf of Guinea.
+      const rawLat = input.location?.lat;
+      const rawLng = input.location?.lng;
+      const lat = typeof rawLat === 'number' ? rawLat : Number.NaN;
+      const lng = typeof rawLng === 'number' ? rawLng : Number.NaN;
       if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
         this.fail('VALIDATION_ERROR', 'That location is not valid.', HttpStatus.BAD_REQUEST);
       }
@@ -1013,8 +1018,8 @@ export class MessagesService {
     if (!current.liveUntil || new Date(current.liveUntil).getTime() <= Date.now()) {
       this.fail('VALIDATION_ERROR', 'That live location has ended.', HttpStatus.BAD_REQUEST);
     }
-    const lat = Number(point.lat);
-    const lng = Number(point.lng);
+    const lat = typeof point.lat === 'number' ? point.lat : Number.NaN;
+    const lng = typeof point.lng === 'number' ? point.lng : Number.NaN;
     if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
       this.fail('VALIDATION_ERROR', 'That location is not valid.', HttpStatus.BAD_REQUEST);
     }

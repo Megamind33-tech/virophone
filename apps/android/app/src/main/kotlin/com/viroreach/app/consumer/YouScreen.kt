@@ -225,7 +225,7 @@ fun YouScreen(
                         )
                     }
                     SettingsNavRow("Blocked contacts", onBlockedContacts)
-                    SettingsNavRow("Devices", onDevices)
+                    SettingsNavRow("Linked devices", onDevices)
                 }
                 SettingsSection(title = "Support") {
                     SettingsNavRow("Help", onHelp)

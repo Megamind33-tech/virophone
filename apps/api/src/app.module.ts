@@ -6,6 +6,7 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ApiExceptionFilter } from './common/filters/api-exception.filter';
 import { AuthModule } from './auth/auth.module';
 import { DevicesModule } from './devices/devices.module';
+import { WebModule } from './web/web.module';
 import { UsersModule } from './users/users.module';
 import { ContactsModule } from './contacts/contacts.module';
 import { DirectoryModule } from './directory/directory.module';
@@ -52,6 +53,7 @@ import { RelationshipsModule } from './relationships/relationships.module';
     }),
     AuthModule,
     DevicesModule,
+    WebModule,
     UsersModule,
     ContactsModule,
     DirectoryModule,

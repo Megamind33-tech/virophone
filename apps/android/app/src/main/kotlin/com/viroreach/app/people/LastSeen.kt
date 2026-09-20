@@ -32,6 +32,13 @@ fun lastSeenLabel(atMs: Long?, nowMs: Long = System.currentTimeMillis()): String
     }
 }
 
+/** Where Viro on a computer lives, in the form people type into a browser. */
+fun webAddress(): String =
+    com.viroreach.core.network.BuildConfig.API_BASE_URL
+        .removePrefix("https://")
+        .removePrefix("http://")
+        .trimEnd('/') + "/api/v1/web"
+
 /** The three privacy choices, in the words the settings screen shows. */
 val VISIBILITY_LABELS: List<Pair<String, String>> = listOf(
     "EVERYONE" to "Everyone",
