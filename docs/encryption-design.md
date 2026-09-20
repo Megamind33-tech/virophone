@@ -204,3 +204,19 @@ release that is still pure Java: it has PQXDH (the Kyber prekey is mandatory in
 a bundle) but not the newer post-quantum *ratchet*. Moving past it means
 moving the whole app to Kotlin 2.x — which also means replacing the Compose
 compiler setup that caused the 0.4.62 crash, so it is its own piece of work.
+
+### Why it ships switched off
+
+There is one more consequence of invariant 1 that only becomes obvious when you
+follow it through: **a chat that has gone encrypted refuses every message type
+Stage 1 cannot seal.** That is photos, voice notes, files, polls, places,
+shared contacts and Loop answers — everything that lives in `metadata` or in
+the media store. Turning encryption on for real chats before Stage 2 would mean
+photos quietly stop working in exactly the chats people were told were safest.
+
+So Stage 1 ships complete but dormant: keys are generated and published, the
+server carries envelopes, safety numbers work — and `GET /messages/features`
+reports `e2ee: false` until `E2EE_ENABLED=true` is set. Phones only start
+encrypting new chats when that flag says so, and a chat that is already
+encrypted keeps working either way. Stage 2 — sealed media and the remaining
+message types, then groups — is what makes the flag safe to turn on.

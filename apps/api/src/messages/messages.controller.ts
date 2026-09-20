@@ -151,7 +151,21 @@ export class MessagesController {
   /** What this server can do, so the app shows only what works. */
   @Get('features')
   features() {
-    return { gifs: this.gifs.provider !== null, gifProvider: this.gifs.provider, transcripts: this.transcripts.enabled };
+    return {
+      gifs: this.gifs.provider !== null,
+      gifProvider: this.gifs.provider,
+      transcripts: this.transcripts.enabled,
+      /**
+       * Whether phones should start encrypting one-to-one chats.
+       *
+       * Off until files, voice notes and polls can be sealed too: a chat that
+       * has gone encrypted refuses anything the server would have to store in
+       * the clear, so turning this on early would stop photos working in that
+       * chat. The keys, sessions and envelopes all work — this switch decides
+       * when they are used on real conversations.
+       */
+      e2ee: process.env.E2EE_ENABLED === 'true',
+    };
   }
 
   @Get('search')

@@ -740,6 +740,11 @@ class MessagingRepository(
         if (row.type != "TEXT") return null
         val text = row.body?.takeIf { it.isNotBlank() } ?: return null
         if (conv != null && conv.kind != "DM") return null
+        // A chat that has gone encrypted refuses anything the server would have
+        // to store in the clear — photos, voice notes, polls. Until those are
+        // sealed too, this deployment decides when chats start encrypting;
+        // a chat that already is stays that way regardless.
+        if (conv?.encrypted != true && _features.value.e2ee != true) return null
         val peer = conv?.peerUserId ?: toUserId ?: return null
         val me = myUserId() ?: return null
         if (!e2ee.isRegistered()) return null

@@ -304,6 +304,7 @@ internal fun ConversationRow.toItem(myUserId: String?): ConversationItem = Conve
 fun ConversationItem.preview(): String = when {
     lastMessageId == null -> if (isPrivate) "Private session started" else ""
     lastDeleted -> "This message was deleted"
+    lastType == "ENCRYPTED" -> "🔒 Waiting for this message"
     lastType == "VOICE" -> "🎤 Voice message"
     lastType == "IMAGE" -> if (lastBody.isNullOrBlank()) "📷 Photo" else "📷 $lastBody"
     lastType == "LOOP" -> "🔁 ${lastBody ?: "Loop"}"

@@ -470,7 +470,9 @@ describe('Messaging v2 and relationships end-to-end', () => {
   it('reports which optional features are switched on', async () => {
     if (skip()) return;
     const f = await http().get('/api/v1/messages/features').set(as(alice));
-    expect(f.body).toEqual(expect.objectContaining({ gifs: false, transcripts: false }));
+    // e2ee stays off until files and polls can be sealed too: see the
+    // encryption design note, section 8.
+    expect(f.body).toEqual(expect.objectContaining({ gifs: false, transcripts: false, e2ee: false }));
     await http().get('/api/v1/messages/gifs').query({ q: 'cat' }).set(as(alice)).expect(503);
   });
 

@@ -297,7 +297,13 @@ data class GifDto(val id: String, val url: String, val previewUrl: String?, val 
 data class GifPageDto(val items: List<GifDto>?, val next: String?, val provider: String?)
 data class StickerRef(val pack: String, val id: String)
 
-data class FeaturesDto(val gifs: Boolean?, val gifProvider: String?, val transcripts: Boolean?)
+data class FeaturesDto(
+    val gifs: Boolean?,
+    val gifProvider: String?,
+    val transcripts: Boolean?,
+    /** Whether this deployment has switched end-to-end encryption on. */
+    val e2ee: Boolean? = null,
+)
 data class TranscriptDto(val text: String?, val language: String?)
 
 data class GroupBody(val title: String, val memberIds: List<String>, val description: String? = null)

@@ -429,6 +429,8 @@ private fun ContextBar(icon: androidx.compose.ui.graphics.vector.ImageVector, ti
 
 fun previewOf(m: ChatMessage): String = when {
     m.deleted -> "Deleted message"
+    // Sealed and unopenable on this phone: never show an empty line for it.
+    m.type == "ENCRYPTED" -> "🔒 Waiting for this message"
     m.type == "VOICE" -> "🎤 Voice message"
     m.type == "IMAGE" -> if (m.body.isNullOrBlank()) "📷 Photo" else "📷 ${m.body}"
     else -> m.body.orEmpty()

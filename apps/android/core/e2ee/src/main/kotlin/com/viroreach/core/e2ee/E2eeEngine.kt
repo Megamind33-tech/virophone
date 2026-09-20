@@ -52,6 +52,8 @@ class E2eeEngine(
 ) {
     private val dao = E2eeDatabase.get(context).dao()
     private val lock = Mutex()
+    /** Who has which devices, so sealing is not a network round trip per message. */
+    private val deviceCache = java.util.concurrent.ConcurrentHashMap<String, CachedDevices>()
 
     // --------------------------------------------------------- registration
 
@@ -67,6 +69,7 @@ class E2eeEngine(
             runCatching {
                 val existing = dao.ownIdentity()
                 if (existing != null && existing.userId == userId && existing.deviceId == deviceId) {
+                    rotateIfStale(existing)
                     topUpIfLowInternal()
                     return@runCatching true
                 }
@@ -135,6 +138,39 @@ class E2eeEngine(
         return KyberPreKeyRecord(id, now, pair, signature)
     }
 
+    /**
+     * Replaces the signed and Kyber prekeys once they are old.
+     *
+     * They are reused for every session this device starts, so rotating them
+     * limits how much a leaked one could ever open. The old records stay in
+     * the store: a message sealed against the previous prekey may still be in
+     * flight, and it must still open when it lands.
+     */
+    private suspend fun rotateIfStale(own: OwnIdentityEntity) {
+        if (System.currentTimeMillis() - own.signedPrekeyRotatedAt < SIGNED_PREKEY_MAX_AGE_MS) return
+        val identity = IdentityKeyPair(own.identityKeyPair)
+        val now = System.currentTimeMillis()
+        val signed = newSignedPreKey(identity, own.nextSignedPreKeyId, now)
+        val kyber = newKyberPreKey(identity, own.nextKyberPreKeyId, now)
+        dao.saveSignedPreKey(SignedPreKeyEntity(signed.id, signed.serialize()))
+        dao.saveKyberPreKey(KyberPreKeyEntity(kyber.id, kyber.serialize()))
+        api.publish(
+            KeyBundleBody(
+                registrationId = own.registrationId,
+                identityKey = identity.publicKey.serialize().b64(),
+                signedPreKey = PublicKeyBody(signed.id, signed.keyPair.publicKey.serialize().b64(), signed.signature.b64()),
+                kyberPreKey = PublicKeyBody(kyber.id, kyber.keyPair.publicKey.serialize().b64(), kyber.signature.b64()),
+            ),
+        )
+        dao.saveOwnIdentity(
+            own.copy(
+                nextSignedPreKeyId = own.nextSignedPreKeyId + 1,
+                nextKyberPreKeyId = own.nextKyberPreKeyId + 1,
+                signedPrekeyRotatedAt = now,
+            ),
+        )
+    }
+
     /** Publishes more one-time prekeys when the server is running low on them. */
     suspend fun topUpIfLow() = lock.withLock {
         withContext(Dispatchers.IO) { runCatching { topUpIfLowInternal() } }
@@ -186,7 +222,7 @@ class E2eeEngine(
             val store = storeOf(own)
             val out = mutableListOf<SealedEnvelope>()
             for (userId in (recipientUserIds + myUserId).distinct()) {
-                val deviceIds = api.devices(userId).deviceIds.orEmpty().filter { it != own.deviceId }
+                val deviceIds = devicesOf(userId).filter { it != own.deviceId }
                 // Someone in the chat cannot receive this at all: fall back
                 // rather than send a message half the room cannot open.
                 if (deviceIds.isEmpty() && userId != myUserId) return@withContext emptyList()
@@ -211,6 +247,29 @@ class E2eeEngine(
             out
         }
     }
+
+    /**
+     * Which devices this person can be reached on.
+     *
+     * Asked of the server at most every few minutes, and never on the critical
+     * path when the phone is offline: a message written on a bus must still
+     * seal and wait in the outbox, so a failed lookup falls back to the devices
+     * this phone already has sessions with.
+     */
+    private suspend fun devicesOf(userId: String): List<String> {
+        val cached = deviceCache[userId]
+        if (cached != null && System.currentTimeMillis() - cached.at < DEVICE_CACHE_MS) return cached.deviceIds
+        return try {
+            val fresh = api.devices(userId).deviceIds.orEmpty()
+            deviceCache[userId] = CachedDevices(fresh, System.currentTimeMillis())
+            fresh
+        } catch (e: Exception) {
+            Log.w(TAG, "device list unavailable: ${e.javaClass.simpleName}")
+            cached?.deviceIds ?: dao.remoteIdentitiesFor(userId).map { it.address }
+        }
+    }
+
+    private data class CachedDevices(val deviceIds: List<String>, val at: Long)
 
     private fun startSession(store: ViroSignalStore, address: SignalProtocolAddress, device: DeviceBundleDto) {
         val bundle = PreKeyBundle(
@@ -297,7 +356,7 @@ class E2eeEngine(
 
     /** Whether everyone here can receive encrypted messages. */
     suspend fun everyoneCanReceive(userIds: List<String>): Boolean = withContext(Dispatchers.IO) {
-        runCatching { userIds.all { api.devices(it).deviceIds.orEmpty().isNotEmpty() } }.getOrDefault(false)
+        runCatching { userIds.all { devicesOf(it).isNotEmpty() } }.getOrDefault(false)
     }
 
     private fun storeOf(own: OwnIdentityEntity) =
@@ -312,6 +371,10 @@ class E2eeEngine(
         private const val DEVICE_NUMBER = 1
         /** How many one-time prekeys to publish at a time. */
         private const val PREKEY_BATCH = 100
+        /** How long a device list is trusted before asking again. */
+        private const val DEVICE_CACHE_MS = 5 * 60 * 1000L
+        /** How long a signed prekey is used before it is replaced. */
+        private const val SIGNED_PREKEY_MAX_AGE_MS = 30L * 24 * 3600 * 1000
         /** Signal's own parameters, so the numbers look and behave the same. */
         private const val FINGERPRINT_ITERATIONS = 5200
         private const val FINGERPRINT_VERSION = 2
