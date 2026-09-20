@@ -73,6 +73,11 @@ data class BubbleCallbacks(
     val onJumpTo: (String) -> Unit,
     val onVote: (ChatMessage, List<Int>) -> Unit = { _, _ -> },
     val onTranscribe: (ChatMessage) -> Unit = {},
+    /** Opens a document with whatever app on the phone handles it. */
+    val onOpenFile: (ChatMessage) -> Unit = {},
+    val onMessageContact: (com.viroreach.app.messaging.ContactCard) -> Unit = {},
+    val onCallContact: (com.viroreach.app.messaging.ContactCard) -> Unit = {},
+    val onSaveContact: (com.viroreach.app.messaging.ContactCard) -> Unit = {},
 )
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -206,6 +211,15 @@ fun MessageRow(
                     msg.type == "POLL" -> PollContent(msg, vibe, senderLabel, callbacks.onVote)
                     msg.type == "GIF" -> GifContent(msg)
                     msg.type == "STICKER" -> StickerContent(msg)
+                    msg.type == "FILE" -> FileContent(msg, downloading = false, onOpen = callbacks.onOpenFile)
+                    msg.type == "CONTACT" -> msg.contactCard?.let { card ->
+                        ContactContent(
+                            card = card,
+                            onMessage = callbacks.onMessageContact,
+                            onCall = callbacks.onCallContact,
+                            onSave = callbacks.onSaveContact,
+                        )
+                    } ?: Text("Shared contact", color = Color.White, fontSize = 16.sp)
                     else -> {
                         Text(msg.body.orEmpty(), color = Color.White, fontSize = 16.sp)
                         msg.linkPreview?.let { LinkPreviewCard(it, media, msg.mine) }

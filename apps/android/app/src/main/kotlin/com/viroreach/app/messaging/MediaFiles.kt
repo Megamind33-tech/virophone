@@ -34,10 +34,13 @@ class MediaFiles(
     suspend fun upload(
         file: File,
         mime: String,
-        durationMs: Long?,
-        waveform: String?,
-        width: Int?,
-        height: Int?,
+        durationMs: Long? = null,
+        waveform: String? = null,
+        width: Int? = null,
+        height: Int? = null,
+        /** "FILE" for a document — it keeps [fileName] and allows document types. */
+        kind: String? = null,
+        fileName: String? = null,
     ): MediaDto = withContext(Dispatchers.IO) {
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
@@ -47,6 +50,8 @@ class MediaFiles(
                 waveform?.let { addFormDataPart("waveform", it) }
                 width?.let { addFormDataPart("width", it.toString()) }
                 height?.let { addFormDataPart("height", it.toString()) }
+                kind?.let { addFormDataPart("kind", it) }
+                fileName?.let { addFormDataPart("fileName", it) }
             }
             .build()
         val request = Request.Builder().url("${baseUrl}api/v1/messages/media").post(body).build()
@@ -65,6 +70,10 @@ class MediaFiles(
     suspend fun fetch(media: MediaDto): File? = withContext(Dispatchers.IO) {
         if (media.id.isBlank()) return@withContext null
         val ext = when {
+            // A document keeps its own extension, so other apps can open it.
+            media.kind == "FILE" -> media.originalName?.substringAfterLast('.', "")
+                ?.takeIf { it.isNotBlank() && it.length <= 8 && it.all { c -> c.isLetterOrDigit() } }
+                ?.lowercase() ?: "bin"
             media.mime?.contains("ogg") == true -> "ogg"
             media.mime?.startsWith("audio/") == true -> "m4a"
             media.mime?.contains("png") == true -> "png"

@@ -8,6 +8,7 @@ import com.viroreach.core.database.MessageEntity
 import com.viroreach.core.database.MessagingDatabase
 import com.viroreach.core.network.ApiDiagnostics
 import com.viroreach.core.network.ConvDto
+import com.viroreach.core.network.ContactCardBody
 import com.viroreach.core.network.ConvSettingsBody
 import com.viroreach.core.network.EditBody
 import com.viroreach.core.network.MediaDto
@@ -443,6 +444,9 @@ class MessagingRepository(
         val gif: GifSendDto? = null,
         val sticker: StickerRef? = null,
         val linkPreview: LinkPreviewDto? = null,
+        /** A document's name as the sender's phone knows it. */
+        val fileName: String? = null,
+        val contact: ContactCardBody? = null,
     )
 
     /**
@@ -454,9 +458,16 @@ class MessagingRepository(
         val now = System.currentTimeMillis()
         val pendingMedia = if (out.localFile != null) {
             MediaDto(
-                id = "", kind = if (out.type == "VOICE") "VOICE" else "IMAGE", mime = out.mime,
+                id = "",
+                kind = when (out.type) {
+                    "VOICE" -> "VOICE"
+                    "FILE" -> "FILE"
+                    else -> "IMAGE"
+                },
+                mime = out.mime,
                 sizeBytes = out.localFile.length(), durationMs = out.durationMs, waveform = out.waveform,
                 width = out.width, height = out.height,
+                originalName = out.fileName,
             )
         } else null
         val reply = out.replyToId?.let { dao.message(it) }
@@ -465,6 +476,10 @@ class MessagingRepository(
         // Shown while sending exactly as they will look once sent.
         out.gif?.let { meta["gif"] = mapOf("url" to it.url, "previewUrl" to it.previewUrl, "width" to it.width, "height" to it.height, "provider" to it.provider) }
         out.sticker?.let { meta["sticker"] = mapOf("pack" to it.pack, "id" to it.id) }
+        out.contact?.let {
+            meta["contact"] = mapOf<String, Any?>("name" to it.name, "phones" to it.phones, "viroId" to it.viroId, "userId" to it.userId)
+        }
+        out.fileName?.let { meta["file"] = mapOf<String, Any?>("name" to it, "mime" to out.mime, "size" to out.localFile?.length()) }
         out.linkPreview?.let { meta["linkPreview"] = mapOf("url" to it.url, "title" to it.title, "description" to it.description, "siteName" to it.siteName, "mediaId" to it.mediaId) }
         // Everything the outbox needs to retry lives on the row itself.
         meta["outbox"] = mapOf(
@@ -473,6 +488,7 @@ class MessagingRepository(
             "forwarded" to out.forwarded,
             "deliverAt" to out.deliverAt,
             "mime" to out.mime,
+            "fileName" to out.fileName,
         )
         dao.upsertMessages(
             listOf(
@@ -540,12 +556,15 @@ class MessagingRepository(
         val out = (meta["outbox"] as? Map<String, Any?>) ?: emptyMap()
         var mediaId: String? = null
         var mediaJson = row.mediaJson
-        if (row.type == "VOICE" || row.type == "IMAGE") {
+        if (row.type == "VOICE" || row.type == "IMAGE" || row.type == "FILE") {
             val existing = ChatJson.media(row.mediaJson)
             mediaId = existing?.id?.takeIf { it.isNotBlank() }
             if (mediaId == null) {
                 val file = row.localMediaPath?.let { File(it) }?.takeIf { it.exists() }
-                    ?: throw IllegalStateException("The recording is no longer on this phone")
+                    ?: throw IllegalStateException(
+                        if (row.type == "FILE") "That file is no longer on this phone"
+                        else "The recording is no longer on this phone",
+                    )
                 val uploaded = media.upload(
                     file = file,
                     mime = (out["mime"] as? String) ?: existing?.mime ?: "application/octet-stream",
@@ -553,6 +572,8 @@ class MessagingRepository(
                     waveform = existing?.waveform,
                     width = existing?.width,
                     height = existing?.height,
+                    kind = if (row.type == "FILE") "FILE" else null,
+                    fileName = if (row.type == "FILE") (out["fileName"] as? String ?: existing?.originalName) else null,
                 )
                 mediaId = uploaded.id
                 mediaJson = ChatJson.toJson(uploaded)
@@ -583,6 +604,14 @@ class MessagingRepository(
                     GifSendDto(g["url"] as String, g["previewUrl"] as? String, (g["width"] as? Number)?.toInt(), (g["height"] as? Number)?.toInt(), g["provider"] as? String)
                 },
                 sticker = (meta["sticker"] as? Map<String, Any?>)?.let { StickerRef(it["pack"] as String, it["id"] as String) },
+                contact = (meta["contact"] as? Map<String, Any?>)?.let { c ->
+                    ContactCardBody(
+                        name = c["name"] as? String ?: "",
+                        phones = (c["phones"] as? List<Any?>)?.mapNotNull { p -> p as? String }.orEmpty(),
+                        viroId = c["viroId"] as? String,
+                        userId = c["userId"] as? String,
+                    )
+                },
                 linkPreview = (meta["linkPreview"] as? Map<String, Any?>)?.let { lp ->
                     LinkPreviewDto(lp["url"] as String, lp["title"] as? String, lp["description"] as? String, lp["siteName"] as? String, lp["mediaId"] as? String)
                 },
@@ -671,6 +700,26 @@ class MessagingRepository(
             if (seconds == null) ConvSettingsBody(clearDisappearing = true) else ConvSettingsBody(disappearingSeconds = seconds),
         )
         syncNow()
+    }
+
+    /** Archive or bring back a chat. Mine alone — the other side is never told. */
+    suspend fun setArchived(conversationId: String, archived: Boolean) = act(if (archived) "archive chat" else "unarchive chat") {
+        dao.conversation(conversationId)?.let { dao.upsertConversations(listOf(it.copy(archived = archived))) }
+        api.settings(conversationId, ConvSettingsBody(archived = archived))
+    }
+
+    /** Pin a chat to the top of the inbox. */
+    suspend fun setPinned(conversationId: String, pinned: Boolean) = act(if (pinned) "pin chat" else "unpin chat") {
+        dao.conversation(conversationId)?.let {
+            dao.upsertConversations(listOf(it.copy(pinnedAt = if (pinned) System.currentTimeMillis() else null)))
+        }
+        api.settings(conversationId, ConvSettingsBody(pinned = pinned))
+    }
+
+    /** Keeps the unread dot on until the chat is opened again. */
+    suspend fun markUnread(conversationId: String) = act("mark as unread") {
+        dao.conversation(conversationId)?.let { dao.upsertConversations(listOf(it.copy(unreadMarked = true))) }
+        api.settings(conversationId, ConvSettingsBody(markUnread = true))
     }
 
     suspend fun setLocked(conversationId: String, locked: Boolean) {

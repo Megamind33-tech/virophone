@@ -107,6 +107,10 @@ export class MediaObject {
   @Column({ name: 'file_name', type: 'varchar', length: 80 })
   fileName!: string;
 
+  /** For documents: the name the sender saw, shown to the recipient. */
+  @Column({ name: 'original_name', type: 'varchar', length: 255, nullable: true })
+  originalName!: string | null;
+
   @Column({ type: 'integer', nullable: true })
   width!: number | null;
 

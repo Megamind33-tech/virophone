@@ -37,7 +37,7 @@ import { GifService } from './gif.service';
 import { TranscriptionService } from './transcription.service';
 import { IsArray, IsObject, ArrayMaxSize } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { ALLOWED_IMAGE_MIME, ALLOWED_VOICE_MIME } from './media.store';
+import { ALLOWED_IMAGE_MIME, ALLOWED_VOICE_MIME, ALLOWED_FILE_MIME } from './media.store';
 import { ViroException } from '../common/exceptions/viro.exception';
 
 class SendMessageDto {
@@ -45,7 +45,10 @@ class SendMessageDto {
   @IsString() @IsOptional() conversationId?: string;
   @IsString() @IsOptional() @MaxLength(4000) body?: string;
   @IsString() @IsOptional() @MaxLength(64) clientMsgId?: string;
-  @IsString() @IsOptional() @IsIn(['TEXT', 'VOICE', 'IMAGE', 'LOOP', 'POLL', 'GIF', 'STICKER', 'text', 'voice', 'image', 'loop', 'poll', 'gif', 'sticker']) type?: string;
+  @IsString() @IsOptional() @IsIn([
+    'TEXT', 'VOICE', 'IMAGE', 'LOOP', 'POLL', 'GIF', 'STICKER', 'FILE', 'CONTACT',
+    'text', 'voice', 'image', 'loop', 'poll', 'gif', 'sticker', 'file', 'contact',
+  ]) type?: string;
   @IsString() @IsOptional() replyToId?: string;
   @IsString() @IsOptional() mediaId?: string;
   @IsBoolean() @IsOptional() viewOnce?: boolean;
@@ -56,6 +59,7 @@ class SendMessageDto {
   @IsObject() @IsOptional() linkPreview?: { url: string; title?: string; description?: string; siteName?: string; mediaId?: string };
   @IsObject() @IsOptional() gif?: { url: string; previewUrl?: string; width?: number; height?: number; provider?: string };
   @IsObject() @IsOptional() sticker?: { pack: string; id: string };
+  @IsObject() @IsOptional() contact?: { name: string; phones?: string[]; viroId?: string; userId?: string };
 }
 
 class GroupDto {
@@ -96,6 +100,9 @@ class SettingsDto {
   // Clients whose JSON encoders drop nulls say "off" explicitly.
   @IsBoolean() @IsOptional() clearDisappearing?: boolean;
   @IsBoolean() @IsOptional() clearMute?: boolean;
+  @IsBoolean() @IsOptional() archived?: boolean;
+  @IsBoolean() @IsOptional() pinned?: boolean;
+  @IsBoolean() @IsOptional() markUnread?: boolean;
 }
 
 class PrivateSessionDto {
@@ -104,6 +111,17 @@ class PrivateSessionDto {
 }
 
 type AuthedReq = { user: { sub: string; deviceId: string } };
+
+/** Voice notes and photos stay small; a document may be up to 25 MB. */
+const MAX_MEDIA_BYTES = 5 * 1024 * 1024;
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+
+/** A document keeps the sender's file name — minus any path, and length-capped. */
+function cleanFileName(name?: string): string | undefined {
+  const base = (name || '').split(/[\\/]/).pop()?.trim();
+  if (!base) return undefined;
+  return base.replace(/[\u0000-\u001f]/g, '').slice(0, 255) || undefined;
+}
 
 @Controller('api/v1/messages')
 @UseGuards(JwtAuthGuard)
@@ -304,26 +322,41 @@ export class MessagesController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
-      // ~16-24 kbps audio: 5 MB is well over half an hour. Photos arrive
-      // already downscaled by the app, well under this.
-      limits: { fileSize: 5 * 1024 * 1024 },
+      // Documents are the large case (25 MB); voice and photos are held to
+      // 5 MB below. ~16-24 kbps audio: 5 MB is well over half an hour, and
+      // photos arrive already downscaled by the app.
+      limits: { fileSize: MAX_FILE_BYTES },
     }),
   )
   async upload(
     @Req() req: AuthedReq,
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { durationMs?: string; waveform?: string; width?: string; height?: string },
+    @Body() body: { durationMs?: string; waveform?: string; width?: string; height?: string; kind?: string; fileName?: string },
   ) {
     if (!file?.buffer?.length) {
       throw new ViroException('VALIDATION_ERROR', 'A file is required.', HttpStatus.BAD_REQUEST);
     }
     const isVoice = ALLOWED_VOICE_MIME.has(file.mimetype);
-    if (!isVoice && !ALLOWED_IMAGE_MIME.has(file.mimetype)) {
+    const isImage = !isVoice && ALLOWED_IMAGE_MIME.has(file.mimetype);
+    // "document" means the sender picked a file rather than a photo or a recording.
+    const isFile = !isVoice && !isImage && String(body.kind || '').toUpperCase() === 'FILE';
+    if (isFile && !ALLOWED_FILE_MIME.has(file.mimetype)) {
+      throw new ViroException(
+        'VALIDATION_ERROR',
+        'That kind of file can\'t be sent on Viro.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (!isVoice && !isImage && !isFile) {
       throw new ViroException('VALIDATION_ERROR', 'Unsupported file type.', HttpStatus.BAD_REQUEST);
+    }
+    if (!isFile && file.size > MAX_MEDIA_BYTES) {
+      throw new ViroException('VALIDATION_ERROR', 'That file is too large.', HttpStatus.BAD_REQUEST);
     }
     const n = (v?: string) => (v ? parseInt(v, 10) : undefined);
     return this.messagesService.registerMedia(req.user.sub, file, {
-      kind: isVoice ? 'VOICE' : 'IMAGE',
+      kind: isVoice ? 'VOICE' : isImage ? 'IMAGE' : 'FILE',
+      originalName: cleanFileName(body.fileName) ?? cleanFileName(file.originalname),
       durationMs: n(body.durationMs),
       waveform: body.waveform,
       width: n(body.width),
@@ -340,6 +373,12 @@ export class MessagesController {
     }
     res.setHeader('Content-Type', file.mime);
     res.setHeader('Cache-Control', 'private, max-age=604800');
+    if (file.originalName) {
+      // Saved under the name the sender gave it. Quotes and control characters
+      // are stripped so the name can't break out of the header.
+      const safe = file.originalName.replace(/["\r\n]/g, '');
+      res.setHeader('Content-Disposition', `attachment; filename="${safe}"; filename*=UTF-8''${encodeURIComponent(file.originalName)}`);
+    }
     res.sendFile(file.path);
   }
 }

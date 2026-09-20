@@ -80,6 +80,12 @@ data class ConversationEntity(
     val description: String? = null,
     /** ADMIN | MEMBER — my role, for groups. */
     val myRole: String = "MEMBER",
+    /** Out of the main inbox, in "Archived". Mine alone. */
+    val archived: Boolean = false,
+    /** Pinned to the top of the inbox; newest pin first. */
+    val pinnedAt: Long? = null,
+    /** "Mark as unread", until the chat is opened again. */
+    val unreadMarked: Boolean = false,
 )
 
 @Entity(tableName = "kv")
@@ -103,6 +109,9 @@ data class ConversationRow(
     val peerLastDeliveredAt: Long?,
     val pinnedCsv: String,
     val locked: Boolean,
+    val archived: Boolean,
+    val pinnedAt: Long?,
+    val unreadMarked: Boolean,
     val lastId: String?,
     val lastBody: String?,
     val lastType: String?,
@@ -118,7 +127,7 @@ interface MessagingDao {
         """
         SELECT c.id, c.kind, c.peerUserId, c.title, c.myRole, c.participantsCsv, c.unread, c.updatedAt, c.hidden,
                c.mutedUntil, c.clearedAt, c.disappearingSeconds, c.expiresAt, c.peerLastReadAt,
-               c.peerLastDeliveredAt, c.pinnedCsv, c.locked,
+               c.peerLastDeliveredAt, c.pinnedCsv, c.locked, c.archived, c.pinnedAt, c.unreadMarked,
                m.id AS lastId, m.body AS lastBody, m.type AS lastType, m.senderUserId AS lastSender,
                m.createdAt AS lastAt, m.deletedAt AS lastDeleted, m.status AS lastStatus
         FROM conversations c
@@ -238,7 +247,7 @@ interface MessagingDao {
     entities = [MessageEntity::class, ConversationEntity::class, KvEntity::class],
     // v2: polls, group roles and descriptions. A cache of the server plus an
     // outbox, so the destructive fallback below just triggers a full re-sync.
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class MessagingDatabase : RoomDatabase() {

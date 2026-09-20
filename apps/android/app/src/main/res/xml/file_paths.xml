@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="cache" path="." />
+    <!-- Downloaded documents, handed to whichever app opens that file type. -->
+    <files-path name="chat_media" path="chat_media/" />
 </paths>

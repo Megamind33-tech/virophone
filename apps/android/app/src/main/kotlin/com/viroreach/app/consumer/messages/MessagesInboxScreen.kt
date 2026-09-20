@@ -119,6 +119,7 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
     val overview by session.relationships.overview.collectAsState()
     var peers by remember { mutableStateOf<Map<String, PeerInfo>>(emptyMap()) }
     var showHidden by remember { mutableStateOf(false) }
+    var showArchived by remember { mutableStateOf(false) }
     var optionsFor by remember { mutableStateOf<ConversationItem?>(null) }
     var syncing by remember { mutableStateOf(false) }
 
@@ -168,8 +169,18 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
         } else go()
     }
 
-    val visible = conversations.filter { it.hidden == showHidden && (it.lastMessageId != null || it.isPrivate) }
+    val inThisList = conversations.filter {
+        it.hidden == showHidden && it.archived == showArchived && (it.lastMessageId != null || it.isPrivate)
+    }
+    // Pinned chats sit above the rest, newest pin first; everything else stays
+    // in most-recent order.
+    val visible = remember(inThisList) {
+        val (pinned, rest) = inThisList.partition { it.pinnedAt != null }
+        pinned.sortedByDescending { it.pinnedAt } + rest
+    }
     val hiddenCount = conversations.count { it.hidden }
+    val archivedCount = conversations.count { it.archived && !it.hidden && (it.lastMessageId != null || it.isPrivate) }
+    val archivedUnread = conversations.filter { it.archived && !it.hidden }.sumOf { it.unread }
 
     Column(Modifier.fillMaxSize()) {
         if (syncing && conversations.isEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth(), color = ViroColors.accent)
@@ -192,6 +203,28 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
         // emits one group end too many on an early return out of an inline
         // layout lambda, and the next recomposition that flips the branch
         // crashes in Stack.pop (IndexOutOfBoundsException: Index -1).
+        if (showArchived || (archivedCount > 0 && !showHidden)) {
+            Row(
+                Modifier.fillMaxWidth().clickable { showArchived = !showArchived }
+                    .padding(horizontal = ViroSpacing.md, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    if (showArchived) Icons.Default.ArrowBack else Icons.Default.Archive,
+                    null,
+                    tint = ViroColors.textSecondary,
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    if (showArchived) "Back to chats" else "Archived ($archivedCount)",
+                    color = ViroColors.textSecondary,
+                    modifier = Modifier.weight(1f),
+                )
+                if (!showArchived && archivedUnread > 0) {
+                    Text("$archivedUnread", color = ViroColors.accent, fontSize = 13.sp)
+                }
+            }
+        }
         if (visible.isEmpty()) {
             Column(
                 Modifier.fillMaxSize().padding(32.dp),
@@ -201,7 +234,11 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
                 Text("💬", fontSize = 40.sp)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    if (showHidden) "No hidden chats." else "No conversations yet.\nMessage someone from Contacts or after a call.",
+                    when {
+                        showHidden -> "No hidden chats."
+                        showArchived -> "No archived chats."
+                        else -> "No conversations yet.\nMessage someone from Contacts or after a call."
+                    },
                     color = ViroColors.textSecondary,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 )
@@ -238,6 +275,15 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
                         optionsFor = null
                         action()
                     }.padding(vertical = 12.dp))
+                    opt(if (c.pinnedAt != null) "Unpin from top" else "Pin to top") {
+                        scope.launch { session.messaging.setPinned(c.id, c.pinnedAt == null) }
+                    }
+                    opt(if (c.archived) "Unarchive" else "Archive") {
+                        scope.launch { session.messaging.setArchived(c.id, !c.archived) }
+                    }
+                    if (c.unread == 0 && !c.unreadMarked) {
+                        opt("Mark as unread") { scope.launch { session.messaging.markUnread(c.id) } }
+                    }
                     opt(if (c.hidden) "Unhide chat" else "Hide chat") { scope.launch { session.messaging.setHidden(c.id, !c.hidden) } }
                     opt(if (c.muted) "Unmute" else "Mute for 8 hours") {
                         scope.launch { session.messaging.setMuted(c.id, if (c.muted) null else System.currentTimeMillis() + 8 * 3600_000L) }
@@ -290,7 +336,7 @@ private fun ConversationRow(
                 Text(
                     if (c.isPrivate) "$name · Private" else name,
                     color = Color.White,
-                    fontWeight = if (c.unread > 0) FontWeight.Bold else FontWeight.SemiBold,
+                    fontWeight = if (c.unread > 0 || c.unreadMarked) FontWeight.Bold else FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
@@ -302,6 +348,10 @@ private fun ConversationRow(
                 if (c.locked) {
                     Spacer(Modifier.width(4.dp))
                     Icon(Icons.Default.Lock, "Locked", tint = ViroColors.textSecondary, modifier = Modifier.size(14.dp))
+                }
+                if (c.pinnedAt != null) {
+                    Spacer(Modifier.width(4.dp))
+                    Icon(Icons.Default.PushPin, "Pinned", tint = ViroColors.textSecondary, modifier = Modifier.size(14.dp))
                 }
             }
             relationshipHint(relationship, c)?.let { hint ->
@@ -354,6 +404,10 @@ private fun ConversationRow(
                 Box(
                     Modifier.clip(CircleShape).background(ViroColors.accent).padding(horizontal = 7.dp, vertical = 2.dp),
                 ) { Text(c.unread.toString(), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+            } else if (c.unreadMarked) {
+                // Marked unread by hand: a plain dot, with no count to show.
+                Spacer(Modifier.height(4.dp))
+                Box(Modifier.size(10.dp).clip(CircleShape).background(ViroColors.accent))
             }
         }
     }

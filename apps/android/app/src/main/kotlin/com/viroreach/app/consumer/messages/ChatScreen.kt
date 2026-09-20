@@ -370,6 +370,30 @@ fun ChatScreen(
         }
     }
 
+    // A document: copied into Viro's own storage first, because the picked
+    // Uri is only readable while this screen holds the grant.
+    val pickDocument = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val picked = readDocument(context, repo, uri)
+            when {
+                picked == null -> Toast.makeText(context, "Couldn't read that file.", Toast.LENGTH_SHORT).show()
+                picked.file.length() > MAX_DOCUMENT_BYTES -> {
+                    picked.file.delete()
+                    Toast.makeText(context, "That file is too large (25 MB at most).", Toast.LENGTH_LONG).show()
+                }
+                else -> sendOut(
+                    MessagingRepository.Outgoing(
+                        type = "FILE",
+                        localFile = picked.file,
+                        mime = picked.mime,
+                        fileName = picked.name,
+                    ),
+                )
+            }
+        }
+    }
+
     // ---- layout -------------------------------------------------------------
     BackHandler {
         when {
@@ -520,6 +544,27 @@ fun ChatScreen(
                                         repo.transcribe(m.id).onFailure { Toast.makeText(context, it.message, Toast.LENGTH_SHORT).show() }
                                     }
                                 },
+                                onOpenFile = { m ->
+                                    scope.launch {
+                                        val f = m.media?.let { repo.media.fetch(it) }
+                                        if (f == null) {
+                                            Toast.makeText(context, "Couldn't download that file.", Toast.LENGTH_SHORT).show()
+                                        } else if (!openDocument(context, f, m.media?.mime)) {
+                                            Toast.makeText(context, "No app on this phone opens that kind of file.", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                },
+                                onMessageContact = { card ->
+                                    card.userId?.let { id ->
+                                        onOpenConversation(
+                                            ChatRoute(conversationId = null, peerName = card.name, peerUserId = id, peerPhoneE164 = card.phones.firstOrNull()),
+                                        )
+                                    }
+                                },
+                                onCallContact = { card ->
+                                    card.userId?.let { id -> onCall(id, card.phones.firstOrNull(), card.name) }
+                                },
+                                onSaveContact = { card -> saveContactToPhone(context, card) },
                                 onJumpTo = { id ->
                                     val idx = messages.indexOfFirst { it.id == id }
                                     if (idx >= 0) {
@@ -625,6 +670,9 @@ fun ChatScreen(
                         ).also { viewOnce = false }
                         ComposerAction.PickPhoto -> pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         ComposerAction.TakePhoto -> cameraPermission.launch(android.Manifest.permission.CAMERA)
+                        ComposerAction.SendDocument -> runCatching { pickDocument.launch(arrayOf("*/*")) }
+                            .onFailure { Toast.makeText(context, "No file picker on this phone.", Toast.LENGTH_SHORT).show() }
+                        ComposerAction.ShareContact -> dialog = "share_contact"
                     }
                 },
             )
@@ -830,6 +878,14 @@ fun ChatScreen(
     }
 
     when (dialog) {
+        "share_contact" -> ShareContactDialog(
+            session = session,
+            onDismiss = { dialog = null },
+            onPick = { card ->
+                dialog = null
+                sendOut(MessagingRepository.Outgoing(type = "CONTACT", body = card.name, contact = card.toBody()))
+            },
+        )
         "poll" -> PollCreateDialog(vibe, onDismiss = { dialog = null }) { body ->
             dialog = null
             sendOut(MessagingRepository.Outgoing(type = "POLL", poll = body))
@@ -1507,3 +1563,76 @@ private fun ForwardDialog(session: SessionManager, onDismiss: () -> Unit, onPick
         confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+
+/** Picks someone from this phone's contacts to share into the chat. */
+@Composable
+private fun ShareContactDialog(
+    session: SessionManager,
+    onDismiss: () -> Unit,
+    onPick: (com.viroreach.app.messaging.ContactCard) -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    var contacts by remember { mutableStateOf<List<com.viroreach.app.consumer.ContactListItem>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        contacts = runCatching { session.contactsRepository.loadCachedContacts() }.getOrDefault(emptyList())
+    }
+    val shown = remember(contacts, query) {
+        val q = query.trim()
+        contacts.asSequence()
+            .filter { it.phoneE164 != null || it.userId != null }
+            .filter { q.isBlank() || it.effectiveDisplayName.contains(q, true) || it.phoneE164?.contains(q) == true }
+            .sortedBy { it.effectiveDisplayName.lowercase() }
+            .take(200)
+            .toList()
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Share a contact") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text("Search contacts") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                if (shown.isEmpty()) {
+                    Text(
+                        if (contacts.isEmpty()) "No contacts on this phone yet." else "No matches.",
+                        color = ViroColors.textSecondary,
+                    )
+                } else {
+                    LazyColumn(Modifier.heightIn(max = 380.dp)) {
+                        items(shown, key = { it.id }) { c ->
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        onPick(
+                                            com.viroreach.app.messaging.ContactCard(
+                                                name = c.effectiveDisplayName,
+                                                phones = listOfNotNull(c.phoneE164),
+                                                viroId = null,
+                                                userId = c.userId,
+                                            ),
+                                        )
+                                    }
+                                    .padding(vertical = 10.dp),
+                            ) {
+                                Text(c.effectiveDisplayName, color = Color.White)
+                                val line = c.phoneE164 ?: if (c.userId != null) "On Viro" else null
+                                line?.let { Text(it, color = ViroColors.textSecondary, fontSize = 13.sp) }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+private fun com.viroreach.app.messaging.ContactCard.toBody() =
+    com.viroreach.core.network.ContactCardBody(name = name, phones = phones, viroId = viroId, userId = userId)

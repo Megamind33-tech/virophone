@@ -43,6 +43,8 @@ sealed class ComposerAction {
     object PickPhoto : ComposerAction()
     object TakePhoto : ComposerAction()
     object CreatePoll : ComposerAction()
+    object SendDocument : ComposerAction()
+    object ShareContact : ComposerAction()
     object OpenStickers : ComposerAction()
 }
 
@@ -187,6 +189,14 @@ fun Composer(
                                 DropdownMenuItem(text = { Text("Camera") }, leadingIcon = { Icon(Icons.Default.PhotoCamera, null) }, onClick = {
                                     attachOpen = false
                                     onAction(ComposerAction.TakePhoto)
+                                })
+                                DropdownMenuItem(text = { Text("Document") }, leadingIcon = { Icon(Icons.Default.Description, null) }, onClick = {
+                                    attachOpen = false
+                                    onAction(ComposerAction.SendDocument)
+                                })
+                                DropdownMenuItem(text = { Text("Contact") }, leadingIcon = { Icon(Icons.Default.Person, null) }, onClick = {
+                                    attachOpen = false
+                                    onAction(ComposerAction.ShareContact)
                                 })
                                 DropdownMenuItem(text = { Text("Poll") }, leadingIcon = { Icon(Icons.Default.Poll, null) }, onClick = {
                                     attachOpen = false

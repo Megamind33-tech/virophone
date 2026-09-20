@@ -48,6 +48,8 @@ export interface SendMessageInput {
   linkPreview?: { url: string; title?: string; description?: string; siteName?: string; mediaId?: string };
   gif?: { url: string; previewUrl?: string; width?: number; height?: number; provider?: string };
   sticker?: { pack: string; id: string };
+  /** A shared contact card: a name plus numbers and/or a Viro ID. */
+  contact?: { name: string; phones?: string[]; viroId?: string; userId?: string };
 }
 
 export interface PollDto {
@@ -66,6 +68,8 @@ export interface MediaDto {
   kind: string;
   mime: string;
   sizeBytes: number;
+  /** For documents: the sender's own file name. */
+  originalName: string | null;
   durationMs: number | null;
   waveform: string | null;
   width: number | null;
@@ -129,6 +133,10 @@ export interface ConversationSummaryDto {
   peerLastReadAt: string | null;
   peerLastDeliveredAt: string | null;
   pinnedMessageIds: string[];
+  /** Inbox state, mine alone: the other side is never told. */
+  archived: boolean;
+  pinnedAt: string | null;
+  unreadMarked: boolean;
 }
 
 /**
@@ -388,6 +396,8 @@ export class MessagesService {
     if (m.type === 'POLL') return `📊 ${(m.metadata?.poll as { question?: string })?.question ?? 'Poll'}`;
     if (m.type === 'GIF') return 'GIF';
     if (m.type === 'STICKER') return `${m.body ?? ''} Sticker`.trim();
+    if (m.type === 'FILE') return `📎 ${(m.metadata?.file as { name?: string })?.name ?? 'Document'}`;
+    if (m.type === 'CONTACT') return `👤 ${(m.metadata?.contact as { name?: string })?.name ?? 'Contact'}`;
     return (m.body || '').slice(0, 120);
   }
 
@@ -402,15 +412,32 @@ export class MessagesService {
 
   async sendMessage(senderId: string, senderDeviceId: string | null, input: SendMessageInput) {
     const type = (input.type || 'TEXT').toUpperCase();
-    if (!['TEXT', 'VOICE', 'IMAGE', 'LOOP', 'POLL', 'GIF', 'STICKER'].includes(type)) {
+    if (!['TEXT', 'VOICE', 'IMAGE', 'LOOP', 'POLL', 'GIF', 'STICKER', 'FILE', 'CONTACT'].includes(type)) {
       this.fail('VALIDATION_ERROR', 'Unsupported message type.', HttpStatus.BAD_REQUEST);
     }
     const body = (input.body || '').trim();
     if (type === 'TEXT' && !body) {
       this.fail('VALIDATION_ERROR', 'Message body is required.', HttpStatus.BAD_REQUEST);
     }
-    if ((type === 'VOICE' || type === 'IMAGE') && !input.mediaId) {
+    if ((type === 'VOICE' || type === 'IMAGE' || type === 'FILE') && !input.mediaId) {
       this.fail('VALIDATION_ERROR', 'This message needs its file.', HttpStatus.BAD_REQUEST);
+    }
+    let contact: { name: string; phones: string[]; viroId: string | null; userId: string | null } | null = null;
+    if (type === 'CONTACT') {
+      const name = (input.contact?.name || '').trim().slice(0, 100);
+      const phones = (input.contact?.phones || [])
+        .map((p) => String(p).trim().slice(0, 24))
+        .filter(Boolean)
+        .slice(0, 10);
+      if (!name || (phones.length === 0 && !input.contact?.viroId)) {
+        this.fail('VALIDATION_ERROR', 'A shared contact needs a name and a number or Viro ID.', HttpStatus.BAD_REQUEST);
+      }
+      contact = {
+        name,
+        phones,
+        viroId: input.contact?.viroId ? String(input.contact.viroId).trim().slice(0, 32) : null,
+        userId: input.contact?.userId ? String(input.contact.userId).trim().slice(0, 64) : null,
+      };
     }
     let poll: { question: string; options: string[]; multi: boolean } | null = null;
     if (type === 'POLL') {
@@ -507,6 +534,18 @@ export class MessagesService {
         height: n(input.gif.height),
         provider: (input.gif.provider || '').slice(0, 16),
       };
+    }
+    if (type === 'CONTACT' && contact) {
+      metadata.contact = contact;
+    }
+    if (type === 'FILE' && input.mediaId) {
+      // Carried on the message so a notification can name the document
+      // without loading the file record.
+      const doc = await this.mediaRepo.findOne({ where: { id: input.mediaId, ownerUserId: senderId } });
+      if (!doc || doc.kind !== 'FILE') {
+        this.fail('VALIDATION_ERROR', 'That document is no longer available.', HttpStatus.BAD_REQUEST);
+      }
+      metadata.file = { name: doc!.originalName ?? 'Document', mime: doc!.mime, size: doc!.sizeBytes };
     }
     if (type === 'STICKER' && input.sticker) {
       metadata.sticker = { pack: String(input.sticker.pack).slice(0, 24), id: String(input.sticker.id).slice(0, 24) };
@@ -753,6 +792,9 @@ export class MessagesService {
       peerLastReadAt: iso(minOf(others.map((o) => o.lastReadAt))),
       peerLastDeliveredAt: iso(minOf(others.map((o) => o.lastDeliveredAt ?? o.lastReadAt))),
       pinnedMessageIds: pins.map((p) => p.messageId),
+      archived: part.archivedAt != null,
+      pinnedAt: iso(part.pinnedAt),
+      unreadMarked: part.unreadMarked,
     };
   }
 
@@ -867,7 +909,10 @@ export class MessagesService {
   async markRead(userId: string, conversationId: string) {
     await this.assertMember(conversationId, userId);
     const now = new Date();
-    await this.partRepo.update({ conversationId, userId }, { lastReadAt: now, lastDeliveredAt: now });
+    await this.partRepo.update(
+      { conversationId, userId },
+      { lastReadAt: now, lastDeliveredAt: now, unreadMarked: false },
+    );
     await this.receiptRepo
       .createQueryBuilder()
       .update()
@@ -893,12 +938,22 @@ export class MessagesService {
   async updateSettings(
     userId: string,
     conversationId: string,
-    s: { hidden?: boolean; mutedUntil?: string | null; disappearingSeconds?: number | null },
+    s: {
+      hidden?: boolean;
+      mutedUntil?: string | null;
+      disappearingSeconds?: number | null;
+      archived?: boolean;
+      pinned?: boolean;
+      markUnread?: boolean;
+    },
   ) {
     const part = await this.assertMember(conversationId, userId);
     const conv = await this.loadConversation(conversationId);
     if (s.hidden !== undefined) part.hidden = !!s.hidden;
     if (s.mutedUntil !== undefined) part.mutedUntil = s.mutedUntil ? new Date(s.mutedUntil) : null;
+    if (s.archived !== undefined) part.archivedAt = s.archived ? (part.archivedAt ?? new Date()) : null;
+    if (s.pinned !== undefined) part.pinnedAt = s.pinned ? (part.pinnedAt ?? new Date()) : null;
+    if (s.markUnread !== undefined) part.unreadMarked = !!s.markUnread;
     await this.partRepo.save(part);
 
     if (s.disappearingSeconds !== undefined) {
@@ -1088,7 +1143,7 @@ export class MessagesService {
   async registerMedia(
     userId: string,
     file: { buffer: Buffer; mimetype: string; size: number },
-    meta: { kind: 'VOICE' | 'IMAGE'; durationMs?: number; waveform?: string; width?: number; height?: number },
+    meta: { kind: 'VOICE' | 'IMAGE' | 'FILE'; durationMs?: number; waveform?: string; width?: number; height?: number; originalName?: string },
   ): Promise<MediaDto> {
     const saved = await this.mediaStore.save(file.buffer, file.mimetype);
     const media = await this.mediaRepo.save(
@@ -1102,6 +1157,7 @@ export class MessagesService {
         fileName: saved,
         width: meta.width && meta.width > 0 ? meta.width : null,
         height: meta.height && meta.height > 0 ? meta.height : null,
+        originalName: meta.originalName ? meta.originalName.slice(0, 255) : null,
       }),
     );
     return this.mediaDto(media);
@@ -1112,7 +1168,10 @@ export class MessagesService {
    * participant of a conversation holding a live message that references it
    * and that they have not already consumed as view-once.
    */
-  async mediaFor(userId: string, mediaId: string): Promise<{ path: string; mime: string } | null> {
+  async mediaFor(
+    userId: string,
+    mediaId: string,
+  ): Promise<{ path: string; mime: string; originalName: string | null } | null> {
     const media = await this.mediaRepo.findOne({ where: { id: mediaId } });
     if (!media) return null;
     if (media.ownerUserId !== userId) {
@@ -1130,7 +1189,7 @@ export class MessagesService {
       if (!allowed) return null;
     }
     const path = this.mediaStore.pathFor(media.fileName);
-    return path ? { path, mime: media.mime } : null;
+    return path ? { path, mime: media.mime, originalName: media.originalName ?? null } : null;
   }
 
   mediaDto(mo: MediaObject): MediaDto {
@@ -1139,6 +1198,7 @@ export class MessagesService {
       kind: mo.kind,
       mime: mo.mime,
       sizeBytes: mo.sizeBytes,
+      originalName: mo.originalName ?? null,
       durationMs: mo.durationMs,
       waveform: mo.waveform,
       width: mo.width,

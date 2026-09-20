@@ -19,6 +19,40 @@ const EXT: Record<string, string> = {
   'image/gif': '.gif',
 };
 
+/**
+ * Documents people actually send each other. Anything installable or
+ * executable is refused — a chat app must not be a delivery route for APKs.
+ */
+export const ALLOWED_FILE_MIME = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.oasis.opendocument.text',
+  'application/vnd.oasis.opendocument.spreadsheet',
+  'application/vnd.oasis.opendocument.presentation',
+  'application/rtf',
+  'application/zip',
+  'text/plain',
+  'text/csv',
+  'text/calendar',
+  'application/json',
+  'image/heic',
+  'image/heif',
+  'image/tiff',
+  'image/svg+xml',
+  'video/mp4',
+  'video/3gpp',
+  'video/quicktime',
+  'video/webm',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/flac',
+]);
+
 export const ALLOWED_VOICE_MIME = new Set(Object.keys(EXT).filter((m) => m.startsWith('audio/')));
 export const ALLOWED_IMAGE_MIME = new Set(Object.keys(EXT).filter((m) => m.startsWith('image/')));
 

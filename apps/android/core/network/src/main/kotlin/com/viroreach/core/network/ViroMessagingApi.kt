@@ -205,6 +205,15 @@ data class SendBody(
     val linkPreview: LinkPreviewDto? = null,
     val gif: GifSendDto? = null,
     val sticker: StickerRef? = null,
+    val contact: ContactCardBody? = null,
+)
+
+/** A shared contact card: a name, plus numbers and/or a Viro ID. */
+data class ContactCardBody(
+    val name: String,
+    val phones: List<String> = emptyList(),
+    val viroId: String? = null,
+    val userId: String? = null,
 )
 
 data class PollBody(val question: String, val options: List<String>, val multi: Boolean = false)
@@ -254,6 +263,8 @@ data class MediaDto(
     val height: Int?,
     val transcript: String? = null,
     val transcriptLang: String? = null,
+    /** For documents: the name the sender gave it. */
+    val originalName: String? = null,
 )
 
 data class ReplyDto(val id: String, val senderUserId: String?, val type: String?, val body: String?, val deleted: Boolean?)
@@ -305,6 +316,10 @@ data class ConvDto(
     val peerLastReadAt: String?,
     val peerLastDeliveredAt: String?,
     val pinnedMessageIds: List<String>?,
+    /** Inbox state, mine alone (archive / pin / mark unread). */
+    val archived: Boolean? = null,
+    val pinnedAt: String? = null,
+    val unreadMarked: Boolean? = null,
 )
 
 data class SyncResult(
@@ -316,6 +331,9 @@ data class SyncResult(
 
 data class ConvSettingsBody(
     val hidden: Boolean? = null,
+    val archived: Boolean? = null,
+    val pinned: Boolean? = null,
+    val markUnread: Boolean? = null,
     val mutedUntil: String? = null,
     val disappearingSeconds: Int? = null,
     // Gson drops nulls, so "turn off" and "unmute" need explicit fields.

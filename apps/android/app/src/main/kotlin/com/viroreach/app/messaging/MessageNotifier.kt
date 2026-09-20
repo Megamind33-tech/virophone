@@ -39,6 +39,8 @@ class MessageNotifier(private val context: Context) {
             message.type == "VOICE" -> "🎤 Voice message"
             message.type == "IMAGE" -> if (message.body.isNullOrBlank()) "📷 Photo" else "📷 ${message.body}"
             message.type == "LOOP" -> "🔁 ${message.body ?: "Loop"}"
+            message.type == "FILE" -> "📎 ${message.fileName ?: "Document"}"
+            message.type == "CONTACT" -> "👤 ${message.contactCard?.name ?: "Contact"}"
             else -> message.body.orEmpty()
         }
         val key = message.conversationId

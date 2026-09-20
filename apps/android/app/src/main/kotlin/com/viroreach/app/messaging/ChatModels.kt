@@ -16,13 +16,21 @@ import java.time.Instant
 /** What a single tick row says about my own message. */
 enum class Delivery { SCHEDULED, SENDING, FAILED, SENT, DELIVERED, READ, INCOMING }
 
+/** A contact someone shared in a chat. */
+data class ContactCard(
+    val name: String,
+    val phones: List<String> = emptyList(),
+    val viroId: String? = null,
+    val userId: String? = null,
+)
+
 data class ChatMessage(
     val id: String,
     val clientMsgId: String?,
     val conversationId: String,
     val senderUserId: String,
     val mine: Boolean,
-    /** TEXT | VOICE | IMAGE | SYSTEM | LOOP | POLL | GIF | STICKER */
+    /** TEXT | VOICE | IMAGE | SYSTEM | LOOP | POLL | GIF | STICKER | FILE | CONTACT */
     val type: String,
     val body: String?,
     val createdAt: Long,
@@ -55,6 +63,22 @@ data class ChatMessage(
         val h = (g["height"] as? Number)?.toInt()
         if (w != null && h != null && w > 0 && h > 0) w to h else null
     }
+    /** Documents: the sender's file name, and its size in bytes. */
+    val fileName: String? get() = media?.originalName ?: obj("file")?.get("name") as? String
+    val fileSize: Long? get() = media?.sizeBytes?.toLong() ?: (obj("file")?.get("size") as? Number)?.toLong()
+
+    /** A shared contact card. */
+    val contactCard: ContactCard? get() = obj("contact")?.let { c ->
+        val name = c["name"] as? String ?: return@let null
+        @Suppress("UNCHECKED_CAST")
+        ContactCard(
+            name = name,
+            phones = (c["phones"] as? List<Any?>)?.mapNotNull { it as? String }.orEmpty(),
+            viroId = c["viroId"] as? String,
+            userId = c["userId"] as? String,
+        )
+    }
+
     val stickerPack: String? get() = obj("sticker")?.get("pack") as? String
     val stickerId: String? get() = obj("sticker")?.get("id") as? String
     val linkPreview: com.viroreach.core.network.LinkPreviewDto? get() = obj("linkPreview")?.let { lp ->
@@ -98,6 +122,9 @@ data class ConversationItem(
     val lastDeleted: Boolean,
     val lastPending: String?,
     val updatedAt: Long,
+    val archived: Boolean = false,
+    val pinnedAt: Long? = null,
+    val unreadMarked: Boolean = false,
 ) {
     val isPrivate: Boolean get() = kind == "PRIVATE"
     val isGroup: Boolean get() = kind == "GROUP"
@@ -174,6 +201,10 @@ internal fun ConvDto.toEntity(myUserId: String?, existing: ConversationEntity?):
         locked = existing?.locked ?: false,
         description = description,
         myRole = myRole ?: "MEMBER",
+        // An older server doesn't send these; keep whatever this phone has.
+        archived = archived ?: existing?.archived ?: false,
+        pinnedAt = parseIso(pinnedAt) ?: existing?.pinnedAt.takeIf { pinnedAt == null },
+        unreadMarked = unreadMarked ?: existing?.unreadMarked ?: false,
     )
 }
 
@@ -228,6 +259,9 @@ internal fun ConversationRow.toItem(myUserId: String?): ConversationItem = Conve
     lastDeleted = lastDeleted != null,
     lastPending = lastStatus,
     updatedAt = updatedAt,
+    archived = archived,
+    pinnedAt = pinnedAt,
+    unreadMarked = unreadMarked,
 )
 
 /** One line for the inbox: what the last message was, in words. */
@@ -239,6 +273,8 @@ fun ConversationItem.preview(): String = when {
     lastType == "LOOP" -> "🔁 ${lastBody ?: "Loop"}"
     lastType == "POLL" -> "📊 Poll"
     lastType == "GIF" -> "GIF"
+    lastType == "FILE" -> "📎 " + (lastBody?.takeIf { it.isNotBlank() } ?: "Document")
+    lastType == "CONTACT" -> "👤 " + (lastBody?.takeIf { it.isNotBlank() } ?: "Contact")
     lastType == "STICKER" -> "${lastBody ?: ""} Sticker".trim()
     lastType == "SYSTEM" -> lastBody?.replaceFirstChar { it.uppercase() } ?: ""
     else -> lastBody.orEmpty()
