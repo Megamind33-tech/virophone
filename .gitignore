@@ -75,3 +75,6 @@ secrets/
 
 # Media written by the encryption-at-rest integration test
 .tmp-encrypted-media/
+
+# Archives written by the encrypted-backup integration test
+.tmp-backups/
