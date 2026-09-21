@@ -122,6 +122,16 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
     var showArchived by remember { mutableStateOf(false) }
     var optionsFor by remember { mutableStateOf<ConversationItem?>(null) }
     var syncing by remember { mutableStateOf(false) }
+    // Whether a backup is waiting for this account. Only worth asking once,
+    // and only worth showing while there is nothing here.
+    var backupWaiting by remember { mutableStateOf(false) }
+    var restoreOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        backupWaiting = runCatching { session.backup.state().exists }.getOrDefault(false)
+    }
+    if (restoreOpen) {
+        com.viroreach.app.consumer.ChatBackupDialog(session, startInRestore = true) { restoreOpen = false }
+    }
 
     LaunchedEffect(Unit) {
         syncing = true
@@ -242,6 +252,20 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
                     color = ViroColors.textSecondary,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 )
+                // A new phone lands here with nothing, which is exactly where
+                // someone needs to be told their chats can come back.
+                if (!showHidden && !showArchived && backupWaiting) {
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "There is a backup of your chats. You will need the recovery key " +
+                            "from your old phone.",
+                        color = ViroColors.textSecondary,
+                        fontSize = 13.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = { restoreOpen = true }) { Text("Restore chats") }
+                }
             }
         } else {
             LazyColumn(Modifier.fillMaxSize()) {

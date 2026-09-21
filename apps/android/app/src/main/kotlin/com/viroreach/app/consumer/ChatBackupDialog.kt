@@ -44,12 +44,17 @@ import java.time.format.DateTimeFormatter
  * the words do not soften it.
  */
 @Composable
-fun ChatBackupDialog(session: SessionManager, onDismiss: () -> Unit) {
+fun ChatBackupDialog(
+    session: SessionManager,
+    /** True when opened from an empty inbox, where restoring is the whole point. */
+    startInRestore: Boolean = false,
+    onDismiss: () -> Unit,
+) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<BackupState?>(null) }
     var newKey by remember { mutableStateOf<String?>(null) }
-    var restoring by remember { mutableStateOf(false) }
+    var restoring by remember { mutableStateOf(startInRestore) }
     var typedKey by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
