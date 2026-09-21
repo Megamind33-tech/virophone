@@ -1,8 +1,11 @@
 # End-to-end encryption for Viro — design and decisions
 
-Status: Stage 0 (encryption at rest) is built and deployed. Stage 1 (keys and
-one-to-one text) is being built now — the server half is in. Stages 2-4 are
-still a proposal. Written 2026-09-20, against commit `c431676`.
+Status: Stages 0 to 3 are built. One-to-one chats encrypt end to end in
+production from 2026-09-21 (`E2EE_ENABLED=true`): text, files, voice notes,
+photos, polls, places and edits. Groups and the web companion are not
+encrypted yet, and nothing in the app claims they are. Sections 8, 9 and 10
+record what each stage actually does; sections 1 to 7 are the original design
+note, kept because the trade-offs in it are the ones that were taken.
 
 Today Viro encrypts traffic in transit (HTTPS/WSS) and calls are peer-to-peer
 media, but **messages are stored readable on the server**: `messages.body` and
@@ -268,3 +271,35 @@ knows is when the share ends, because the server is what stops carrying it.
   link still goes, as text.
 - **Groups.** Sender keys are the next piece of work; group chats are not
   encrypted yet, and nothing claims they are.
+
+## 10. Stage 3: a backup the server cannot open
+
+Encryption made the phone the only place a message exists in readable form.
+That is the point of it — and it means a lost or reinstalled phone loses every
+conversation. Stage 3 is what stops that being true.
+
+**How it works.** The phone gzips its own message store, encrypts it with
+AES-256-GCM under a 32-byte **recovery key**, and uploads the result. The
+server records how big it is and when it arrived, hands it back to a phone that
+asks, and cannot do anything else with it: there is no key on the server, and
+no code path that opens an archive.
+
+**The recovery key is the whole story.** It is shown once, as sixteen groups of
+four characters from an alphabet with no I, L, O or U — so it can be written on
+paper and typed back without ambiguity. The phone keeps a copy in encrypted
+preferences so backups can run unattended. Viro has no copy, and the screen
+that shows the key says exactly that, in those words, before anyone needs it.
+
+**Media is deliberately not in the archive.** A sealed file is already on the
+server as bytes, and the key to it comes back inside the message that carried
+it — so restoring the messages restores the photos too, without paying to
+upload them twice.
+
+**What a restore gives back.** Conversations and messages as of the last
+backup, added to whatever is on the phone rather than replacing it. Anything
+left in the old phone's outbox is marked failed rather than sent again: it
+either went already, or it never will.
+
+**What it does not give back.** A new phone gets a new identity key, which is
+right — the other person's safety number changes, and they are told. Restoring
+history is not the same as restoring a device.

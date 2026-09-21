@@ -58,6 +58,7 @@ fun YouScreen(
     var deleting by remember { mutableStateOf(false) }
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var exporting by remember { mutableStateOf(false) }
+    var showBackup by remember { mutableStateOf(false) }
     var callingPrivacyExpanded by remember { mutableStateOf(false) }
     var editingAbout by remember { mutableStateOf<String?>(null) }
     var visibilityFor by remember { mutableStateOf<String?>(null) }
@@ -226,6 +227,10 @@ fun YouScreen(
                     }
                     SettingsNavRow("Blocked contacts", onBlockedContacts)
                     SettingsNavRow("Linked devices", onDevices)
+                    // Encrypted chats live only on the phone that opened them,
+                    // so this is what stands between a reinstall and losing
+                    // them.
+                    SettingsNavRow("Chat backup") { showBackup = true }
                 }
                 SettingsSection(title = "Support") {
                     SettingsNavRow("Help", onHelp)
@@ -433,6 +438,9 @@ fun YouScreen(
         )
     }
 
+    if (showBackup) {
+        ChatBackupDialog(session) { showBackup = false }
+    }
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { if (!deleting) confirmDelete = false },

@@ -64,6 +64,17 @@ class SessionManager private constructor(context: Context) {
         viroApiClient.keys,
     )
     val relationships: RelationshipRepository = RelationshipRepository(appContext, messagingApi)
+
+    /**
+     * The encrypted backup of this phone's chats. Without it, an encrypted
+     * conversation exists only on the phone that opened it.
+     */
+    val backup: com.viroreach.app.messaging.BackupManager = com.viroreach.app.messaging.BackupManager(
+        appContext,
+        viroApiClient.backup,
+        viroApiClient.httpClient,
+        viroApiClient.baseUrl,
+    )
     /** What downloads by itself, and what Viro is keeping on this phone. */
     val mediaSettings: com.viroreach.app.messaging.MediaSettings = com.viroreach.app.messaging.MediaSettings(appContext)
     val mediaStorage: com.viroreach.app.messaging.MediaStorage by lazy {

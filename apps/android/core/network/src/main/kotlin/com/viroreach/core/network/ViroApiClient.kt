@@ -71,6 +71,9 @@ class ViroApiClient(
     /** The end-to-end encryption key directory. */
     val keys: ViroKeysApi = retrofit.create(ViroKeysApi::class.java)
 
+    /** The encrypted backup of this person's chats. */
+    val backup: ViroBackupApi = retrofit.create(ViroBackupApi::class.java)
+
     private fun String.ensureTrailingSlash(): String =
         if (endsWith("/")) this else "$this/"
 }

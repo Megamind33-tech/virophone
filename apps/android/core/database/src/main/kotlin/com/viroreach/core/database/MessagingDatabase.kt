@@ -161,6 +161,14 @@ interface MessagingDao {
     @Query("SELECT * FROM conversations")
     suspend fun allConversations(): List<ConversationEntity>
 
+    /**
+     * Everything this phone holds, for the encrypted backup. Bounded because
+     * it is all read into memory at once, and a phone that has been messaging
+     * for years should not run out of it making a backup.
+     */
+    @Query("SELECT * FROM messages ORDER BY createdAt DESC LIMIT :limit")
+    suspend fun allMessages(limit: Int): List<MessageEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertConversations(rows: List<ConversationEntity>)
 

@@ -125,6 +125,9 @@ dependencies {
     implementation(project(":core:network"))
     implementation(project(":core:database"))
     implementation(project(":core:e2ee"))
+    // The recovery key lives in EncryptedSharedPreferences: it is the key to
+    // every chat this phone holds.
+    implementation(libs.androidx.security.crypto)
     implementation(project(":core:security"))
     implementation(project(":core:designsystem"))
     implementation(project(":feature:auth"))
