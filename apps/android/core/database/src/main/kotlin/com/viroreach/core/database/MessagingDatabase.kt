@@ -142,7 +142,10 @@ interface MessagingDao {
                m.createdAt AS lastAt, m.deletedAt AS lastDeleted, m.status AS lastStatus
         FROM conversations c
         LEFT JOIN messages m ON m.id = (
-            SELECT id FROM messages x WHERE x.conversationId = c.id ORDER BY x.createdAt DESC LIMIT 1
+            -- The inbox shows the last thing said. A sealed reaction is carried
+            -- as a message but belongs on one, so it is not that.
+            SELECT id FROM messages x WHERE x.conversationId = c.id AND x.type != 'REACTION'
+            ORDER BY x.createdAt DESC LIMIT 1
         )
         ORDER BY COALESCE(m.createdAt, c.updatedAt) DESC
         """,

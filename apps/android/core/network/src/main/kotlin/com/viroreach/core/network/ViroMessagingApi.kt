@@ -246,6 +246,8 @@ data class SendBody(
      * carrying updates.
      */
     val liveSeconds: Int? = null,
+    /** An encrypted reaction: carried like a message, but no push and no badge. */
+    val silent: Boolean? = null,
 )
 
 data class EnvelopeBody(val deviceId: String, val ciphertext: String, val type: Int)

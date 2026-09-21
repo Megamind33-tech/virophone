@@ -222,7 +222,12 @@ class MessagingRepository(
     fun messages(conversationId: String): Flow<List<ChatMessage>> =
         dao.observeMessages(conversationId).map { rows ->
             val now = System.currentTimeMillis()
-            rows.filter { it.expiresAt == null || it.expiresAt!! > now }.map { it.toChat(myUserId()) }
+            rows
+                // A sealed reaction is kept as a row, because a message opens
+                // once — but it belongs on another message, not in the chat.
+                .filter { it.type != TYPE_REACTION }
+                .filter { it.expiresAt == null || it.expiresAt!! > now }
+                .map { it.toChat(myUserId()) }
         }.catch { e -> Log.e(TAG, "CHAT_READ_FAILED", e); emit(emptyList()) }
 
     fun conversation(conversationId: String): Flow<ConversationEntity?> = dao.observeConversation(conversationId)
@@ -311,6 +316,27 @@ class MessagingRepository(
             opened(dto, existing).toEntity(existing)
         }
         dao.upsertMessages(rows)
+        // An encrypted reaction arrives as a message; what it means is a change
+        // to another one. Applied after the rows are in, so the reaction is
+        // never lost if the app stops between the two.
+        rows.filter { it.type == TYPE_REACTION }.forEach { applySealedReaction(it) }
+    }
+
+    /**
+     * Puts a sealed reaction where it belongs.
+     *
+     * The reaction itself stays in the store — opened once is all anyone gets,
+     * so its own row is the record that it was applied — but nothing shows it
+     * as a message.
+     */
+    private suspend fun applySealedReaction(row: MessageEntity) {
+        val meta = ChatJson.map(row.metadataJson)
+        val targetId = meta["targetId"] as? String ?: return
+        val emoji = meta["emoji"] as? String
+        val target = dao.message(targetId) ?: return
+        val others = ChatJson.reactions(target.reactionsJson).filter { it.userId != row.senderUserId }
+        val next = if (emoji.isNullOrBlank()) others else others + ReactionDto(row.senderUserId, emoji)
+        dao.upsertMessages(listOf(target.copy(reactionsJson = ChatJson.toJson(next))))
     }
 
     /**
@@ -475,6 +501,9 @@ class MessagingRepository(
 
     private suspend fun announceIfIncoming(type: String, dto: MsgDto) {
         if (type != "message.new") return
+        // A sealed reaction arrives as a message and is not one: no badge, no
+        // notification, nothing in the chat.
+        if (dao.message(dto.id)?.type == TYPE_REACTION) return
         val me = myUserId()
         if (dto.senderUserId == me || dto.type == "SYSTEM") {
             if (dto.type == "SYSTEM" && dto.senderUserId != me) _loopChanges.tryEmit(dto.conversationId)
@@ -693,10 +722,12 @@ class MessagingRepository(
         val meta = ChatJson.map(row.metadataJson)
         val out = (meta["outbox"] as? Map<String, Any?>) ?: emptyMap()
         val conversation = dao.conversation(row.conversationId)
-        val peerForSealing = conversation?.peerUserId
-            ?: row.conversationId.takeIf { it.startsWith(PLACEHOLDER) }?.removePrefix(PLACEHOLDER)
-        if (shouldSeal(row, conversation, peerForSealing)) {
-            sendSealed(row, meta, out, peerForSealing!!)
+        val audience = audienceOf(
+            conversation,
+            row.conversationId.takeIf { it.startsWith(PLACEHOLDER) }?.removePrefix(PLACEHOLDER),
+        )
+        if (shouldSeal(row, conversation, audience)) {
+            sendSealed(row, meta, out, audience)
             return
         }
         var mediaId: String? = null
@@ -799,15 +830,31 @@ class MessagingRepository(
     private suspend fun shouldSeal(
         row: MessageEntity,
         conv: ConversationEntity?,
-        peer: String?,
+        audience: List<String>,
     ): Boolean {
-        if (peer == null || row.type == "SYSTEM" || row.type == "LOOP") return false
-        if (conv != null && conv.kind != "DM") return false
+        if (audience.isEmpty() || row.type == "SYSTEM" || row.type == "LOOP") return false
         if (conv?.encrypted == true) return true
         // Otherwise this deployment decides when chats start encrypting.
         if (_features.value.e2ee != true) return false
         if (!e2ee.isRegistered()) return false
-        return e2ee.everyoneCanReceive(listOf(peer))
+        // Everyone, not just most people: a group where one person's app is too
+        // old to decrypt stays in the clear until it is not.
+        return e2ee.everyoneCanReceive(audience)
+    }
+
+    /**
+     * Who a message in this conversation has to be sealed for.
+     *
+     * In a group that is every member but me — one sealed copy per device.
+     * Sender keys would make it one ciphertext for the whole group instead;
+     * this is the same promise, paid for in bandwidth rather than complexity,
+     * and worth revisiting if groups here ever get large.
+     */
+    private fun audienceOf(conv: ConversationEntity?, placeholderPeer: String?): List<String> {
+        val me = myUserId()
+        val members = conv?.participantsCsv?.split(',')?.map { it.trim() }?.filter { it.isNotBlank() }.orEmpty()
+        if (members.isNotEmpty()) return members.filter { it != me }
+        return listOfNotNull(conv?.peerUserId ?: placeholderPeer)
     }
 
     /**
@@ -822,7 +869,7 @@ class MessagingRepository(
         row: MessageEntity,
         meta: Map<String, Any?>,
         out: Map<String, Any?>,
-        peer: String,
+        audience: List<String>,
     ) {
         val me = myUserId() ?: throw IllegalStateException("Not signed in")
         var mediaId: String? = null
@@ -894,7 +941,7 @@ class MessagingRepository(
         }
         val envelopes = e2ee.seal(
             me,
-            listOf(peer),
+            audience,
             SealedMessage.pack(
                 SealedPayload(
                     type = row.type,
@@ -988,11 +1035,12 @@ class MessagingRepository(
         // are sealed again and replace the copies each device holds.
         val dto = if (conv?.encrypted == true && row != null) {
             val me = myUserId() ?: throw IllegalStateException("Not signed in")
-            val peer = conv.peerUserId ?: throw IllegalStateException("Nobody to send to")
+            val audience = audienceOf(conv, null)
+            if (audience.isEmpty()) throw IllegalStateException("Nobody to send to")
             val meta = ChatJson.map(row.metadataJson).filterKeys { it != "outbox" && it != "mentions" }
             val envelopes = e2ee.seal(
                 me,
-                listOf(peer),
+                audience,
                 SealedMessage.pack(
                     SealedPayload(
                         type = row.type,
@@ -1026,14 +1074,56 @@ class MessagingRepository(
 
     suspend fun react(messageId: String, emoji: String?) = act("react") {
         val me = myUserId().orEmpty()
+        val row = dao.message(messageId)
         // Shown at once; the server's copy replaces it.
-        dao.message(messageId)?.let { row ->
-            val others = ChatJson.reactions(row.reactionsJson).filter { it.userId != me }
+        row?.let {
+            val others = ChatJson.reactions(it.reactionsJson).filter { r -> r.userId != me }
             val next = if (emoji == null) others else others + ReactionDto(me, emoji)
-            dao.upsertMessages(listOf(row.copy(reactionsJson = ChatJson.toJson(next))))
+            dao.upsertMessages(listOf(it.copy(reactionsJson = ChatJson.toJson(next))))
         }
-        val dto = if (emoji == null) api.unreact(messageId) else api.react(messageId, ReactBody(emoji))
-        upsertMessages(listOf(dto))
+        val conv = row?.let { dao.conversation(it.conversationId) }
+        if (conv?.encrypted == true && row != null) {
+            // Which emoji someone chose says something, so in an encrypted
+            // chat a reaction travels the way everything else does: sealed,
+            // and applied by the phones to the message it belongs to.
+            sendSealedReaction(row, conv, messageId, emoji)
+        } else {
+            val dto = if (emoji == null) api.unreact(messageId) else api.react(messageId, ReactBody(emoji))
+            upsertMessages(listOf(dto))
+        }
+    }
+
+    /** A reaction as a sealed message: quiet, and unreadable by the server. */
+    private suspend fun sendSealedReaction(
+        row: MessageEntity,
+        conv: ConversationEntity,
+        targetId: String,
+        emoji: String?,
+    ) {
+        val me = myUserId() ?: throw IllegalStateException("Not signed in")
+        val audience = audienceOf(conv, null)
+        if (audience.isEmpty()) throw IllegalStateException("Nobody to send to")
+        val envelopes = e2ee.seal(
+            me,
+            audience,
+            SealedMessage.pack(
+                SealedPayload(
+                    type = TYPE_REACTION,
+                    meta = mapOf("targetId" to targetId, "emoji" to emoji),
+                ),
+            ),
+        )
+        if (envelopes.isEmpty()) throw IllegalStateException("This chat is encrypted — waiting for their phone")
+        api.send(
+            SendBody(
+                conversationId = row.conversationId,
+                body = null,
+                clientMsgId = UUID.randomUUID().toString(),
+                envelopes = envelopes.map { EnvelopeBody(it.deviceId, it.ciphertext, it.type) },
+                // Nobody's phone should light up because someone reacted.
+                silent = true,
+            ),
+        )
     }
 
     suspend fun star(messageId: String, on: Boolean) = act("star message") {
@@ -1127,7 +1217,8 @@ class MessagingRepository(
         accuracy: Double?,
     ): List<EnvelopeBody>? {
         val me = myUserId() ?: return null
-        val peer = conv.peerUserId ?: return null
+        val audience = audienceOf(conv, null)
+        if (audience.isEmpty()) return null
         val meta = ChatJson.map(row.metadataJson).toMutableMap()
         val was = (meta["location"] as? Map<String, Any?>).orEmpty()
         meta["location"] = was + mapOf(
@@ -1138,7 +1229,7 @@ class MessagingRepository(
         )
         meta.remove("outbox")
         val payload = SealedPayload(type = "LOCATION", body = row.body, meta = meta)
-        val envelopes = e2ee.seal(me, listOf(peer), SealedMessage.pack(payload))
+        val envelopes = e2ee.seal(me, audience, SealedMessage.pack(payload))
         if (envelopes.isEmpty()) return null
         // Kept locally too, so the map on this phone moves with the share.
         dao.upsertMessages(listOf(row.copy(metadataJson = ChatJson.toJson(meta), updatedAt = System.currentTimeMillis())))
@@ -1332,6 +1423,8 @@ class MessagingRepository(
         const val PLACEHOLDER = "peer:"
         /** The server's type for a message it cannot read. */
         const val TYPE_ENCRYPTED = "ENCRYPTED"
+        /** A sealed reaction: carried as a message, shown as a reaction. */
+        const val TYPE_REACTION = "REACTION"
         const val LOCAL = "local:"
         private const val KEY_CURSOR = "sync_cursor"
         private const val PRESENT_EVERY_MS = 20_000L

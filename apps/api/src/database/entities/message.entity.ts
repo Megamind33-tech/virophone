@@ -65,6 +65,14 @@ export class Message {
   liveUntil!: Date | null;
 
   /**
+   * Carried like a message, but not one: an encrypted reaction, applied by the
+   * phones to the message it belongs to. No notification, and no unread badge
+   * for a thumbs up.
+   */
+  @Column({ type: 'boolean', default: false })
+  silent!: boolean;
+
+  /**
    * Encrypted at rest, so it can no longer be queried inside: anything the
    * server searches on lives in its own table (see message_mentions).
    */

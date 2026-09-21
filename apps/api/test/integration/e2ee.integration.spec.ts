@@ -530,6 +530,95 @@ describe('End-to-end encryption (server)', () => {
     expect(rows.map((r: any) => r.user_id)).toEqual([bobPhone.userId]);
   });
 
+  it('encrypts a group, one sealed copy per member device', async () => {
+    if (skip()) return;
+    // Carol has no keys, so a group with her in it cannot go encrypted.
+    const mixed = await http().post('/api/v1/messages/groups').set(as(alicePhone))
+      .send({ title: 'Everyone', memberIds: [bobPhone.userId, carol.userId] }).expect(201);
+    const refused = await http()
+      .post('/api/v1/messages')
+      .set(as(alicePhone))
+      .send({
+        conversationId: mixed.body.id,
+        clientMsgId: 'grp-refused',
+        envelopes: [
+          { deviceId: bobPhone.deviceId, ciphertext: seal('x') },
+          { deviceId: alicePhone.deviceId, ciphertext: seal('x') },
+        ],
+      })
+      .expect(409);
+    expect(refused.body.code).toBe('E2EE_NOT_AVAILABLE');
+
+    // A group where everyone can is another matter.
+    const group = await http().post('/api/v1/messages/groups').set(as(alicePhone))
+      .send({ title: 'Site works', memberIds: [bobPhone.userId] }).expect(201);
+    const secret = 'the cement arrives on Thursday';
+    const sent = await http()
+      .post('/api/v1/messages')
+      .set(as(alicePhone))
+      .send({
+        conversationId: group.body.id,
+        clientMsgId: 'grp-1',
+        envelopes: [bobPhone, bobLaptop, alicePhone].map((s) => ({
+          deviceId: s.deviceId,
+          ciphertext: seal(secret),
+          type: 1,
+        })),
+      })
+      .expect(201);
+    expect(sent.body.message.type).toBe('ENCRYPTED');
+
+    const rows = await sql('SELECT body, metadata::text AS meta FROM messages WHERE client_msg_id = $1', ['grp-1']);
+    expect(rows[0].body).toBeNull();
+    expect(rows[0].meta).toBeNull();
+
+    // Every member's devices have their own copy, and the group is marked.
+    const bobs = await http().get('/api/v1/messages/conversations').set(as(bobPhone)).expect(200);
+    const seen = bobs.body.find((c: any) => c.id === group.body.id);
+    expect(seen.encrypted).toBe(true);
+    const history = await http().get(`/api/v1/messages/conversations/${group.body.id}`).set(as(bobPhone)).expect(200);
+    const message = history.body.find((m: any) => m.clientMsgId === 'grp-1');
+    expect(message.envelopes.map((e: any) => e.deviceId).sort())
+      .toEqual([bobPhone.deviceId, bobLaptop.deviceId].sort());
+  });
+
+  it('carries a reaction as a message nobody is notified about', async () => {
+    if (skip()) return;
+    const before = await http().get('/api/v1/messages/conversations').set(as(bobPhone)).expect(200);
+    const unreadBefore = before.body.find((c: any) => c.id === cid).unread;
+    const lastBefore = before.body.find((c: any) => c.id === cid).lastMessage?.id;
+
+    await http()
+      .post('/api/v1/messages')
+      .set(as(alicePhone))
+      .send({
+        conversationId: cid,
+        clientMsgId: 'enc-reaction',
+        silent: true,
+        envelopes: everyone('{"type":"REACTION","meta":{"emoji":"👍"}}'),
+      })
+      .expect(201);
+
+    const rows = await sql('SELECT silent, body FROM messages WHERE client_msg_id = $1', ['enc-reaction']);
+    expect(rows[0].silent).toBe(true);
+    expect(rows[0].body).toBeNull();
+    // Nothing that reads as "you have a new message".
+    const after = await http().get('/api/v1/messages/conversations').set(as(bobPhone)).expect(200);
+    const summary = after.body.find((c: any) => c.id === cid);
+    expect(summary.unread).toBe(unreadBefore);
+    expect(summary.lastMessage?.id).toBe(lastBefore);
+  });
+
+  it('will not let a plaintext send pretend to be silent', async () => {
+    if (skip()) return;
+    // Silence is for sealed reactions; in the clear a reaction has its own
+    // endpoint and needs no disguise.
+    const plain = await http().post('/api/v1/messages').set(as(alicePhone))
+      .send({ toUserId: carol.userId, body: 'hello', clientMsgId: 'plain-silent', silent: true }).expect(201);
+    const rows = await sql('SELECT silent FROM messages WHERE id = $1', [plain.body.message.id]);
+    expect(rows[0].silent).toBe(false);
+  });
+
   it('edits a sealed message by replacing what each device holds', async () => {
     if (skip()) return;
     const sent = await http()

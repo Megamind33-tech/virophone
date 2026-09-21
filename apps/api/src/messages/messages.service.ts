@@ -71,6 +71,12 @@ export interface SendMessageInput {
    * carrying updates.
    */
   liveSeconds?: number;
+  /**
+   * Carried like a message but not one — an encrypted reaction. No push, and
+   * no unread badge. Only meaningful for sealed sends: in the clear a
+   * reaction has its own endpoint and needs no disguise.
+   */
+  silent?: boolean;
 }
 
 export interface PollDto {
@@ -98,6 +104,16 @@ const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
 
 /** A sealed text message, generously: the ciphertext of 4000 characters plus its headers. */
 const MAX_ENVELOPE_CHARS = 24_000;
+/**
+ * How many devices one message may be sealed for.
+ *
+ * A group message is sealed once per member device rather than once for the
+ * group, so this has to cover the largest group the app allows — 255 people —
+ * with room for their second devices. It is a ceiling, not a target: sender
+ * keys would make a group message one ciphertext instead of hundreds, and are
+ * the obvious optimisation if groups here ever get large.
+ */
+const MAX_ENVELOPES = 512;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BASE64_RE = /^[A-Za-z0-9+/=]+$/;
 
@@ -291,6 +307,9 @@ export class MessagesService {
         'An encrypted message carries its own content; send it sealed.',
         HttpStatus.BAD_REQUEST,
       );
+    }
+    if (raw.length > MAX_ENVELOPES) {
+      this.fail('VALIDATION_ERROR', 'That is too many devices for one message.', HttpStatus.BAD_REQUEST);
     }
     const out: { deviceId: string; ciphertext: string; type: number }[] = [];
     const seen = new Set<string>();
@@ -505,7 +524,8 @@ export class MessagesService {
       if (uid === message.senderUserId) continue;
       if (delivered && type === 'message.new') {
         await this.markDelivered(uid, message.conversationId);
-      } else if (!delivered && opts.pushIfOffline) {
+      } else if (!delivered && opts.pushIfOffline && !message.silent) {
+        // Nobody's phone should light up because someone reacted.
         // The sender's own name as they set it; the phone shows its saved
         // contact name instead once the app is open.
         const sender = await this.profileRepo.findOne({ where: { userId: message.senderUserId } });
@@ -833,6 +853,7 @@ export class MessagesService {
         deliverAt,
         expiresAt,
         liveUntil,
+        silent: !!sealed && input.silent === true,
         metadata: sealed ? null : Object.keys(metadata).length ? metadata : null,
       }),
     );
@@ -1094,10 +1115,12 @@ export class MessagesService {
         .map((h) => h.messageId),
     );
     const visible = recent.filter((m) => !hidden.has(m.id) && this.visibleTo(m, userId, part, conv));
-    const last = visible[0];
+    // The inbox shows the last thing said, not the last thing carried.
+    const last = visible.find((m) => !m.silent);
     const unreadSince = part.lastReadAt ?? new Date(0);
     const unread = visible.filter(
-      (m) => m.senderUserId !== userId && m.type !== 'SYSTEM' && m.createdAt > unreadSince,
+      // A reaction is carried like a message but is not one: no badge for it.
+      (m) => m.senderUserId !== userId && m.type !== 'SYSTEM' && !m.silent && m.createdAt > unreadSince,
     ).length;
     const minOf = (xs: (Date | null)[]) => {
       const ds = xs.filter((x): x is Date => !!x);

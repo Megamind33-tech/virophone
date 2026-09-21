@@ -67,13 +67,18 @@ class SendMessageDto {
    * One sealed copy per recipient device. When these are present the server
    * stores nothing else: no body, no metadata, nothing it could read.
    */
-  @IsArray() @IsOptional() @ArrayMaxSize(64)
+  @IsArray() @IsOptional() @ArrayMaxSize(512)
   envelopes?: { deviceId: string; ciphertext: string; type?: number }[];
   /**
    * For a sealed live location: how long the share runs. Where the person is
    * goes inside the ciphertext — this says only when to stop carrying updates.
    */
   @IsInt() @IsOptional() liveSeconds?: number;
+  /**
+   * Carried like a message but not one — an encrypted reaction. No push, no
+   * unread badge, and it never becomes the line shown in the inbox.
+   */
+  @IsBoolean() @IsOptional() silent?: boolean;
 }
 
 class GroupDto {
@@ -109,7 +114,7 @@ class LiveLocationUpdateDto {
   @IsNumber() @IsOptional() @Min(-90) @Max(90) lat?: number;
   @IsNumber() @IsOptional() @Min(-180) @Max(180) lng?: number;
   @IsNumber() @IsOptional() @Min(0) accuracy?: number;
-  @IsArray() @IsOptional() @ArrayMaxSize(64)
+  @IsArray() @IsOptional() @ArrayMaxSize(512)
   envelopes?: { deviceId: string; ciphertext: string; type?: number }[];
 }
 
@@ -121,7 +126,7 @@ class EditMessageDto {
   // Empty for an encrypted edit: the new words are inside the envelopes.
   @IsString() @IsOptional() @MaxLength(4000) body?: string;
   /** Sealed copies of the edited message, one per device. */
-  @IsArray() @IsOptional() @ArrayMaxSize(64)
+  @IsArray() @IsOptional() @ArrayMaxSize(512)
   envelopes?: { deviceId: string; ciphertext: string; type?: number }[];
 }
 
