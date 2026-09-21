@@ -15,10 +15,19 @@ data class MomentDto(
     /** What this viewer chose, so the button reads as already pressed. */
     val myReaction: String? = null,
     val visibilityChangedAt: String? = null,
+    /** Why people came together — shapes the room. Derived for Moments older than intents. */
+    val intent: String? = null,
 )
 data class MomentCheerDto(val emoji: String, val count: Int)
 data class MomentsNowDto(val serverTime: String, val moments: List<MomentDto>)
-data class CreateMomentBody(val type: String, val text: String?, val visibility: String, val durationMinutes: Int)
+data class CreateMomentBody(
+    val type: String,
+    val text: String?,
+    val visibility: String,
+    val durationMinutes: Int,
+    /** What people are coming together to do: COOK, WATCH, LISTEN, STAY… */
+    val intent: String? = null,
+)
 data class ExtendMomentBody(val minutes: Int)
 
 data class MomentParticipantDto(val userId: String, val displayName: String, val isHost: Boolean, val joinedAt: String)
@@ -44,6 +53,33 @@ data class MomentEnvelopeBody(val deviceId: String, val ciphertext: String, val 
 data class MomentRoomDto(
     val moment: MomentDto, val serverTime: String,
     val participants: List<MomentParticipantDto>, val messages: List<MomentMessageDto>,
+    /** What the room is right now. Null only from a server older than the room engine. */
+    val state: MomentRuntimeDto? = null,
+)
+
+/**
+ * What a Moment room is right now: which experience is the room, what sits
+ * beside it, and its atmosphere. The server holds it; every change arrives
+ * whole, with a [revision], so the newest always wins.
+ */
+data class MomentRuntimeDto(
+    val momentId: String,
+    val revision: Int,
+    val intent: String,
+    val primary: String,
+    val secondary: List<String> = emptyList(),
+    val scene: String,
+    val scenePinned: Boolean = false,
+    val updatedAt: String? = null,
+    val updatedBy: String? = null,
+)
+
+/** One change to what a room is. Only the field its [op] needs is read. */
+data class MomentRoomChangeBody(
+    val op: String,
+    val intent: String? = null,
+    val module: String? = null,
+    val scene: String? = null,
 )
 /** Whichever the sender could manage: readable text, or one copy per device. */
 data class SendMomentMessageBody(val body: String? = null, val envelopes: List<MomentEnvelopeBody>? = null)
@@ -71,6 +107,8 @@ interface ViroMomentsApi {
     @POST("api/v1/moments/{id}/join") suspend fun join(@Path("id") id: String): MomentRoomDto
     @POST("api/v1/moments/{id}/leave") suspend fun leave(@Path("id") id: String)
     @GET("api/v1/moments/{id}/room") suspend fun room(@Path("id") id: String): MomentRoomDto
+    /** Changes what the room is, for everyone in it. */
+    @POST("api/v1/moments/{id}/state") suspend fun changeRoom(@Path("id") id: String, @Body body: MomentRoomChangeBody): MomentRuntimeDto
     @POST("api/v1/moments/{id}/messages") suspend fun sendMessage(@Path("id") id: String, @Body body: SendMomentMessageBody): MomentMessageDto
     @POST("api/v1/moments/{id}/messages/{messageId}/react") suspend fun react(@Path("id") id: String, @Path("messageId") messageId: String, @Body body: MomentReactBody)
     @POST("api/v1/moments/{id}/knock") suspend fun knock(@Path("id") id: String)

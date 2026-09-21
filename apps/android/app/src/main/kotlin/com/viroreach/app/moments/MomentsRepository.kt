@@ -11,7 +11,10 @@ import kotlinx.coroutines.sync.withLock
 import java.time.Instant
 
 fun MomentDto.endsAt(): Long = runCatching { Instant.parse(expiresAt).toEpochMilli() }.getOrDefault(0)
-fun MomentDto.activity(): String = text?.takeIf { it.isNotBlank() } ?: when (type) {
+fun MomentDto.activity(): String = text?.takeIf { it.isNotBlank() }
+    // What they are doing together, in the words the room uses: "Cooking".
+    ?: com.viroreach.app.moments.engine.MomentIntent.of(intent)?.activity
+    ?: when (type) {
     "FREE" -> "Free for a quick call"
     "BREAK" -> "Taking a break"
     "LISTENING" -> "Listening"
@@ -174,6 +177,12 @@ class MomentRoomState(
     val messages = MutableStateFlow<List<MomentMessageDto>>(emptyList())
     val closed = MutableStateFlow(false)
     val error = MutableStateFlow<String?>(null)
+    /**
+     * What the room is right now — the experience that fills it, what sits
+     * beside it, its atmosphere. Only ever replaced by a newer revision, so a
+     * late or repeated frame cannot move the room backwards.
+     */
+    val runtime = MutableStateFlow<MomentRuntimeDto?>(null)
     /** True once anything in this room has gone out sealed, for the room's badge. */
     val encrypted = MutableStateFlow(false)
     /**
@@ -222,6 +231,7 @@ class MomentRoomState(
                     messages.value = messages.value + readable(m)
                 }
             }
+            "moment.state" -> runtimeOf(payload["state"])?.let { adopt(it) }
             "moment.audience", "moment.cheer" -> refresh()
             "moment.reaction" -> {
                 val mid = str(payload, "messageId")
@@ -279,6 +289,44 @@ class MomentRoomState(
     catch (e: CancellationException) { throw e }
     catch (e: Exception) { Result.failure(IllegalStateException("Couldn't react. Try again.")) }
 
+    /**
+     * Changes what the room is — for everyone in it. The answer is applied
+     * straight away; the frame that follows it is the same revision and is
+     * ignored.
+     */
+    suspend fun change(body: MomentRoomChangeBody): Result<Unit> = try {
+        adopt(api.changeRoom(momentId, body))
+        Result.success(Unit)
+    }
+    catch (e: CancellationException) { throw e }
+    catch (e: Exception) {
+        if (momentHttpStatus(e) == 404) closed.value = true
+        Result.failure(IllegalStateException(when (momentHttpStatus(e)) {
+            404 -> "This Moment has ended."
+            403 -> "You're no longer in this room."
+            400 -> "That can't be done in this room."
+            else -> "Couldn't change the room. Check your connection."
+        }))
+    }
+
+    /** The host ended it here; the ending shows without waiting for the frame. */
+    fun markClosed() {
+        closed.value = true
+    }
+
+    /**
+     * Takes a room shape if it is newer than the one held. A room read passes
+     * [authoritative], because a reconnect can land on the same revision the
+     * phone already has and should still take it.
+     */
+    internal fun adopt(state: MomentRuntimeDto, authoritative: Boolean = false) {
+        if (state.momentId != momentId) return
+        val current = runtime.value
+        if (current == null || state.revision > current.revision || (authoritative && state.revision >= current.revision)) {
+            runtime.value = state
+        }
+    }
+
     /** Guests leaving closes their view server-side; the host ends the Moment
      *  instead (the sheet says so — this is not their exit). */
     suspend fun leave() {
@@ -328,9 +376,28 @@ class MomentRoomState(
     private suspend fun apply(room: MomentRoomDto) {
         moment.value = room.moment
         participants.value = room.participants
+        // A room read is the truth: after a reconnect this is what the room
+        // became while this phone was away.
+        room.state?.let { adopt(it, authoritative = true) }
         // Authoritative replace: reconnects can only reorder, never duplicate.
         messages.value = room.messages.distinctBy { it.id }.map { readable(it) }
         error.value = null
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun runtimeOf(raw: Any?): MomentRuntimeDto? {
+        val m = raw as? Map<String, Any?> ?: return null
+        return MomentRuntimeDto(
+            momentId = m["momentId"] as? String ?: return null,
+            revision = (m["revision"] as? Number)?.toInt() ?: return null,
+            intent = m["intent"] as? String ?: "BE",
+            primary = m["primary"] as? String ?: return null,
+            secondary = (m["secondary"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+            scene = m["scene"] as? String ?: "NEUTRAL",
+            scenePinned = m["scenePinned"] == true,
+            updatedAt = m["updatedAt"] as? String,
+            updatedBy = m["updatedBy"] as? String,
+        )
     }
 
     @Suppress("UNCHECKED_CAST")

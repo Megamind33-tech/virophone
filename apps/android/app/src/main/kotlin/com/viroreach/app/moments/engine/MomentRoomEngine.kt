@@ -1,0 +1,406 @@
+package com.viroreach.app.moments.engine
+
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.viroreach.app.moments.InviteSheet
+import com.viroreach.app.moments.MomentRoomState
+import com.viroreach.app.moments.RoomChat
+import com.viroreach.app.moments.RoomPeople
+import com.viroreach.app.moments.activity
+import com.viroreach.app.moments.endsAt
+import com.viroreach.app.moments.remainingMinutes
+import com.viroreach.app.session.SessionManager
+import com.viroreach.core.designsystem.ViroColors
+import com.viroreach.core.network.MomentDto
+import com.viroreach.core.network.MomentRoomChangeBody
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+/**
+ * A Moment room: one living space that changes around what people are doing
+ * together.
+ *
+ * The shell is always the same — a scene, the primary experience filling most
+ * of the screen, the people felt around it, three or four things to do near
+ * the thumb — and everything inside it is a module the server chose for the
+ * whole room at once. Chat is a sheet that comes up when wanted and goes away
+ * when not; it never takes the screen from the thing people came for.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MomentRoomEngine(
+    session: SessionManager,
+    room: MomentRoomState,
+    now: Long,
+    onBack: () -> Unit,
+    onEnd: () -> Unit,
+    onCall: (String?, String?, String) -> Unit,
+    onOpenChat: (userId: String?, name: String) -> Unit,
+) {
+    val moment by room.moment.collectAsState()
+    val participants by room.participants.collectAsState()
+    val messages by room.messages.collectAsState()
+    val runtime by room.runtime.collectAsState()
+    val encrypted by room.encrypted.collectAsState()
+    val scope = rememberCoroutineScope()
+    val me = session.tokenStore.getUserId()
+
+    var chatOpen by remember { mutableStateOf(false) }
+    var peopleOpen by remember { mutableStateOf(false) }
+    var togetherOpen by remember { mutableStateOf(false) }
+    var inviteOpen by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    var chatError by remember { mutableStateOf<String?>(null) }
+
+    // Messages that arrived while the chat was closed: a quiet badge, never a
+    // takeover of the room.
+    var seenMessages by remember { mutableIntStateOf(messages.size) }
+    LaunchedEffect(chatOpen, messages.size) { if (chatOpen) seenMessages = messages.size }
+    val unread = (messages.size - seenMessages).coerceAtLeast(0)
+
+    // Arrival, said the way a person would: "Natasha is here". Never a banner
+    // over what everyone is doing.
+    var arrival by remember { mutableStateOf<String?>(null) }
+    var known by remember { mutableStateOf<Set<String>?>(null) }
+    LaunchedEffect(participants) {
+        val ids = participants.map { it.userId }.toSet()
+        val before = known
+        if (before != null) {
+            participants.firstOrNull { it.userId !in before && it.userId != me }?.let { newcomer ->
+                arrival = "${newcomer.displayName.substringBefore(' ')} is here"
+            }
+        }
+        known = ids
+    }
+    LaunchedEffect(arrival) { if (arrival != null) { delay(3_500); arrival = null } }
+    LaunchedEffect(notice) { if (notice != null) { delay(3_000); notice = null } }
+
+    val shape = runtime
+    val scene = shape?.scene ?: "NEUTRAL"
+
+    Box(Modifier.fillMaxSize()) {
+        MomentScene(scene)
+
+        Column(Modifier.fillMaxSize().safeDrawingPadding()) {
+            RoomHeader(
+                moment = moment,
+                intentLabel = MomentIntent.of(shape?.intent)?.label,
+                encrypted = encrypted,
+                now = now,
+                onBack = onBack,
+                menuOpen = menuOpen,
+                onMenu = { menuOpen = it },
+                isHost = moment?.creatorUserId == me,
+                onPeople = { menuOpen = false; peopleOpen = true },
+                onInvite = { menuOpen = false; inviteOpen = true },
+                onEnd = { menuOpen = false; onEnd() },
+            )
+
+            // The primary experience. When the room changes, this is what
+            // transforms — the room, not a jump to another screen.
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                if (shape != null) {
+                    val ctx = MomentRoomContext(room, moment, shape, participants, me, now)
+                    AnimatedContent(
+                        targetState = shape.primary,
+                        transitionSpec = {
+                            (fadeIn(tween(500)) + scaleIn(tween(500), initialScale = 0.94f)) togetherWith
+                                (fadeOut(tween(300)) + scaleOut(tween(300), targetScale = 1.04f))
+                        },
+                        label = "momentPrimary",
+                    ) { primary ->
+                        val module = MomentModules.find(primary)
+                        if (module != null) {
+                            module.Primary(ctx, Modifier.fillMaxSize())
+                        } else {
+                            // The server can be ahead of this phone. Say so plainly
+                            // rather than draw an empty room.
+                            UnsupportedHere()
+                        }
+                    }
+                    // Whatever sits beside the room, compact, above the controls.
+                    val besides = shape.secondary.mapNotNull { MomentModules.find(it) }
+                    if (besides.isNotEmpty()) {
+                        Column(
+                            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            besides.forEach { it.Secondary(ctx, Modifier.fillMaxWidth()) }
+                        }
+                    }
+                }
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = arrival != null || notice != null,
+                    enter = fadeIn() + slideInVertically { -it / 2 },
+                    exit = fadeOut() + slideOutVertically { -it / 2 },
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
+                ) {
+                    Surface(shape = RoundedCornerShape(50), color = Color.Black.copy(alpha = 0.45f)) {
+                        Text(
+                            arrival ?: notice ?: "",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+            }
+
+            RoomControls(
+                unread = unread,
+                onTogether = { togetherOpen = true },
+                onChat = { chatOpen = true },
+                onPeople = { peopleOpen = true },
+            )
+        }
+    }
+
+    if (togetherOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { togetherOpen = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = ViroColors.surface,
+        ) {
+            DoSomethingTogether(
+                current = shape?.intent,
+                onPick = { intent ->
+                    togetherOpen = false
+                    scope.launch {
+                        room.change(MomentRoomChangeBody(op = "TRANSFORM", intent = intent.key))
+                            .onFailure { notice = it.message }
+                    }
+                },
+            )
+        }
+    }
+    if (chatOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { chatOpen = false },
+            containerColor = ViroColors.surface,
+        ) {
+            Box(Modifier.fillMaxWidth().fillMaxHeight(0.7f)) {
+                RoomChat(room, messages, me, chatError, onError = { chatError = it })
+            }
+        }
+    }
+    if (peopleOpen) {
+        ModalBottomSheet(onDismissRequest = { peopleOpen = false }, containerColor = ViroColors.surface) {
+            Box(Modifier.fillMaxWidth().fillMaxHeight(0.6f)) {
+                RoomPeople(
+                    moment = moment,
+                    participants = participants,
+                    me = me,
+                    onMessage = { id, name -> peopleOpen = false; onOpenChat(id, name) },
+                    onInvite = { peopleOpen = false; inviteOpen = true },
+                    onTalk = { m ->
+                        peopleOpen = false
+                        scope.launch {
+                            // Access is rechecked server-side right before the call.
+                            session.moments.verify(m.id).onSuccess { fresh ->
+                                onCall(fresh.creatorUserId, null, fresh.displayName)
+                            }
+                        }
+                    },
+                )
+            }
+        }
+    }
+    val current = moment
+    if (inviteOpen && current != null) {
+        InviteSheet(
+            session = session,
+            momentId = current.id,
+            onDismiss = { inviteOpen = false },
+            onInvited = { scope.launch { room.refresh() } },
+        )
+    }
+}
+
+@Composable
+private fun RoomHeader(
+    moment: MomentDto?,
+    intentLabel: String?,
+    encrypted: Boolean,
+    now: Long,
+    onBack: () -> Unit,
+    menuOpen: Boolean,
+    onMenu: (Boolean) -> Unit,
+    isHost: Boolean,
+    onPeople: () -> Unit,
+    onInvite: () -> Unit,
+    onEnd: () -> Unit,
+) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
+        Column(Modifier.weight(1f)) {
+            Text(
+                intentLabel ?: moment?.activity() ?: "Moment",
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            // The lock is claimed only once something has actually been sealed
+            // here — a promise that appears before it is true is worse than none.
+            Text(
+                (if (encrypted) "🔒 " else "") +
+                    (moment?.let { "${it.displayName} · ${remainingMinutes(it.endsAt(), now)} min left" } ?: "…"),
+                color = Color.White.copy(alpha = 0.65f),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Box {
+            IconButton(onClick = { onMenu(true) }) { Icon(Icons.Default.MoreVert, "More", tint = Color.White) }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { onMenu(false) }) {
+                DropdownMenuItem(text = { Text("People here") }, onClick = onPeople)
+                if (isHost) DropdownMenuItem(text = { Text("Invite someone") }, onClick = onInvite)
+                DropdownMenuItem(
+                    text = { Text(if (isHost) "End this Moment" else "Leave", color = ViroColors.textPrimary) },
+                    onClick = onEnd,
+                )
+            }
+        }
+    }
+}
+
+/** Three things near the thumb; everything else lives in a sheet. */
+@Composable
+private fun RoomControls(unread: Int, onTogether: () -> Unit, onChat: () -> Unit, onPeople: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = Color.White.copy(alpha = 0.16f),
+            modifier = Modifier.weight(1f).height(56.dp).clickable(onClick = onTogether),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text("Do something together", color = Color.White, style = MaterialTheme.typography.labelLarge)
+            }
+        }
+        RoundAction("People", onPeople)
+        BadgedBox(badge = { if (unread > 0) Badge { Text(if (unread > 9) "9+" else "$unread") } }) {
+            RoundAction("Chat", onChat)
+        }
+    }
+}
+
+@Composable
+private fun RoundAction(label: String, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = Color.White.copy(alpha = 0.1f),
+        modifier = Modifier.height(56.dp).width(76.dp).clickable(onClick = onClick),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(label, color = Color.White, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+/**
+ * What the room could become. Only what this build can actually deliver is
+ * listed — nothing here leads to a screen that says "coming soon".
+ */
+@Composable
+private fun DoSomethingTogether(current: String?, onPick: (MomentIntent) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
+        Text("Do something together", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "The room changes for everyone here. Nobody has to leave.",
+            color = ViroColors.textMuted,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Spacer(Modifier.height(16.dp))
+        MomentIntent.offered().filter { it.key != current }.forEach { intent ->
+            TextButton(onClick = { onPick(intent) }, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    intent.label,
+                    color = ViroColors.textPrimary,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Start,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun UnsupportedHere() {
+    Column(
+        Modifier.fillMaxSize().padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "Someone here is doing something this version of Viro can't show yet.",
+            color = Color.White,
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text("Update Viro to join in.", color = Color.White.copy(alpha = 0.65f), style = MaterialTheme.typography.bodyMedium)
+    }
+}

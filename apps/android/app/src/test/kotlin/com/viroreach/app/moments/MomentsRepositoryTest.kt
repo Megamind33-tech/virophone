@@ -95,6 +95,18 @@ class MomentsRepositoryTest {
             knockResponses.add(knockerId to body.accept)
         }
         override suspend fun invite(id: String, body: InviteBody) { invited.add(body.userId) }
+        /** The room shape the fake server holds, and every change asked of it. */
+        var runtimeState = MomentRuntimeDto("moment", 1, "COOK", "PRESENCE", emptyList(), "KITCHEN")
+        val changes = mutableListOf<MomentRoomChangeBody>()
+        override suspend fun changeRoom(id: String, body: MomentRoomChangeBody): MomentRuntimeDto {
+            changes.add(body)
+            runtimeState = runtimeState.copy(
+                revision = runtimeState.revision + 1,
+                intent = body.intent ?: runtimeState.intent,
+                primary = when (body.intent) { "STAY" -> "QUIET"; "WATCH" -> "VIDEO"; else -> runtimeState.primary },
+            )
+            return runtimeState
+        }
     }
 
     @Test fun `expired cached entries never return`() = runTest {

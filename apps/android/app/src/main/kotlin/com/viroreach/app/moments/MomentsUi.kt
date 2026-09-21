@@ -351,22 +351,22 @@ fun MomentRoomScreen(
 ) {
     val moment by room.moment.collectAsState()
     val participants by room.participants.collectAsState()
-    val messages by room.messages.collectAsState()
     val closed by room.closed.collectAsState()
-    val encrypted by room.encrypted.collectAsState()
-    val error by room.error.collectAsState()
     val scope = rememberCoroutineScope()
-    var tab by rememberSaveable { mutableIntStateOf(0) }
     var clock by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    var invite by remember { mutableStateOf(false) }
-    var actionError by remember { mutableStateOf<String?>(null) }
     val me = session.tokenStore.getUserId()
+    // Remembered while the room is open, for the ending: who was here, and for how long.
+    var lastPeople by remember { mutableStateOf(participants) }
+    LaunchedEffect(participants) { if (participants.isNotEmpty()) lastPeople = participants }
     LaunchedEffect(room) {
         room.enter()
+        var tick = 0
         while (true) {
             delay(1000)
             clock = System.currentTimeMillis()
-            if (!closed) room.refresh()
+            // Every change arrives as a frame; this is only a safety net for a
+            // frame that never came, so it does not need to spend data every second.
+            if (!closed && ++tick % 15 == 0) room.refresh()
         }
     }
     // The room's own lifecycle frames arrive through the shared socket flow.
@@ -380,63 +380,85 @@ fun MomentRoomScreen(
     Dialog(onDismissRequest = onBack, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = ViroColors.background) {
             if (closed) {
-                Column(Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
-                    verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("This Moment has ended.", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
-                    Spacer(Modifier.height(16.dp))
-                    Button(onClick = onBack) { Text("Back to Now") }
-                }
-                LaunchedEffect(closed) { delay(2500); onBack() }
-                return@Surface
-            }
-            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ViroColors.textPrimary) }
-                    Column(Modifier.weight(1f)) {
-                        Text(moment?.displayName ?: "Moment", color = ViroColors.textPrimary,
-                            style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        // The lock is claimed only once something has
-                        // actually been sealed in this room — a promise that
-                        // appears before it is true is worse than none.
-                        Text(
-                            (if (encrypted) "🔒 " else "") +
-                                (moment?.let { "${it.activity()} · ${remainingMinutes(it.endsAt(), clock)} min" } ?: "…"),
-                            color = ViroColors.textMuted, style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    Text("${participants.size}", color = ViroColors.textMuted,
-                        style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(end = 12.dp))
-                }
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                    TabRow(selectedTabIndex = tab, containerColor = ViroColors.background) {
-                        Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Chat", color = ViroColors.textPrimary) })
-                        Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("People", color = ViroColors.textPrimary) })
-                    }
-                }
-                if (tab == 0) RoomChat(room, messages, me, actionError, onError = { actionError = it })
-                else RoomPeople(moment, participants, me,
-                    onMessage = onOpenChat,
-                    onInvite = { invite = true },
-                    onTalk = { m ->
+                MomentEnding(people = lastPeople, me = me, now = clock, onDone = onBack)
+            } else {
+                com.viroreach.app.moments.engine.MomentRoomEngine(
+                    session = session,
+                    room = room,
+                    now = clock,
+                    onBack = onBack,
+                    onEnd = {
+                        val current = moment
                         scope.launch {
-                            // Access is rechecked server-side right before the call.
-                            session.moments.verify(m.id).onSuccess { fresh ->
-                                onCall(fresh.creatorUserId, null, fresh.displayName)
+                            if (current != null && current.creatorUserId == me) {
+                                session.moments.end(current.id)
+                                room.markClosed()
+                            } else {
+                                room.leave()
+                                onBack()
                             }
                         }
-                    })
+                    },
+                    onCall = onCall,
+                    onOpenChat = onOpenChat,
+                )
             }
+        }
+    }
+}
 
-            if (invite && moment != null) {
-                InviteSheet(session = session, momentId = moment!!.id, onDismiss = { invite = false },
-                    onInvited = { scope.launch { room.refresh() } })
+/**
+ * How a Moment ends: in human words, with the time people had.
+ *
+ * Not "disconnected", not "expired" — the Moment is over, and what is worth
+ * saying is who it was with and for how long.
+ */
+@Composable
+private fun MomentEnding(
+    people: List<com.viroreach.core.network.MomentParticipantDto>,
+    me: String?,
+    now: Long,
+    onDone: () -> Unit,
+) {
+    val others = people.filter { it.userId != me }
+    val mine = people.firstOrNull { it.userId == me }?.joinedAt
+    val since = listOfNotNull(mine, others.firstOrNull()?.joinedAt)
+        .mapNotNull { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }
+        .maxOrNull()
+    val together = since?.let { ((now - it).coerceAtLeast(0) / 60_000).toInt() }
+    Box(Modifier.fillMaxSize()) {
+        com.viroreach.app.moments.engine.MomentScene("QUIET")
+        Column(
+            Modifier.fillMaxSize().safeDrawingPadding().padding(32.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                "That Moment is over.",
+                color = androidx.compose.ui.graphics.Color.White,
+                style = MaterialTheme.typography.headlineSmall,
+            )
+            if (others.isNotEmpty() && together != null && together > 0) {
+                Spacer(Modifier.height(12.dp))
+                val who = if (others.size == 1) others.first().displayName.substringBefore(' ') else "${others.size} people"
+                val howLong = if (together >= 60) "${together / 60} h ${together % 60} min" else "$together min"
+                Text(
+                    "You and $who spent $howLong together.",
+                    color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.75f),
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+            }
+            Spacer(Modifier.height(28.dp))
+            TextButton(onClick = onDone) {
+                Text("Back to Now", color = androidx.compose.ui.graphics.Color.White)
             }
         }
     }
 }
 
 @Composable
-private fun RoomChat(
+internal fun RoomChat(
     room: MomentRoomState,
     messages: List<MomentMessageDto>,
     me: String?,
@@ -527,7 +549,7 @@ private fun MessageBubble(message: MomentMessageDto, mine: Boolean, onReact: () 
 }
 
 @Composable
-private fun RoomPeople(
+internal fun RoomPeople(
     moment: MomentDto?,
     participants: List<com.viroreach.core.network.MomentParticipantDto>,
     me: String?,
@@ -569,7 +591,7 @@ private fun RoomPeople(
 /** Host-only invite sheet: accepted Viro connections, one tap, no groups (§13). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun InviteSheet(session: SessionManager, momentId: String, onDismiss: () -> Unit, onInvited: () -> Unit) {
+internal fun InviteSheet(session: SessionManager, momentId: String, onDismiss: () -> Unit, onInvited: () -> Unit) {
     val scope = rememberCoroutineScope()
     var connections by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var loaded by remember { mutableStateOf(false) }
@@ -687,38 +709,54 @@ private fun MomentPage(title: String, onBack: () -> Unit, content: androidx.comp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody) -> Unit, busy: Boolean, error: String?) {
-    var type by rememberSaveable { mutableStateOf("FREE") }
-    var duration by rememberSaveable { mutableIntStateOf(15) }
+    // What people want to do together, in their words. Only what this build
+    // can actually deliver is listed; the list grows as the room learns more.
+    val intents = com.viroreach.app.moments.engine.MomentIntent.offered()
+    var intentKey by rememberSaveable { mutableStateOf(intents.firstOrNull()?.key ?: "BE") }
+    var somethingElse by rememberSaveable { mutableStateOf(false) }
+    var duration by rememberSaveable { mutableIntStateOf(30) }
     var audience by rememberSaveable { mutableStateOf("CONNECTIONS") }
     var text by rememberSaveable { mutableStateOf("") }
     ModalBottomSheet(onDismissRequest = { if (!busy) onDismiss() }, containerColor = ViroColors.surface,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         LazyColumn(Modifier.fillMaxWidth().imePadding(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
-                Text("Start a Moment", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
-                Text("A little time for your people.", color = ViroColors.textMuted)
+                Text("What would you like to do together?", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
+                Text("A room opens around it. You can change it once you're in.", color = ViroColors.textMuted)
             }
-            item {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(types, key = { it.first }) { (value, label) ->
-                        FilterChip(selected = type == value, onClick = {
-                            type = value; duration = if (value == "FREE" || value == "BREAK") 15 else 30
-                        }, label = { Text(label) })
-                    }
+            items(intents, key = { it.key }) { intent ->
+                val chosen = !somethingElse && intentKey == intent.key
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (chosen) ViroColors.BlueAccent.copy(alpha = 0.22f) else ViroColors.surfaceRaised,
+                    modifier = Modifier.fillMaxWidth().clickable { intentKey = intent.key; somethingElse = false },
+                ) {
+                    Text(intent.label, color = ViroColors.textPrimary, style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
                 }
             }
             item {
-                if (type == "CUSTOM" || type == "WATCHING" || type == "LISTENING" || type == "GAMING") {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (somethingElse) ViroColors.BlueAccent.copy(alpha = 0.22f) else ViroColors.surfaceRaised,
+                    modifier = Modifier.fillMaxWidth().clickable { somethingElse = true },
+                ) {
+                    Text("Something else", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+                }
+                if (somethingElse) {
+                    Spacer(Modifier.height(8.dp))
                     OutlinedTextField(value = text, onValueChange = { text = it.take(60) },
-                        label = { Text(if (type == "CUSTOM") "What are you up to?" else "Add a little detail (optional)") },
+                        label = { Text("What would you like to do?") },
                         supportingText = { Text("${text.length}/60") }, modifier = Modifier.fillMaxWidth(), maxLines = 2)
                 }
             }
             item {
-                Text("Duration", color = ViroColors.textPrimary)
+                Text("For how long", color = ViroColors.textPrimary)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(listOf(1, 15, 30, 60, 120), key = { it }) { minutes ->
-                        FilterChip(selected = duration == minutes, onClick = { duration = minutes }, label = { Text("$minutes min") })
+                    items(listOf(15, 30, 60, 120), key = { it }) { minutes ->
+                        FilterChip(selected = duration == minutes, onClick = { duration = minutes },
+                            label = { Text(if (minutes >= 60) "${minutes / 60} h" else "$minutes min") })
                     }
                 }
             }
@@ -734,9 +772,22 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
             }
             item {
                 if (error != null) Text(error, color = ViroColors.textMuted)
-                Button(onClick = { onStart(CreateMomentBody(type, text.trim().takeIf { it.isNotEmpty() && type in listOf("CUSTOM", "WATCHING", "LISTENING", "GAMING") }, audience, duration)) },
-                    enabled = !busy && (type != "CUSTOM" || text.isNotBlank()), modifier = Modifier.fillMaxWidth()) {
-                    Text(if (busy) "Starting…" else "Start")
+                Button(
+                    onClick = {
+                        val intent = com.viroreach.app.moments.engine.MomentIntent.of(intentKey)
+                        onStart(
+                            if (somethingElse) {
+                                // Their own words, in a room shaped for being together.
+                                CreateMomentBody("CUSTOM", text.trim(), audience, duration, intent = "BE")
+                            } else {
+                                CreateMomentBody(intent?.legacyType ?: "FREE", null, audience, duration, intent = intentKey)
+                            },
+                        )
+                    },
+                    enabled = !busy && (!somethingElse || text.isNotBlank()),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (busy) "Opening…" else "Open the room")
                 }
             }
         }
