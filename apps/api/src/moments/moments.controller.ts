@@ -3,12 +3,26 @@ import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Is
 import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { MOMENT_AUDIENCES, MOMENT_REACTIONS, MOMENT_TYPES, MomentsService } from './moments.service';
+import { MOMENT_INTENTS, MOMENT_MODULES, MOMENT_SCENES, RoomChange } from './room-engine';
 
 class CreateMomentDto {
   @IsIn(MOMENT_TYPES) type!: string;
   @IsOptional() @IsString() @MaxLength(60) text?: string;
   @IsIn(MOMENT_AUDIENCES) visibility!: string;
   @IsInt() @Min(1) @Max(120) durationMinutes!: number;
+  /** What people are coming together to do; shapes the room it opens into. */
+  @IsOptional() @IsIn(MOMENT_INTENTS as unknown as string[]) intent?: (typeof MOMENT_INTENTS)[number];
+}
+/**
+ * One change to what a room is. Only the fields its op needs are read; the
+ * engine refuses anything that does not make sense.
+ */
+class RoomChangeDto {
+  @IsIn(['TRANSFORM', 'ADD', 'REMOVE', 'SCENE']) op!: RoomChange['op'];
+  @IsOptional() @IsIn(MOMENT_INTENTS as unknown as string[]) intent?: string;
+  @IsOptional() @IsIn(MOMENT_MODULES as unknown as string[]) module?: string;
+  // null gives the scene back to the activity.
+  @IsOptional() @IsIn((MOMENT_SCENES as unknown as (string | null)[]).concat([null])) scene?: string | null;
 }
 class ExtendMomentDto {
   @IsInt() @Min(1) @Max(60) minutes!: number;
@@ -78,6 +92,10 @@ export class MomentsController {
   // fetchable resource. Creating a Moment or a room message does, and stays 201.
   @Post(':id/join') @HttpCode(200) join(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) { return this.moments.join(req.user.sub, req.user.deviceId, id); }
   @Post(':id/leave') @HttpCode(200) leave(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) { return this.moments.leave(req.user.sub, id); }
+  /** Changes what the room is, for everyone in it, without anyone leaving. */
+  @Post(':id/state') @HttpCode(200) changeRoom(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: RoomChangeDto) {
+    return this.moments.changeRoom(req.user.sub, id, this.toChange(body));
+  }
   @Get(':id/room') room(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) { return this.moments.room(req.user.sub, req.user.deviceId, id); }
   @Post(':id/messages') message(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: MomentMessageDto) {
     return this.moments.message(req.user.sub, req.user.deviceId, id, body);
@@ -100,5 +118,22 @@ export class MomentsController {
 
   @Post(':id/invites') @HttpCode(200) invite(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: InviteDto) {
     return this.moments.invite(req.user.sub, id, body.userId);
+  }
+
+  /** The request, as the one change it describes — or a plain refusal. */
+  private toChange(body: RoomChangeDto): RoomChange {
+    switch (body.op) {
+      case 'TRANSFORM':
+        if (!body.intent) throw new BadRequestException('Say what the room becomes.');
+        return { op: 'TRANSFORM', intent: body.intent as never };
+      case 'ADD':
+      case 'REMOVE':
+        if (!body.module) throw new BadRequestException('Say what to add or take away.');
+        return { op: body.op, module: body.module as never };
+      case 'SCENE':
+        return { op: 'SCENE', scene: (body.scene ?? null) as never };
+      default:
+        throw new BadRequestException('Unknown change.');
+    }
   }
 }

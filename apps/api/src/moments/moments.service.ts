@@ -3,11 +3,15 @@ import { DataSource } from 'typeorm';
 import { RealtimeRegistry } from '../realtime/realtime.registry';
 import { PushService } from '../push/push.service';
 import { publicAvatarUrl } from '../users/avatar.util';
+import { RedisService } from '../redis/redis.service';
+import {
+  applyChange, initialState, intentForLegacyType, MomentIntent, MomentRuntimeState, RoomChange, RoomChangeError,
+} from './room-engine';
 
 export const MOMENT_TYPES = ['FREE', 'BREAK', 'LISTENING', 'WATCHING', 'GAMING', 'WORKING', 'CUSTOM'];
 export const MOMENT_AUDIENCES = ['CONNECTIONS', 'CONTACTS'];
 export const MOMENT_REACTIONS = ['❤️', '😂', '🔥', '👏', '👍'];
-export interface CreateMoment { type: string; text?: string; visibility: string; durationMinutes: number }
+export interface CreateMoment { type: string; text?: string; visibility: string; durationMinutes: number; intent?: MomentIntent }
 /** One sealed copy of a room message, addressed to one device. */
 export interface MomentEnvelope { deviceId: string; ciphertext: string; type?: number }
 /** A room message as the sender offers it: readable text, or sealed copies. */
@@ -31,6 +35,7 @@ export class MomentsService {
     private readonly db: DataSource,
     private readonly realtime: RealtimeRegistry,
     private readonly push: PushService,
+    private readonly redis: RedisService,
   ) {}
 
   async now(userId: string) {
@@ -68,9 +73,9 @@ export class MomentsService {
     await this.sweep();
     let row: any;
     try {
-      [row] = await this.db.query(`INSERT INTO moments (creator_user_id,type,text,visibility,expires_at)
-        VALUES ($1,$2,$3,$4,now() + $5 * interval '1 minute') RETURNING *`,
-      [userId, body.type, body.text?.trim() || null, body.visibility, body.durationMinutes]);
+      [row] = await this.db.query(`INSERT INTO moments (creator_user_id,type,text,visibility,intent,expires_at)
+        VALUES ($1,$2,$3,$4,$6,now() + $5 * interval '1 minute') RETURNING *`,
+      [userId, body.type, body.text?.trim() || null, body.visibility, body.durationMinutes, body.intent ?? null]);
     } catch (e) {
       if ((e as { code?: string }).code === '23505') throw new ConflictException('You already have an active Moment.');
       throw e;
@@ -227,6 +232,10 @@ export class MomentsService {
     return {
       moment: viewer,
       serverTime: new Date().toISOString(),
+      // What the room is right now. A phone opening or reconnecting takes this
+      // as the truth, so it lands in the film if the room became one while it
+      // was away — never in the cooking it left.
+      state: await this.runtime(moment),
       participants: participants.map((p: any) => ({
         userId: p.user_id, displayName: p.display_name || 'Viro user', isHost: p.is_host,
         joinedAt: new Date(p.joined_at).toISOString(),
@@ -433,6 +442,77 @@ export class MomentsService {
   // ------------------------------------------------------------------ shared
 
   /** Sends a frame to everyone currently in the room (host included). */
+  // ----------------------------------------------------------- room engine
+
+  /** Room shape lives in Redis: it changes constantly and matters only while the Moment does. */
+  private runtimeKey(momentId: string) {
+    return `moment:room:${momentId}`;
+  }
+
+  /** Changes to one room are applied one at a time, so two people cannot lose each other's change. */
+  private readonly roomLocks = new Map<string, Promise<unknown>>();
+
+  private async serialized<T>(momentId: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.roomLocks.get(momentId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(work);
+    this.roomLocks.set(momentId, next);
+    try {
+      return await next;
+    } finally {
+      if (this.roomLocks.get(momentId) === next) this.roomLocks.delete(momentId);
+    }
+  }
+
+  /**
+   * What the room is right now.
+   *
+   * If Redis has lost it — a restart, an eviction — it is rebuilt from the
+   * Moment's intent rather than the room failing to open: the people, the
+   * Moment and everything said are in the database, and only the shape of the
+   * room is recreated.
+   */
+  async runtime(moment: any): Promise<MomentRuntimeState> {
+    const stored = await this.redis.getJson<MomentRuntimeState>(this.runtimeKey(moment.id));
+    if (stored) return stored;
+    const intent: MomentIntent = moment.intent ?? intentForLegacyType(moment.type);
+    const fresh = initialState(moment.id, intent, moment.creator_user_id);
+    await this.saveRuntime(moment, fresh);
+    return fresh;
+  }
+
+  private async saveRuntime(moment: any, state: MomentRuntimeState) {
+    // Kept a little past the Moment's own end, so a late read never rebuilds a
+    // room that has just closed; closing deletes it outright anyway.
+    const ttl = Math.max(60, Math.ceil((new Date(moment.expires_at).getTime() - Date.now()) / 1000) + 600);
+    await this.redis.setJson(this.runtimeKey(moment.id), state, ttl);
+  }
+
+  /**
+   * Changes what the room is — cooking to a film to quiet — without anyone
+   * leaving it.
+   *
+   * Anyone in the room may change it; the room says who did. Everyone in it is
+   * sent the whole new shape rather than a diff, with a revision number, so a
+   * phone that missed a frame or got two out of order simply keeps the newest.
+   */
+  async changeRoom(userId: string, id: string, change: RoomChange) {
+    const moment = await this.liveMoment(userId, id);
+    if (!(await this.isParticipant(id, userId))) throw new ForbiddenException('Join this Moment to change it.');
+    return this.serialized(id, async () => {
+      const current = await this.runtime(moment);
+      let next: MomentRuntimeState;
+      try {
+        next = applyChange(current, change, userId);
+      } catch (e) {
+        if (e instanceof RoomChangeError) throw new BadRequestException(e.message);
+        throw e;
+      }
+      await this.saveRuntime(moment, next);
+      await this.announceRoom(id, 'moment.state', { momentId: id, state: next });
+      return next;
+    });
+  }
+
   private async announceRoom(momentId: string, type: string, payload: Record<string, unknown>) {
     const rows = await this.db.query(`SELECT user_id FROM moment_participants WHERE moment_id = $1`, [momentId]);
     await Promise.allSettled(rows.map((r: any) => this.realtime.deliverToUser(r.user_id, { type, payload })));
@@ -464,6 +544,8 @@ export class MomentsService {
     await this.db.query(`DELETE FROM moment_messages WHERE moment_id = $1`, [row.id]);
     await this.db.query(`DELETE FROM moment_knocks WHERE moment_id = $1`, [row.id]);
     await this.db.query(`DELETE FROM moment_invitations WHERE moment_id = $1`, [row.id]);
+    // The shape of the room goes with it, so nothing can rebuild a closed room.
+    await this.redis.del(this.runtimeKey(row.id));
   }
 
   private async notify(row: any, type: string, extra: Record<string, unknown> = {}) {
@@ -485,6 +567,8 @@ export class MomentsService {
       visibility: r.visibility, displayName: r.display_name || 'Viro user', avatarUrl: publicAvatarUrl(r.visible_avatar),
       createdAt: new Date(r.created_at).toISOString(), expiresAt: new Date(r.expires_at).toISOString(),
       allowVoice: r.type === 'FREE', participantCount: r.participant_count ?? 0,
+      // Why people came together; older Moments derive one from their type.
+      intent: r.intent ?? intentForLegacyType(r.type),
       // Ranked highest first by the query; myReaction is what this viewer
       // chose, so the button can show as already pressed.
       reactions: (r.cheers ?? []) as { emoji: string; count: number }[],
