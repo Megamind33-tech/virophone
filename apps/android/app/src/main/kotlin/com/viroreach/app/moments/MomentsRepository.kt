@@ -162,6 +162,9 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
     }
 }
 
+/** Someone reaching this phone without words. */
+data class MomentTouch(val from: String, val fromName: String, val kind: String, val to: String?)
+
 /** One open Moment Room. Entering joins (idempotent for the host); leaving the
  *  screen leaves the room for guests. Frames from the socket are applied to
  *  the open room; nothing here persists past the session. */
@@ -189,6 +192,12 @@ class MomentRoomState(
     val playback = MutableStateFlow<MomentPlaybackDto?>(null)
     /** What people have brought to watch or listen to. */
     val media = MutableStateFlow<List<MomentMediaDto>>(emptyList())
+    /** The room's kitchen timer, newest revision only. */
+    val timer = MutableStateFlow<MomentTimerDto?>(null)
+    /** The question the room is answering, newest revision only. */
+    val choice = MutableStateFlow<MomentChoiceDto?>(null)
+    /** Touches arriving for this phone: felt once, never kept. */
+    val touches = kotlinx.coroutines.flow.MutableSharedFlow<MomentTouch>(extraBufferCapacity = 8)
     /**
      * How far the server's clock is from this phone's, in ms. Taken from
      * request round-trips (the midpoint), never from pushed frames, whose
@@ -260,6 +269,15 @@ class MomentRoomState(
             "moment.state" -> runtimeOf(payload["state"])?.let { adopt(it) }
             "moment.playback" -> playbackOf(payload["playback"])?.let { adoptPlayback(it) }
             "moment.media" -> refreshMedia()
+            "moment.timer" -> timerOf(payload["timer"])?.let { adoptTimer(it) }
+            "moment.choice" -> choiceOf(payload["choice"])?.let { adoptChoice(it) }
+            "moment.touch" -> {
+                val from = str(payload, "from")
+                val kind = str(payload, "kind")
+                if (from != null && kind != null && from != userId()) {
+                    touches.tryEmit(MomentTouch(from, str(payload, "fromName") ?: "Someone", kind, str(payload, "to")))
+                }
+            }
             "moment.audience", "moment.cheer" -> refresh()
             "moment.reaction" -> {
                 val mid = str(payload, "messageId")
@@ -390,6 +408,48 @@ class MomentRoomState(
         if (media.value.none { it.id == item.id }) media.value = media.value + item
     }
 
+    /** The kitchen timer, for everyone here. */
+    suspend fun timer(body: MomentTimerBody): Result<Unit> = tool {
+        val sentAt = clock()
+        val result = api.timer(momentId, body)
+        observeClock(result.serverNow, sentAt)
+        adoptTimer(result.timer)
+    }
+
+    /** Ask, answer, decide or clear the room's question. */
+    suspend fun choice(body: MomentChoiceBody): Result<Unit> = tool { adoptChoice(api.choice(momentId, body).choice) }
+
+    /** A heart, a hug, a wave or a tap. */
+    suspend fun touch(kind: String, to: String? = null): Result<Unit> = tool { api.touch(momentId, MomentTouchBody(kind, to)) }
+
+    private suspend fun tool(work: suspend () -> Unit): Result<Unit> = try {
+        work()
+        Result.success(Unit)
+    }
+    catch (e: CancellationException) { throw e }
+    catch (e: Exception) {
+        if (momentHttpStatus(e) == 404) closed.value = true
+        Result.failure(IllegalStateException(when (momentHttpStatus(e)) {
+            404 -> "This Moment has ended."
+            403 -> "You're no longer in this room."
+            429 -> "Slow down a little."
+            400 -> "That can't be done right now."
+            else -> "Couldn't reach the room. Check your connection."
+        }))
+    }
+
+    internal fun adoptTimer(t: MomentTimerDto, authoritative: Boolean = false) {
+        if (t.momentId != momentId) return
+        val current = timer.value
+        if (current == null || t.revision > current.revision || (authoritative && t.revision >= current.revision)) timer.value = t
+    }
+
+    internal fun adoptChoice(c: MomentChoiceDto, authoritative: Boolean = false) {
+        if (c.momentId != momentId) return
+        val current = choice.value
+        if (current == null || c.revision > current.revision || (authoritative && c.revision >= current.revision)) choice.value = c
+    }
+
     internal fun adoptPlayback(p: MomentPlaybackDto, authoritative: Boolean = false) {
         if (p.momentId != momentId) return
         val current = playback.value
@@ -471,9 +531,45 @@ class MomentRoomState(
         room.state?.let { adopt(it, authoritative = true) }
         room.playback?.let { adoptPlayback(it, authoritative = true) }
         room.media?.let { media.value = it }
+        room.timer?.let { adoptTimer(it, authoritative = true) }
+        room.choice?.let { adoptChoice(it, authoritative = true) }
         // Authoritative replace: reconnects can only reorder, never duplicate.
         messages.value = room.messages.distinctBy { it.id }.map { readable(it) }
         error.value = null
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun timerOf(raw: Any?): MomentTimerDto? {
+        val m = raw as? Map<String, Any?> ?: return null
+        return MomentTimerDto(
+            momentId = m["momentId"] as? String ?: return null,
+            revision = (m["revision"] as? Number)?.toInt() ?: return null,
+            status = m["status"] as? String ?: return null,
+            label = m["label"] as? String,
+            endsAt = (m["endsAt"] as? Number)?.toLong(),
+            remainingMs = (m["remainingMs"] as? Number)?.toLong(),
+            durationMs = (m["durationMs"] as? Number)?.toLong(),
+            updatedBy = m["updatedBy"] as? String,
+        )
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun choiceOf(raw: Any?): MomentChoiceDto? {
+        val m = raw as? Map<String, Any?> ?: return null
+        return MomentChoiceDto(
+            momentId = m["momentId"] as? String ?: return null,
+            revision = (m["revision"] as? Number)?.toInt() ?: return null,
+            status = m["status"] as? String ?: return null,
+            question = m["question"] as? String,
+            options = (m["options"] as? List<*>)?.mapNotNull { o ->
+                val om = o as? Map<String, Any?> ?: return@mapNotNull null
+                MomentChoiceOptionDto(om["id"] as? String ?: return@mapNotNull null, om["text"] as? String ?: "")
+            },
+            picks = (m["picks"] as? Map<String, Any?>)?.mapNotNull { (k, v) -> (v as? String)?.let { k to it } }?.toMap(),
+            askedBy = m["askedBy"] as? String,
+            decided = m["decided"] as? String,
+            updatedBy = m["updatedBy"] as? String,
+        )
     }
 
     @Suppress("UNCHECKED_CAST")

@@ -81,7 +81,9 @@ import com.viroreach.app.moments.remainingMinutes
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.designsystem.ViroColors
 import com.viroreach.core.network.MomentDto
+import com.viroreach.core.network.MomentChoiceBody
 import com.viroreach.core.network.MomentRoomChangeBody
+import com.viroreach.core.network.MomentTimerBody
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -128,6 +130,9 @@ fun MomentRoomEngine(
     var peopleOpen by remember { mutableStateOf(false) }
     var togetherOpen by remember { mutableStateOf(false) }
     var inviteOpen by remember { mutableStateOf(false) }
+    var timerOpen by remember { mutableStateOf(false) }
+    var askOpen by remember { mutableStateOf(false) }
+    var touchOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
     var chatError by remember { mutableStateOf<String?>(null) }
@@ -241,6 +246,7 @@ fun MomentRoomEngine(
                         }
                     }
                 }
+                TouchArrivals(room)
                 androidx.compose.animation.AnimatedVisibility(
                     visible = arrival != null || notice != null,
                     enter = fadeIn() + slideInVertically { -it / 2 },
@@ -273,6 +279,8 @@ fun MomentRoomEngine(
                 },
                 onTogether = { togetherOpen = true },
                 onChat = { chatOpen = true },
+                onHeart = { scope.launch { room.touch("HEART").onFailure { notice = it.message } } },
+                onTouch = { touchOpen = true },
             )
         }
     }
@@ -298,6 +306,8 @@ fun MomentRoomEngine(
                             .onFailure { notice = it.message }
                     }
                 },
+                onTimer = { togetherOpen = false; timerOpen = true },
+                onAsk = { togetherOpen = false; askOpen = true },
                 onMusic = { add ->
                     togetherOpen = false
                     scope.launch {
@@ -307,6 +317,40 @@ fun MomentRoomEngine(
                     }
                 },
             )
+        }
+    }
+    if (timerOpen) {
+        ModalBottomSheet(onDismissRequest = { timerOpen = false }, containerColor = ViroColors.surface) {
+            TimerSheet(onStart = { minutes, label ->
+                timerOpen = false
+                scope.launch {
+                    if (shape != null && "TIMER" !in shape.secondary) {
+                        room.change(MomentRoomChangeBody(op = "ADD", module = "TIMER")).onFailure { notice = it.message; return@launch }
+                    }
+                    room.timer(MomentTimerBody("START", durationMs = minutes * 60_000L, label = label)).onFailure { notice = it.message }
+                }
+            })
+        }
+    }
+    if (askOpen) {
+        ModalBottomSheet(onDismissRequest = { askOpen = false }, containerColor = ViroColors.surface) {
+            ChoiceSheet(onAsk = { question, options ->
+                askOpen = false
+                scope.launch {
+                    if (shape != null && "CHOICE" !in shape.secondary) {
+                        room.change(MomentRoomChangeBody(op = "ADD", module = "CHOICE")).onFailure { notice = it.message; return@launch }
+                    }
+                    room.choice(MomentChoiceBody("ASK", question = question, options = options)).onFailure { notice = it.message }
+                }
+            })
+        }
+    }
+    if (touchOpen) {
+        ModalBottomSheet(onDismissRequest = { touchOpen = false }, containerColor = ViroColors.surface) {
+            TouchSheet(participants, me, onSend = { kind, to ->
+                touchOpen = false
+                scope.launch { room.touch(kind, to).onFailure { notice = it.message } }
+            })
         }
     }
     if (chatOpen) {
@@ -417,30 +461,38 @@ private fun RoomControls(
     onCamera: () -> Unit,
     onTogether: () -> Unit,
     onChat: () -> Unit,
+    onHeart: () -> Unit,
+    onTouch: () -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        if (live) {
-            MediaToggle(on = micOn, onIcon = Icons.Default.Mic, offIcon = Icons.Default.MicOff,
-                label = if (micOn) "Turn microphone off" else "Turn microphone on", onClick = onMic)
-            MediaToggle(on = cameraOn, onIcon = Icons.Default.Videocam, offIcon = Icons.Default.VideocamOff,
-                label = if (cameraOn) "Turn camera off" else "Turn camera on", onClick = onCamera)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (live) {
+                MediaToggle(on = micOn, onIcon = Icons.Default.Mic, offIcon = Icons.Default.MicOff,
+                    label = if (micOn) "Turn microphone off" else "Turn microphone on", onClick = onMic)
+                MediaToggle(on = cameraOn, onIcon = Icons.Default.Videocam, offIcon = Icons.Default.VideocamOff,
+                    label = if (cameraOn) "Turn camera off" else "Turn camera on", onClick = onCamera)
+            }
+            TouchButton(onHeart = onHeart, onChoose = onTouch)
+            BadgedBox(badge = { if (unread > 0) Badge { Text(if (unread > 9) "9+" else "$unread") } }) {
+                RoundAction("Chat", onChat)
+            }
         }
         Surface(
             shape = RoundedCornerShape(28.dp),
             color = Color.White.copy(alpha = 0.16f),
-            modifier = Modifier.weight(1f).height(56.dp).clickable(onClick = onTogether),
+            modifier = Modifier.fillMaxWidth().height(52.dp).clickable(onClick = onTogether),
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Text("Do something together", color = Color.White, style = MaterialTheme.typography.labelLarge,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 8.dp))
             }
-        }
-        BadgedBox(badge = { if (unread > 0) Badge { Text(if (unread > 9) "9+" else "$unread") } }) {
-            RoundAction("Chat", onChat)
         }
     }
 }
@@ -488,6 +540,8 @@ private fun DoSomethingTogether(
     musicBeside: Boolean?,
     onPick: (MomentIntent) -> Unit,
     onMusic: (add: Boolean) -> Unit,
+    onTimer: () -> Unit,
+    onAsk: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
         Text("Do something together", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
@@ -498,6 +552,8 @@ private fun DoSomethingTogether(
             style = MaterialTheme.typography.bodyMedium,
         )
         Spacer(Modifier.height(16.dp))
+        TogetherAction("Set a timer for everyone", onTimer)
+        TogetherAction("Ask everyone something", onAsk)
         if (musicBeside != null) {
             TextButton(onClick = { onMusic(musicBeside) }, modifier = Modifier.fillMaxWidth()) {
                 Text(
@@ -520,6 +576,14 @@ private fun DoSomethingTogether(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun TogetherAction(label: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Text(label, color = ViroColors.textPrimary, style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start)
     }
 }
 

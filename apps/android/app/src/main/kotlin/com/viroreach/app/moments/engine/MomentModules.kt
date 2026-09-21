@@ -68,6 +68,8 @@ object MomentModules {
         QuietModule,
         VideoModule,
         MusicModule,
+        TimerModule,
+        ChoiceModule,
     ).associateBy { it.key }
 
     fun find(key: String): MomentModule? = registered[key]
@@ -95,7 +97,7 @@ enum class MomentIntent(
     TALK("TALK", "Talk with me", "Wants to talk", "FREE", setOf("PRESENCE", "VOICE")),
     WATCH("WATCH", "Watch with me", "Watching something", "WATCHING", setOf("VIDEO")),
     LISTEN("LISTEN", "Listen with me", "Listening", "LISTENING", setOf("MUSIC")),
-    PLAY("PLAY", "Play with me", "Wants to play", "GAMING", setOf("PRESENCE", "CHOICE")),
+    PLAY("PLAY", "Play with me", "Wants to play", "GAMING", setOf("PRESENCE", "GAME")),
     COOK("COOK", "Cook with me", "Cooking", "FREE", setOf("PRESENCE", "CAMERA")),
     WALK("WALK", "Walk with me", "Out for a walk", "FREE", setOf("PRESENCE", "VOICE")),
     CHOOSE("CHOOSE", "Help me choose", "Needs help choosing", "FREE", setOf("PRESENCE", "CHOICE")),

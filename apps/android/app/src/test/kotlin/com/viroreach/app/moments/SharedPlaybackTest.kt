@@ -273,6 +273,9 @@ class SharedPlaybackTest {
         override suspend fun streamUrl(id: String, mediaId: String) = error("unused")
         override suspend fun playback(id: String, body: MomentPlaybackBody) = error("unused")
         override suspend fun presence(id: String) = error("unused")
+        override suspend fun timer(id: String, body: MomentTimerBody) = error("unused")
+        override suspend fun choice(id: String, body: MomentChoiceBody) = error("unused")
+        override suspend fun touch(id: String, body: MomentTouchBody) {}
         override suspend fun changeRoom(id: String, body: MomentRoomChangeBody) = error("unused")
         override suspend fun sendMessage(id: String, body: SendMomentMessageBody) = error("unused")
         override suspend fun react(id: String, messageId: String, body: MomentReactBody) = error("unused")

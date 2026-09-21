@@ -61,7 +61,46 @@ data class MomentRoomDto(
     val serverNow: Long? = null,
     /** What people have shared into the room to watch or listen to. */
     val media: List<MomentMediaDto>? = null,
+    /** The room's kitchen timer. */
+    val timer: MomentTimerDto? = null,
+    /** A question the room is answering. */
+    val choice: MomentChoiceDto? = null,
 )
+
+/** One kitchen timer the whole room sees. Phones count down to [endsAt] on the server's clock. */
+data class MomentTimerDto(
+    val momentId: String,
+    val revision: Int,
+    val status: String,
+    val label: String? = null,
+    val endsAt: Long? = null,
+    val remainingMs: Long? = null,
+    val durationMs: Long? = null,
+    val updatedBy: String? = null,
+)
+data class MomentTimerResultDto(val timer: MomentTimerDto, val serverNow: Long)
+/** START (durationMs, label), PAUSE, RESUME, ADD (addMs), CANCEL. */
+data class MomentTimerBody(val op: String, val durationMs: Long? = null, val addMs: Long? = null, val label: String? = null)
+
+data class MomentChoiceOptionDto(val id: String, val text: String)
+/** A question for the room. [picks] is who chose what: a small room, open answers. */
+data class MomentChoiceDto(
+    val momentId: String,
+    val revision: Int,
+    val status: String,
+    val question: String? = null,
+    val options: List<MomentChoiceOptionDto>? = null,
+    val picks: Map<String, String>? = null,
+    val askedBy: String? = null,
+    val decided: String? = null,
+    val updatedBy: String? = null,
+)
+data class MomentChoiceResultDto(val choice: MomentChoiceDto)
+/** ASK (question, options), PICK (optionId; none takes an answer back), DECIDE (optionId), CLEAR. */
+data class MomentChoiceBody(val op: String, val question: String? = null, val options: List<String>? = null, val optionId: String? = null)
+
+/** HEART, HUG, WAVE or TAP — to everyone else here, or to one person here. */
+data class MomentTouchBody(val kind: String, val to: String? = null)
 
 /** A video or song someone brought into the Moment from their own phone. */
 data class MomentMediaDto(
@@ -179,6 +218,15 @@ interface ViroMomentsApi {
     /** Play, pause, seek — for everyone in the room. */
     @POST("api/v1/moments/{id}/playback")
     suspend fun playback(@Path("id") id: String, @Body body: MomentPlaybackBody): MomentPlaybackResultDto
+
+    @POST("api/v1/moments/{id}/timer")
+    suspend fun timer(@Path("id") id: String, @Body body: MomentTimerBody): MomentTimerResultDto
+
+    @POST("api/v1/moments/{id}/choice")
+    suspend fun choice(@Path("id") id: String, @Body body: MomentChoiceBody): MomentChoiceResultDto
+
+    @POST("api/v1/moments/{id}/touch")
+    suspend fun touch(@Path("id") id: String, @Body body: MomentTouchBody)
 
     /** Admission to the room's live faces and voices. Turns nothing on by itself. */
     @POST("api/v1/moments/{id}/presence")

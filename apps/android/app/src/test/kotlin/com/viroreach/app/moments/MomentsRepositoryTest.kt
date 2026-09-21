@@ -103,6 +103,9 @@ class MomentsRepositoryTest {
         override suspend fun unshareMedia(id: String, mediaId: String) {}
         override suspend fun streamUrl(id: String, mediaId: String) = error("unused")
         override suspend fun playback(id: String, body: MomentPlaybackBody) = error("unused")
+        override suspend fun timer(id: String, body: MomentTimerBody) = error("unused")
+        override suspend fun choice(id: String, body: MomentChoiceBody) = error("unused")
+        override suspend fun touch(id: String, body: MomentTouchBody) {}
         override suspend fun presence(id: String) = MomentPresenceDto("wss://media.test", "token", "viro-moment-$id")
         override suspend fun changeRoom(id: String, body: MomentRoomChangeBody): MomentRuntimeDto {
             changes.add(body)
