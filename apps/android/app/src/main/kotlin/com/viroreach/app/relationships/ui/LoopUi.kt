@@ -68,10 +68,9 @@ fun LoopCreateDialog(
     vibe: Vibe,
     suggestedGroup: String,
     /**
-     * True in an end-to-end encrypted chat. Loop answers are held by the
-     * server, which is what enforces the reciprocal reveal — so they are not
-     * encrypted the way the rest of the chat is, and the dialog says so
-     * rather than letting the lock upstairs speak for them.
+     * True in an end-to-end encrypted chat, where a Loop answer is sealed like
+     * everything else — the server still decides when an answer may be seen,
+     * and can no longer read what it is withholding.
      */
     encryptedChat: Boolean = false,
     onDismiss: () -> Unit,
@@ -108,9 +107,8 @@ fun LoopCreateDialog(
                 if (encryptedChat) {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Loop answers are held by Viro so that neither of you sees the " +
-                            "other's until you have both answered. Unlike your messages in " +
-                            "this chat, they are not end-to-end encrypted.",
+                        "🔒 Answers here are end-to-end encrypted. Viro holds them until you " +
+                            "have both answered — without being able to read them.",
                         color = ViroColors.textSecondary, fontSize = 13.sp,
                     )
                 }
@@ -222,6 +220,8 @@ fun LoopCard(
     onAnswerPhoto: (LoopDto) -> Unit,
     onPlayAnswer: (LoopAnswerDto) -> Unit,
     onMore: (LoopDto) -> Unit,
+    /** Opened text for encrypted answers, keyed by answer id. */
+    openedAnswers: Map<String, String> = emptyMap(),
 ) {
     var text by remember(loop.id, loop.periodKey) { mutableStateOf("") }
     val others = loop.participants.orEmpty().filter { it != myUserId }
@@ -248,16 +248,16 @@ fun LoopCard(
         when {
             loop.active != true -> Text("Paused", color = ViroColors.textSecondary)
             loop.periodKey == null -> Text("Next one opens on its day.", color = ViroColors.textSecondary)
-            loop.revealed == true -> loop.answers.orEmpty().forEach { a -> AnswerLine(a, if (a.userId == myUserId) "You" else nameOf(a.userId), vibe, onPlayAnswer) }
+            loop.revealed == true -> loop.answers.orEmpty().forEach { a -> AnswerLine(a, if (a.userId == myUserId) "You" else nameOf(a.userId), vibe, onPlayAnswer, openedAnswers) }
             loop.myAnswer != null -> {
-                AnswerLine(loop.myAnswer!!, "You", vibe, onPlayAnswer)
+                AnswerLine(loop.myAnswer!!, "You", vibe, onPlayAnswer, openedAnswers)
                 Spacer(Modifier.height(6.dp))
                 Text(
                     if (loop.reciprocal == true) "Waiting for ${waiting.joinToString { nameOf(it) }}… Both answers are revealed when they reply."
                     else "Sent.",
                     color = ViroColors.textSecondary, fontSize = 13.sp,
                 )
-                loop.answers.orEmpty().filter { it.userId != myUserId }.forEach { AnswerLine(it, nameOf(it.userId), vibe, onPlayAnswer) }
+                loop.answers.orEmpty().filter { it.userId != myUserId }.forEach { AnswerLine(it, nameOf(it.userId), vibe, onPlayAnswer, openedAnswers) }
             }
             else -> {
                 if (loop.answeredBy.orEmpty().any { it in others }) {
@@ -328,14 +328,27 @@ private fun AnswerInput(
 }
 
 @Composable
-private fun AnswerLine(a: LoopAnswerDto, who: String, vibe: Vibe, onPlay: (LoopAnswerDto) -> Unit) {
+private fun AnswerLine(
+    a: LoopAnswerDto,
+    who: String,
+    vibe: Vibe,
+    onPlay: (LoopAnswerDto) -> Unit,
+    /** Opened text for an encrypted answer, keyed by answer id. */
+    opened: Map<String, String> = emptyMap(),
+) {
+    // An encrypted answer arrives sealed; the words come from the phone that
+    // opened it, not from the answer the server handed over.
+    val words = a.text ?: opened[a.id]
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
         Text(who, color = vibe.accent, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(72.dp))
         when (a.kind) {
             "VOICE" -> TextButton(onClick = { onPlay(a) }) { Icon(Icons.Default.PlayArrow, null); Text("Voice answer") }
             "PHOTO" -> TextButton(onClick = { onPlay(a) }) { Icon(Icons.Default.Photo, null); Text("Photo answer") }
-            "EMOJI" -> Text(a.text.orEmpty(), fontSize = 26.sp)
-            else -> Text(a.text.orEmpty(), color = Color.White)
+            "EMOJI" -> Text(words.orEmpty(), fontSize = 26.sp)
+            else -> Text(
+                words ?: "🔒 Waiting for this answer",
+                color = if (words == null) ViroColors.textSecondary else Color.White,
+            )
         }
     }
 }

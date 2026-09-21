@@ -5,6 +5,7 @@ import {
   ImportantDate,
   Loop,
   LoopAnswer,
+  LoopAnswerEnvelope,
   Relationship,
   RelationshipCheckin,
   RelationshipSettings,
@@ -14,6 +15,7 @@ import { MediaObject } from '../database/entities/messaging-extras.entity';
 import { Profile } from '../database/entities/profile.entity';
 import { MessagesModule } from '../messages/messages.module';
 import { PushModule } from '../push/push.module';
+import { E2eeModule } from '../e2ee/e2ee.module';
 import { RelationshipsService } from './relationships.service';
 import { LoopsService } from './loops.service';
 import { LoopsController, RelationshipsController } from './relationships.controller';
@@ -26,6 +28,7 @@ import { LoopsController, RelationshipsController } from './relationships.contro
       Commitment,
       Loop,
       LoopAnswer,
+      LoopAnswerEnvelope,
       UserAchievement,
       RelationshipSettings,
       RelationshipCheckin,
@@ -34,6 +37,7 @@ import { LoopsController, RelationshipsController } from './relationships.contro
     ]),
     MessagesModule,
     PushModule,
+    E2eeModule,
   ],
   controllers: [RelationshipsController, LoopsController],
   providers: [RelationshipsService, LoopsService],

@@ -260,12 +260,10 @@ knows is when the share ends, because the server is what stops carrying it.
 
 ### What is still not encrypted, and is said so in the app
 
-- **Loop answers.** The reciprocal reveal — neither of you sees the other's
-  answer until you have both answered — is enforced by the server, which means
-  the server holds the answers. Moving that onto the phones is its own piece of
-  work. Until then the Loop dialog says plainly that Loop answers are not
-  end-to-end encrypted, rather than letting the lock on the chat speak for them.
-- **Reactions.** An emoji on a message is still stored as itself.
+- **Reactions and Loop answers were the two gaps here, and both are closed.**
+  A reaction is now a sealed message the phones apply; a Loop answer is sealed
+  per device and the server withholds the ciphertext exactly as it used to
+  withhold the words. See section 11.
 - **Link previews are switched off in encrypted chats**, because asking the
   server what a link looks like tells it which link is about to be sent. The
   link still goes, as text.
@@ -308,3 +306,35 @@ history is not the same as restoring a device.
 an archive is not worth spending someone's data bundle or their last ten per
 cent on. The backup screen has "Back up now" for anyone who would rather not
 wait for the conditions.
+
+## 11. Closing the gaps: groups, reactions, Loops
+
+**Groups.** A group message is sealed once per member device — the same
+machinery as a one-to-one chat, with the audience being everyone in the room.
+Sender keys would make it one ciphertext for the whole group instead, and are
+the obvious optimisation if groups here ever get large; this is the same
+promise, paid for in bandwidth rather than in complexity, and it works today.
+The envelope ceiling is 512, which covers the largest group the app allows.
+A group where one person's app cannot decrypt stays in the clear until it can,
+because half a room is not a room.
+
+**Reactions.** Which emoji someone chose says something, so it could not stay a
+row the server reads. A reaction is now a sealed message that the phones apply
+to the message it belongs to. The server is told one thing about it — that it
+is not a message — so there is no notification, no unread badge, and it never
+becomes the line shown in the inbox. That flag is honoured only for sealed
+sends; in the clear a reaction has its own endpoint and needs no disguise.
+
+**Loop answers.** A Loop's promise is that neither of you sees the other's
+answer until you have both answered, and the server is what makes that true: it
+holds the answers and decides when to hand them over. That did not have to mean
+it could read them. An answer is now sealed per device, and the server goes on
+withholding it under exactly the same rule — what changes is that the thing
+being withheld is ciphertext, and stays ciphertext afterwards. Photo and voice
+answers are sealed like any other file, with their own key.
+
+The reveal rule is still enforced by the server rather than by the phones,
+which was the alternative in section 6. That is deliberate: the rule is about
+fairness, not confidentiality, and moving it onto the phones would not make the
+answers any more private than they now are — it would only mean two clients
+arguing about who answered first.

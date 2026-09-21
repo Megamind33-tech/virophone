@@ -34,6 +34,8 @@ import com.viroreach.core.network.GifSendDto
 import com.viroreach.core.network.GroupBody
 import com.viroreach.core.network.GroupPatchBody
 import com.viroreach.core.network.LinkPreviewDto
+import com.viroreach.core.network.LoopAnswerBody
+import com.viroreach.core.network.LoopAnswerDto
 import com.viroreach.core.network.MemberDto
 import com.viroreach.core.network.MembersBody
 import com.viroreach.core.network.PollBody
@@ -1012,6 +1014,99 @@ class MessagingRepository(
         return listOf(900, 3600, 28800).minByOrNull { kotlin.math.abs(it - seconds) }
     }
 
+    /**
+     * A Loop answer, ready to send — sealed when the chat is encrypted.
+     *
+     * A Loop's promise is that neither of you sees the other's answer until
+     * you have both answered, and the server is what makes that true. It can
+     * go on doing that with ciphertext: it withholds the same thing, and can
+     * no longer read what it is withholding.
+     */
+    suspend fun loopAnswerBody(
+        conversationId: String?,
+        kind: String,
+        text: String? = null,
+        localFile: File? = null,
+        mime: String? = null,
+        durationMs: Long? = null,
+        waveform: String? = null,
+        width: Int? = null,
+        height: Int? = null,
+    ): LoopAnswerBody {
+        val conv = conversationId?.let { dao.conversation(it) }
+        val me = myUserId()
+        val audience = audienceOf(conv, null)
+        if (conv?.encrypted != true || me == null || audience.isEmpty()) {
+            val media = localFile?.let {
+                media.upload(it, mime ?: "application/octet-stream", durationMs, waveform, width, height)
+            }
+            return LoopAnswerBody(kind = kind, text = text, mediaId = media?.id)
+        }
+
+        // A photo or a recording in an answer is sealed the way one in a
+        // message is: its own key, and the bytes are bytes to the server.
+        var mediaRef: SealedMediaRef? = null
+        if (localFile != null) {
+            val sealedFile = media.newOutgoingFile("sealed")
+            val key = try {
+                MediaCrypto.seal(localFile, sealedFile)
+            } catch (e: Exception) {
+                sealedFile.delete()
+                throw e
+            }
+            val uploaded = try {
+                media.upload(
+                    file = sealedFile,
+                    mime = mime ?: "application/octet-stream",
+                    kind = if (kind == "VOICE") "VOICE" else "IMAGE",
+                    sealed = true,
+                )
+            } finally {
+                sealedFile.delete()
+            }
+            mediaRef = SealedMediaRef(
+                id = uploaded.id,
+                key = key.key,
+                iv = key.iv,
+                mime = mime ?: "application/octet-stream",
+                durationMs = durationMs,
+                waveform = waveform,
+                width = width,
+                height = height,
+                sizeBytes = localFile.length(),
+            )
+        }
+        val envelopes = e2ee.seal(
+            me,
+            audience,
+            SealedMessage.pack(
+                SealedPayload(type = "LOOP_ANSWER", body = text, meta = mapOf("kind" to kind), media = mediaRef),
+            ),
+        )
+        if (envelopes.isEmpty()) throw IllegalStateException("This chat is encrypted — waiting for their phone")
+        return LoopAnswerBody(
+            kind = kind,
+            mediaId = mediaRef?.id,
+            envelopes = envelopes.map { EnvelopeBody(it.deviceId, it.ciphertext, it.type) },
+        )
+    }
+
+    /**
+     * Opens a sealed Loop answer for showing.
+     *
+     * A sealed thing opens once, so the opened form is kept here — otherwise
+     * looking at the same Loop twice would show nothing the second time.
+     */
+    suspend fun openLoopAnswer(answer: LoopAnswerDto): SealedPayload? {
+        val cached = dao.kv("$LOOP_ANSWER_KEY${answer.id}")?.value
+        if (cached != null) return SealedMessage.unpack(cached)
+        val envelope = answer.envelopes?.firstOrNull { it.deviceId == e2ee.myDeviceId() } ?: return null
+        val senderDeviceId = answer.senderDeviceId ?: return null
+        val plain = e2ee.open(answer.userId, senderDeviceId, envelope.ciphertext, envelope.type ?: 1) ?: return null
+        dao.putKv(KvEntity("$LOOP_ANSWER_KEY${answer.id}", plain))
+        return SealedMessage.unpack(plain)
+    }
+
     /** Marks a security-code change as seen, once the person has been shown it. */
     fun acknowledgeIdentityChangeLater(peerUserId: String) {
         scope.launch { runCatching { e2ee.acknowledgeIdentityChange(peerUserId) } }
@@ -1427,6 +1522,8 @@ class MessagingRepository(
         const val TYPE_REACTION = "REACTION"
         const val LOCAL = "local:"
         private const val KEY_CURSOR = "sync_cursor"
+        /** Where an opened Loop answer is kept: a sealed thing opens once. */
+        private const val LOOP_ANSWER_KEY = "loop_answer:"
         private const val PRESENT_EVERY_MS = 20_000L
         private const val PRESENT_TTL_MS = 45_000L
         private const val TYPING_TTL_MS = 7_000L

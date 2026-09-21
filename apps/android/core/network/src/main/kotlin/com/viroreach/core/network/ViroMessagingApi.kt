@@ -474,7 +474,17 @@ data class LoopBody(
 
 data class LoopPatchBody(val active: Boolean? = null, val title: String? = null, val prompt: String? = null, val timeOfDay: String? = null)
 
-data class LoopAnswerBody(val kind: String, val text: String? = null, val mediaId: String? = null)
+/**
+ * An answer to a Loop: in the clear, or — in an encrypted chat — sealed for
+ * every device in it. The server still decides when an answer may be seen; it
+ * simply cannot read what it is withholding.
+ */
+data class LoopAnswerBody(
+    val kind: String,
+    val text: String? = null,
+    val mediaId: String? = null,
+    val envelopes: List<EnvelopeBody>? = null,
+)
 
 data class LoopAnswerDto(
     val id: String,
@@ -483,6 +493,10 @@ data class LoopAnswerDto(
     val text: String?,
     val media: MediaDto?,
     val createdAt: String?,
+    /** Which device sealed it, so a reader can find the session. */
+    val senderDeviceId: String? = null,
+    /** For an encrypted answer: the sealed copies for my own devices. */
+    val envelopes: List<EnvelopeDto>? = null,
 )
 
 data class LoopDto(

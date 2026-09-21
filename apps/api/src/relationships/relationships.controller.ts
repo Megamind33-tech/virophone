@@ -1,12 +1,13 @@
 import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import {
-  IsArray, IsBoolean, IsIn, IsInt, IsISO8601, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min, ValidateIf,
+  ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsISO8601, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min,
+  ValidateIf,
 } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RelationshipsService } from './relationships.service';
 import { LoopsService } from './loops.service';
 
-type AuthedReq = { user: { sub: string } };
+type AuthedReq = { user: { sub: string; deviceId?: string } };
 
 class RelationshipDto {
   @ValidateIf((_, v) => v !== null) @IsString() @IsOptional() subjectUserId?: string | null;
@@ -77,8 +78,16 @@ class LoopPatchDto {
 
 class LoopAnswerDto {
   @IsString() @IsNotEmpty() kind!: string;
+  // Empty for an encrypted answer: the words are inside the envelopes.
   @IsString() @IsOptional() @MaxLength(1000) text?: string;
   @IsString() @IsOptional() mediaId?: string;
+  /**
+   * One sealed copy per device of everyone in the conversation. The server
+   * still decides when an answer may be seen; it simply cannot read the
+   * thing it is withholding.
+   */
+  @IsArray() @IsOptional() @ArrayMaxSize(512)
+  envelopes?: { deviceId: string; ciphertext: string; type?: number }[];
 }
 
 class CheckinDto {
@@ -218,7 +227,7 @@ export class LoopsController {
 
   @Post(':id/answer')
   answer(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: LoopAnswerDto) {
-    return this.loops.answer(req.user.sub, id, body);
+    return this.loops.answer(req.user.sub, req.user.deviceId ?? null, id, body);
   }
 
   @Get(':id/history')

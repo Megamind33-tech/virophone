@@ -81,6 +81,27 @@ export class LoopAnswer {
   @Column({ type: 'varchar', length: 8 }) kind!: string;
   @Column({ type: 'varchar', length: 1000, nullable: true }) text!: string | null;
   @Column({ name: 'media_id', type: 'uuid', nullable: true }) mediaId!: string | null;
+  /** End-to-end encrypted: the words are in loop_answer_envelopes, not here. */
+  @Column({ type: 'boolean', default: false }) sealed!: boolean;
+  /** Which device sealed it, so a reader can find the session. */
+  @Column({ name: 'device_id', type: 'uuid', nullable: true }) deviceId!: string | null;
+  @CreateDateColumn({ name: 'created_at' }) createdAt!: Date;
+}
+
+/**
+ * One sealed copy of a Loop answer, for one device.
+ *
+ * Handed out only when the Loop's own rule says the answer may be seen — so
+ * the reciprocal reveal still holds, and the server still cannot read what it
+ * is withholding.
+ */
+@Entity('loop_answer_envelopes')
+export class LoopAnswerEnvelope {
+  @PrimaryColumn({ name: 'answer_id', type: 'uuid' }) answerId!: string;
+  @PrimaryColumn({ name: 'device_id', type: 'uuid' }) deviceId!: string;
+  @Column({ name: 'user_id', type: 'uuid' }) userId!: string;
+  @Column({ type: 'text' }) ciphertext!: string;
+  @Column({ name: 'envelope_type', type: 'smallint', default: 1 }) envelopeType!: number;
   @CreateDateColumn({ name: 'created_at' }) createdAt!: Date;
 }
 

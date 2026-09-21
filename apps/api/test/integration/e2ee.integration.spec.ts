@@ -619,6 +619,56 @@ describe('End-to-end encryption (server)', () => {
     expect(rows[0].silent).toBe(false);
   });
 
+  it('keeps a Loop answer sealed, and still waits for the other person', async () => {
+    if (skip()) return;
+    const loop = await http()
+      .post('/api/v1/loops')
+      .set(as(alicePhone))
+      .send({
+        conversationId: cid,
+        title: 'Evenings',
+        prompt: 'How was today?',
+        frequency: 'DAILY',
+        reciprocal: true,
+      })
+      .expect(201);
+
+    const mine = 'long, but the rain finally came';
+    await http()
+      .post(`/api/v1/loops/${loop.body.id}/answer`)
+      .set(as(alicePhone))
+      .send({ kind: 'TEXT', envelopes: everyone(mine) })
+      .expect(201);
+
+    // The server holds no words at all.
+    const rows = await sql('SELECT text, sealed FROM loop_answers WHERE loop_id = $1', [loop.body.id]);
+    expect(rows[0].text).toBeNull();
+    expect(rows[0].sealed).toBe(true);
+
+    // Bob has not answered, so the rule still withholds it — now as ciphertext.
+    const before = await http().get(`/api/v1/loops?conversationId=${cid}`).set(as(bobPhone)).expect(200);
+    const waiting = before.body.find((l: any) => l.id === loop.body.id);
+    expect(waiting.answers.find((a: any) => a.userId === alicePhone.userId)).toBeUndefined();
+    expect(waiting.revealed).toBe(false);
+
+    await http()
+      .post(`/api/v1/loops/${loop.body.id}/answer`)
+      .set(as(bobPhone))
+      .send({ kind: 'TEXT', envelopes: everyone('quiet, and I slept') })
+      .expect(201);
+
+    // Now both are revealed — and what Bob receives is sealed to his device.
+    const after = await http().get(`/api/v1/loops?conversationId=${cid}`).set(as(bobPhone)).expect(200);
+    const revealed = after.body.find((l: any) => l.id === loop.body.id);
+    expect(revealed.revealed).toBe(true);
+    const hers = revealed.answers.find((a: any) => a.userId === alicePhone.userId);
+    expect(hers.text).toBeNull();
+    const forBob = hers.envelopes.find((e: any) => e.deviceId === bobPhone.deviceId);
+    expect(Buffer.from(forBob.ciphertext, 'base64').toString()).toBe(mine);
+    // And never Alice's own copy of it.
+    expect(hers.envelopes.map((e: any) => e.deviceId)).not.toContain(alicePhone.deviceId);
+  });
+
   it('edits a sealed message by replacing what each device holds', async () => {
     if (skip()) return;
     const sent = await http()

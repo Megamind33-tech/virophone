@@ -1,11 +1,12 @@
 import { Injectable, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { Loop, LoopAnswer } from '../database/entities/relationship.entity';
+import { Loop, LoopAnswer, LoopAnswerEnvelope } from '../database/entities/relationship.entity';
 import { MediaObject } from '../database/entities/messaging-extras.entity';
 import { Profile } from '../database/entities/profile.entity';
 import { MessagesService } from '../messages/messages.service';
 import { PushService } from '../push/push.service';
+import { KeysService } from '../e2ee/keys.service';
 import { ViroException } from '../common/exceptions/viro.exception';
 import { isoWeekKey, localDayKey, localParts, safeZone } from './local-time';
 
@@ -31,8 +32,12 @@ export interface LoopAnswerDto {
   userId: string;
   kind: string;
   text: string | null;
-  media: ReturnType<MessagesService['mediaDto']> | null;
+  media: ReturnType<MessagesService["mediaDto"]> | null;
   createdAt: string;
+  /** Which device sealed it, so a reader can find the session. */
+  senderDeviceId: string | null;
+  /** For an encrypted answer: the sealed copies for my own devices. */
+  envelopes: { deviceId: string; ciphertext: string; type: number }[] | null;
 }
 
 export interface LoopStateDto {
@@ -69,8 +74,11 @@ export class LoopsService {
     @InjectRepository(LoopAnswer) private readonly answerRepo: Repository<LoopAnswer>,
     @InjectRepository(MediaObject) private readonly mediaRepo: Repository<MediaObject>,
     @InjectRepository(Profile) private readonly profileRepo: Repository<Profile>,
+    @InjectRepository(LoopAnswerEnvelope)
+    private readonly answerEnvelopeRepo: Repository<LoopAnswerEnvelope>,
     private readonly messages: MessagesService,
     private readonly push: PushService,
+    private readonly keys: KeysService,
   ) {}
 
   private fail(code: string, message: string, status: HttpStatus): never {
@@ -177,7 +185,17 @@ export class LoopsService {
     return { ok: true };
   }
 
-  async answer(userId: string, loopId: string, input: { kind: string; text?: string; mediaId?: string }) {
+  async answer(
+    userId: string,
+    deviceId: string | null,
+    loopId: string,
+    input: {
+      kind: string;
+      text?: string;
+      mediaId?: string;
+      envelopes?: { deviceId: string; ciphertext: string; type?: number }[];
+    },
+  ) {
     const loop = await this.loopFor(userId, loopId);
     if (!loop.active) this.fail('VALIDATION_ERROR', 'This Loop is paused.', HttpStatus.BAD_REQUEST);
     const periodKey = LoopsService.periodKey(loop);
@@ -190,11 +208,14 @@ export class LoopsService {
     if (loop.responseKind !== 'ANY' && loop.responseKind !== kind) {
       this.fail('VALIDATION_ERROR', 'This Loop asks for a different kind of answer.', HttpStatus.BAD_REQUEST);
     }
-    const text = (input.text || '').trim().slice(0, 1000) || null;
-    if ((kind === 'TEXT' || kind === 'EMOJI' || kind === 'CHOICE') && !text) {
+    // A sealed answer carries its words inside the envelopes, so there is
+    // nothing here to check them against — and nothing to read.
+    const sealed = Array.isArray(input.envelopes) && input.envelopes.length > 0;
+    const text = sealed ? null : (input.text || '').trim().slice(0, 1000) || null;
+    if (!sealed && (kind === 'TEXT' || kind === 'EMOJI' || kind === 'CHOICE') && !text) {
       this.fail('VALIDATION_ERROR', 'Your answer is empty.', HttpStatus.BAD_REQUEST);
     }
-    if (kind === 'CHOICE' && !(loop.choices ?? []).includes(text!)) {
+    if (!sealed && kind === 'CHOICE' && !(loop.choices ?? []).includes(text!)) {
       this.fail('VALIDATION_ERROR', 'Pick one of the choices.', HttpStatus.BAD_REQUEST);
     }
     if ((kind === 'VOICE' || kind === 'PHOTO') && !input.mediaId) {
@@ -220,8 +241,16 @@ export class LoopsService {
         kind,
         text,
         mediaId: input.mediaId ?? null,
+        sealed,
+        deviceId: sealed ? deviceId ?? null : null,
       }),
     );
+    if (sealed) {
+      // Changing an answer replaces every copy of it, the way an edited
+      // message does.
+      await this.answerEnvelopeRepo.delete({ answerId: answer.id });
+      await this.storeAnswerEnvelopes(loop.conversationId, answer.id, input.envelopes!);
+    }
     const answered = new Set([...already.map((a) => a.userId), userId]);
     const complete = participants.every((p) => answered.has(p));
     const others = participants.filter((p) => p !== userId);
@@ -258,6 +287,37 @@ export class LoopsService {
     return this.state(userId, loop);
   }
 
+  /**
+   * Keeps one sealed copy of an answer per device in the conversation.
+   *
+   * Addressed the same way a message is — a copy for every device that could
+   * be allowed to read it, including the answerer's own, so their answer is
+   * still their answer on their other phone.
+   */
+  private async storeAnswerEnvelopes(
+    conversationId: string,
+    answerId: string,
+    envelopes: { deviceId: string; ciphertext: string; type?: number }[],
+  ) {
+    const audience = await this.messages.participantIds(conversationId);
+    const ownerOf = new Map((await this.keys.encryptableDevices(audience)).map((d) => [d.deviceId, d.userId]));
+    const rows = envelopes
+      .filter((e) => ownerOf.has(e.deviceId))
+      .map((e) =>
+        this.answerEnvelopeRepo.create({
+          answerId,
+          deviceId: e.deviceId,
+          userId: ownerOf.get(e.deviceId)!,
+          ciphertext: e.ciphertext,
+          envelopeType: Number.isInteger(e.type) && (e.type as number) > 0 ? (e.type as number) : 1,
+        }),
+      );
+    if (rows.length === 0) {
+      this.fail('VALIDATION_ERROR', 'An encrypted answer needs its sealed copies.', HttpStatus.BAD_REQUEST);
+    }
+    await this.answerEnvelopeRepo.save(rows);
+  }
+
   private async nameOf(userId: string): Promise<string> {
     const p = await this.profileRepo.findOne({ where: { userId } });
     return p?.displayName?.trim() || 'Someone';
@@ -272,9 +332,20 @@ export class LoopsService {
     });
   }
 
-  private async answerDtos(answers: LoopAnswer[]): Promise<LoopAnswerDto[]> {
+  /**
+   * Answers as one person may see them.
+   *
+   * Only answers that passed the Loop's own reveal rule reach here, so the
+   * sealed copies handed over are exactly the ones that would have been shown
+   * in words — the rule is unchanged, and what it withholds is ciphertext.
+   */
+  private async answerDtos(viewerId: string, answers: LoopAnswer[]): Promise<LoopAnswerDto[]> {
     const mediaIds = answers.map((a) => a.mediaId).filter((x): x is string => !!x);
     const media = mediaIds.length ? await this.mediaRepo.find({ where: { id: In(mediaIds) } }) : [];
+    const sealedIds = answers.filter((a) => a.sealed).map((a) => a.id);
+    const envelopes = sealedIds.length
+      ? await this.answerEnvelopeRepo.find({ where: { answerId: In(sealedIds), userId: viewerId } })
+      : [];
     return answers.map((a) => {
       const mo = a.mediaId ? media.find((m) => m.id === a.mediaId) : undefined;
       return {
@@ -284,6 +355,12 @@ export class LoopsService {
         text: a.text,
         media: mo ? this.messages.mediaDto(mo) : null,
         createdAt: a.createdAt.toISOString(),
+        senderDeviceId: a.deviceId,
+        envelopes: a.sealed
+          ? envelopes
+              .filter((e) => e.answerId === a.id)
+              .map((e) => ({ deviceId: e.deviceId, ciphertext: e.ciphertext, type: e.envelopeType }))
+          : null,
       };
     });
   }
@@ -307,7 +384,7 @@ export class LoopsService {
     const revealed = participants.every((p) => answeredBy.includes(p));
     const canSeeOthers = !loop.reciprocal || !!mine || revealed;
     const visible = answers.filter((a) => a.userId === userId || canSeeOthers);
-    const dtos = await this.answerDtos(visible);
+    const dtos = await this.answerDtos(userId, visible);
     const done = await this.completedPeriods([loop.id], participants.length);
     const month = localDayKey(now, loop.timezone).slice(0, 7);
     return {
@@ -366,7 +443,7 @@ export class LoopsService {
       const complete = participants.every((p) => list.some((a) => a.userId === p));
       const mine = list.some((a) => a.userId === userId);
       const visible = list.filter((a) => a.userId === userId || !loop.reciprocal || complete || mine);
-      out.push({ periodKey, complete, answers: await this.answerDtos(visible) });
+      out.push({ periodKey, complete, answers: await this.answerDtos(userId, visible) });
     }
     return out;
   }

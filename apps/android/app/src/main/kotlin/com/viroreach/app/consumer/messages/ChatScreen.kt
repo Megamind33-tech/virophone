@@ -222,12 +222,28 @@ fun ChatScreen(
 
     // ---- loops --------------------------------------------------------------
     var loops by remember(cid) { mutableStateOf<List<LoopDto>>(emptyList()) }
+    // Encrypted Loop answers, once this phone has opened them.
+    var openedAnswers by remember(cid) { mutableStateOf<Map<String, String>>(emptyMap()) }
     var loopDetail by remember { mutableStateOf<Pair<LoopDto, List<LoopPeriodDto>>?>(null) }
     var loopVoiceFor by remember { mutableStateOf<LoopDto?>(null) }
     var loopPhotoFor by remember { mutableStateOf<LoopDto?>(null) }
     suspend fun reloadLoops() {
         val id = convId ?: return
         loops = session.relationships.loops(id)
+        // An encrypted answer arrives sealed and opens once, so it is opened
+        // here — when the Loop is shown — and kept.
+        val sealed = loops.flatMap { l ->
+            (l.answers.orEmpty() + listOfNotNull(l.myAnswer)).filter { !it.envelopes.isNullOrEmpty() }
+        }
+        if (sealed.isNotEmpty()) {
+            val next = openedAnswers.toMutableMap()
+            sealed.forEach { answer ->
+                if (next[answer.id] == null) {
+                    repo.openLoopAnswer(answer)?.body?.let { next[answer.id] = it }
+                }
+            }
+            openedAnswers = next
+        }
     }
     LaunchedEffect(cid) { reloadLoops() }
     LaunchedEffect(cid) {
@@ -306,8 +322,10 @@ fun ChatScreen(
         if (uri != null && loop != null) scope.launch {
             val f = prepareImage(context, repo, uri) ?: return@launch
             val dims = imageSize(f)
-            runCatching { repo.media.upload(f, "image/jpeg", null, null, dims.first, dims.second) }
-                .onSuccess { m -> session.relationships.answerLoop(loop.id, LoopAnswerBody("PHOTO", mediaId = m.id)).onSuccess { reloadLoops() } }
+            runCatching {
+                repo.loopAnswerBody(convId, "PHOTO", localFile = f, mime = "image/jpeg", width = dims.first, height = dims.second)
+            }
+                .onSuccess { body -> session.relationships.answerLoop(loop.id, body).onSuccess { reloadLoops() } }
                 .onFailure { Toast.makeText(context, "Couldn't upload the photo.", Toast.LENGTH_SHORT).show() }
         }
     }
@@ -655,7 +673,8 @@ fun ChatScreen(
                             nameOf = ::nameOf,
                             onAnswerText = { l, kind, text ->
                                 scope.launch {
-                                    session.relationships.answerLoop(l.id, LoopAnswerBody(kind, text = text))
+                                    val body = repo.loopAnswerBody(convId, kind, text = text)
+                                    session.relationships.answerLoop(l.id, body)
                                         .onSuccess { reloadLoops() }
                                         .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_SHORT).show() }
                                 }
@@ -665,6 +684,7 @@ fun ChatScreen(
                                 loopPhotoFor = it
                                 pickLoopPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                             },
+                            openedAnswers = openedAnswers,
                             onPlayAnswer = { a -> scope.launch { playLoopAnswer(a, repo, session, { f -> fullImage = f to null }) } },
                             onMore = { l ->
                                 scope.launch { session.relationships.loopHistory(l.id).onSuccess { loopDetail = l to it } }
@@ -961,8 +981,10 @@ fun ChatScreen(
         LoopVoiceDialog(recorder, vibe, onDismiss = { loopVoiceFor = null }) { rec ->
             loopVoiceFor = null
             scope.launch {
-                runCatching { repo.media.upload(rec.file, rec.mime, rec.durationMs, rec.waveform, null, null) }
-                    .onSuccess { m -> session.relationships.answerLoop(loop.id, LoopAnswerBody("VOICE", mediaId = m.id)).onSuccess { reloadLoops() } }
+                runCatching {
+                    repo.loopAnswerBody(convId, "VOICE", localFile = rec.file, mime = rec.mime, durationMs = rec.durationMs, waveform = rec.waveform)
+                }
+                    .onSuccess { body -> session.relationships.answerLoop(loop.id, body).onSuccess { reloadLoops() } }
                     .onFailure { Toast.makeText(context, "Couldn't upload your answer.", Toast.LENGTH_SHORT).show() }
             }
         }
