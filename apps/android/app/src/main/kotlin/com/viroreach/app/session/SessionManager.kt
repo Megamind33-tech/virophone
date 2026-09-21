@@ -165,6 +165,8 @@ class SessionManager private constructor(context: Context) {
     private fun startMessaging() {
         messaging.start()
         runCatching { ReminderScheduler.start(appContext) }
+        // A backup nobody remembers to run is not a backup.
+        runCatching { com.viroreach.app.messaging.BackupWorker.schedule(appContext) }
         scope.launch {
             messaging.incoming.collect { (conversationId, message) ->
                 val conv = runCatching { messaging.conversation(conversationId).first() }.getOrNull()

@@ -303,3 +303,8 @@ either went already, or it never will.
 **What it does not give back.** A new phone gets a new identity key, which is
 right — the other person's safety number changes, and they are told. Restoring
 history is not the same as restoring a device.
+
+**When it runs.** Once a day, on an unmetered connection and while charging —
+an archive is not worth spending someone's data bundle or their last ten per
+cent on. The backup screen has "Back up now" for anyone who would rather not
+wait for the conditions.
