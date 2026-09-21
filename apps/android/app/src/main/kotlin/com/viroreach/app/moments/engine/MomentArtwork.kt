@@ -8,6 +8,10 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -35,16 +39,19 @@ import kotlin.math.sin
  * Moment is the opposite of a settings screen: it should look like somewhere
  * you want to be before you have finished reading the label.
  *
- * Everything here is drawn rather than photographed, for three reasons. It
- * costs nothing to download, which matters on a Zambian data bundle. It scales
- * to any card on any screen without a folder of densities. And it can carry
- * the room's own colours, so the card is a glimpse of the room it opens — the
- * cinema card is already dark, the kitchen card is already warm, and walking
- * into the room feels like the same place rather than a different app.
+ * An activity shows a bundled photograph when one exists for it, and a drawn
+ * picture otherwise. Both are wanted: a photograph says more in a glance, and
+ * the drawing costs nothing to download, scales to any card without a folder
+ * of densities, and is there for an activity no artwork has been made for yet.
  *
- * The motifs are geometric on purpose. Illustrated food and smiling faces age
- * badly and belong to somebody else's brand; shapes made of light belong to
- * this one.
+ * Either way the picture carries the room's own colours, so the card is a
+ * glimpse of the room it opens — the cinema card is already dark, the kitchen
+ * card is already warm, and walking into the room feels like the same place
+ * rather than a different app.
+ *
+ * The drawn motifs are geometric on purpose. Illustrated food and smiling
+ * faces age badly and belong to somebody else's brand; shapes made of light
+ * belong to this one.
  */
 data class ActivityArt(
     /** The ground the motif sits on, echoing the scene the room will open in. */
@@ -79,13 +86,57 @@ fun activityArt(key: String): ActivityArt = when (key) {
 }
 
 /**
- * Draws an activity's picture, breathing gently.
+ * A photograph for an activity, once one has been bundled for it.
  *
- * Honours the phone's animation setting: somebody who has turned animations
- * off gets the same picture, held still.
+ * Empty until real artwork is commissioned: adding a picture is one line here
+ * and one file in the drawable folders, and nothing else changes. Named
+ * resource ids rather than a lookup by string so resource shrinking cannot
+ * quietly remove them from a release build.
+ *
+ * Anything without an entry keeps the drawn artwork, which is why this can
+ * fill up one activity at a time instead of all at once — and why a new
+ * activity always looks like something the day it is added.
  */
+private val activityPhotos: Map<String, Int> = emptyMap()
+
 @Composable
 fun MomentActivityArt(intentKey: String, modifier: Modifier = Modifier) {
+    val photo = activityPhotos[intentKey]
+    if (photo != null) {
+        Box(modifier) {
+            Image(
+                painter = painterResource(photo),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.matchParentSize(),
+            )
+            // The same scrim the drawn art carries, so a label stays readable
+            // over a bright photograph as well as a dark one.
+            Canvas(Modifier.matchParentSize()) {
+                drawRect(
+                    Brush.verticalGradient(
+                        0f to Color.Black.copy(alpha = 0.10f),
+                        0.45f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = 0.62f),
+                    ),
+                )
+            }
+        }
+    } else {
+        DrawnActivityArt(intentKey, modifier)
+    }
+}
+
+/**
+ * The drawn picture: what an activity looks like when no photograph has been
+ * bundled for it, and what it falls back to for anything the server names that
+ * this build has never heard of.
+ *
+ * It breathes gently, and honours the phone's animation setting — somebody who
+ * has turned animations off gets the same picture, held still.
+ */
+@Composable
+private fun DrawnActivityArt(intentKey: String, modifier: Modifier = Modifier) {
     val art = activityArt(intentKey)
     val context = LocalContext.current
     val stillness = remember {
