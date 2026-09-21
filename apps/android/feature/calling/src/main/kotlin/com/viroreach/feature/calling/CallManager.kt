@@ -836,7 +836,7 @@ class CallManager(
             return
         }
         if (msg.type.startsWith("message.") || msg.type.startsWith("conversation.") ||
-            msg.type.startsWith("loop.") || msg.type == "chat.typing"
+            msg.type.startsWith("loop.") || msg.type.startsWith("moment.") || msg.type == "chat.typing"
         ) {
             val payload = msg.payload ?: JSONObject()
             scope.launch { _messagingFrames.emit(msg.type to payload) }

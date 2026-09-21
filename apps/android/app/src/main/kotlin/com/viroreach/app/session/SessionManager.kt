@@ -64,6 +64,7 @@ class SessionManager private constructor(context: Context) {
         viroApiClient.keys,
     )
     val relationships: RelationshipRepository = RelationshipRepository(appContext, messagingApi)
+    val moments = com.viroreach.app.moments.MomentsRepository(viroApiClient.moments) { tokenStore.getUserId() }
 
     /**
      * The encrypted backup of this phone's chats. Without it, an encrypted
@@ -156,6 +157,16 @@ class SessionManager private constructor(context: Context) {
         startPresenceHeartbeat()
         startWssWatchdog()
         startMessaging()
+        scope.launch {
+            callManager.messagingFrames.collect { (type, _) ->
+                if (type.startsWith("moment.")) moments.refresh()
+            }
+        }
+        scope.launch {
+            callManager.wssConnectionState.collect { state ->
+                if (state == SignalingConnectionState.CONNECTED && isAuthenticated) moments.refresh()
+            }
+        }
     }
 
     /**
@@ -366,6 +377,7 @@ class SessionManager private constructor(context: Context) {
      * account switch protects nothing.
      */
     private suspend fun clearLocalUserData(reason: String) {
+        moments.clear()
         android.util.Log.i("ViroSession", "CLEARING_LOCAL_USER_DATA reason=$reason")
         runCatching { messaging.clearLocal() }
         runCatching { contactsRepository.clearCache() }
@@ -470,6 +482,7 @@ class SessionManager private constructor(context: Context) {
     }
 
     fun logout() {
+        moments.clear()
         stopBackgroundSignaling()
         callManager.disconnectSignaling()
         callManager.clearSessionCallContext()

@@ -63,6 +63,7 @@ fun MessagesInboxScreen(
     startOnConnections: Boolean = false,
     onSearch: () -> Unit = {},
     onNewGroup: () -> Unit = {},
+    showMoments: Boolean = false,
 ) {
     var tab by rememberSaveable { mutableIntStateOf(if (startOnConnections) 1 else 0) }
     LaunchedEffect(startOnConnections) { if (startOnConnections) tab = 1 }
@@ -73,15 +74,16 @@ fun MessagesInboxScreen(
                     Modifier.fillMaxWidth().padding(horizontal = ViroSpacing.md, vertical = ViroSpacing.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Segmented(listOf("Messages", "Connections"), tab) { tab = it }
+                    if (showMoments) Text("Viro", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
+                    else Segmented(listOf("Messages", "Connections"), tab) { tab = it }
                     Spacer(Modifier.weight(1f))
-                    if (tab == 0) {
+                    if (showMoments || tab == 0) {
                         IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Search messages", tint = Color.White) }
                         IconButton(onClick = onNewGroup) { Icon(Icons.Default.GroupAdd, "New group", tint = Color.White) }
                     }
                 }
-                if (tab == 0) {
-                    Inbox(session, onOpenChat)
+                if (showMoments || tab == 0) {
+                    Inbox(session, onOpenChat, if (showMoments) ({ com.viroreach.app.moments.MomentsHeader(session, onCall) }) else null)
                 } else {
                     ConnectionsDashboard(session, onOpenChat, onCall, onOpenRelationship)
                 }
@@ -111,7 +113,7 @@ private fun Segmented(labels: List<String>, selected: Int, onSelect: (Int) -> Un
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
+private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit, header: (@Composable () -> Unit)? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val conversations by remember { session.messaging.conversations() }.collectAsState(initial = emptyList())
@@ -235,40 +237,44 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
                 }
             }
         }
-        if (visible.isEmpty()) {
-            Column(
-                Modifier.fillMaxSize().padding(32.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text("💬", fontSize = 40.sp)
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    when {
-                        showHidden -> "No hidden chats."
-                        showArchived -> "No archived chats."
-                        else -> "No conversations yet.\nMessage someone from Contacts or after a call."
-                    },
-                    color = ViroColors.textSecondary,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
-                // A new phone lands here with nothing, which is exactly where
-                // someone needs to be told their chats can come back.
-                if (!showHidden && !showArchived && backupWaiting) {
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        "There is a backup of your chats. You will need the recovery key " +
-                            "from your old phone.",
-                        color = ViroColors.textSecondary,
-                        fontSize = 13.sp,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    TextButton(onClick = { restoreOpen = true }) { Text("Restore chats") }
+        LazyColumn(Modifier.fillMaxSize()) {
+            if (header != null) item(key = "moments-header") { header() }
+            if (visible.isEmpty()) {
+                item(key = "empty-conversations") {
+                    Column(
+                        Modifier.fillMaxWidth().padding(32.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text("💬", fontSize = 40.sp)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            when {
+                                showHidden -> "No hidden chats."
+                                showArchived -> "No archived chats."
+                                else -> "No conversations yet.\nMessage someone from Contacts or after a call."
+                            },
+                            color = ViroColors.textSecondary,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        )
+                        // A new phone lands here with nothing, which is exactly where
+                        // someone needs to be told their chats can come back.
+                        if (!showHidden && !showArchived && backupWaiting) {
+                            Spacer(Modifier.height(16.dp))
+                            Text(
+                                "There is a backup of your chats. You will need the recovery key " +
+                                    "from your old phone.",
+                                color = ViroColors.textSecondary,
+                                fontSize = 13.sp,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            TextButton(onClick = { restoreOpen = true }) { Text("Restore chats") }
+                        }
+                    }
+
                 }
-            }
-        } else {
-            LazyColumn(Modifier.fillMaxSize()) {
+            } else {
                 items(visible, key = { it.id }) { c ->
                     val p = c.peerUserId?.let { peers[it] }
                     val rel = overview?.relationships?.firstOrNull { it.subjectUserId != null && it.subjectUserId == c.peerUserId }
@@ -283,6 +289,7 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit) {
                         onLongClick = { optionsFor = c },
                     )
                 }
+
             }
         }
     }

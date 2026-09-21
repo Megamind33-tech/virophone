@@ -93,7 +93,7 @@ describe('Phase 0.5 Integration (PostgreSQL)', () => {
       return;
     }
 
-    app = await createTestApp();
+    app = await createTestApp({ manyOtpFixtures: true });
   });
 
   afterAll(async () => {
@@ -102,8 +102,7 @@ describe('Phase 0.5 Integration (PostgreSQL)', () => {
 
   const skipIfNoPg = () => {
     if (!pgAvailable) {
-      console.warn('SKIP: PostgreSQL unavailable');
-      return true;
+      throw new Error('PostgreSQL is required for this integration suite.');
     }
     return false;
   };

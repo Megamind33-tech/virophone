@@ -73,7 +73,7 @@ describe('Phase 0.6 Integration', () => {
 
     if (!pgAvailable || !redisAvailable) return;
     await resetDatabase();
-    app = await createTestApp();
+    app = await createTestApp({ manyOtpFixtures: true });
   });
 
   afterAll(async () => {
@@ -82,8 +82,7 @@ describe('Phase 0.6 Integration', () => {
 
   const skipIfUnavailable = () => {
     if (!pgAvailable || !redisAvailable) {
-      console.warn('Skipping: PostgreSQL or Redis unavailable');
-      return true;
+      throw new Error('PostgreSQL and Redis are required for this integration suite.');
     }
     return false;
   };
@@ -112,6 +111,14 @@ describe('Phase 0.6 Integration', () => {
     if (skipIfUnavailable()) return;
     const alice = await registerUser(app, '+260971100101');
     const bob = await registerUser(app, '+260971100102');
+
+    // Presence defaults to contacts only. Establish the authorized relationship
+    // before asserting that blocking removes previously visible presence.
+    await request(app.getHttpServer())
+      .post('/api/v1/contacts/discover')
+      .set('Authorization', `Bearer ${alice.accessToken}`)
+      .send({ phonesE164: ['+260971100102'] })
+      .expect(201);
 
     await request(app.getHttpServer())
       .post('/api/v1/presence')

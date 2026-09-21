@@ -128,9 +128,9 @@ describe('Conference (mesh) signaling end-to-end', () => {
     } catch {
       available = false;
     }
-    if (!available) return;
+    if (!available) throw new Error('PostgreSQL and Redis are required for this integration suite.');
     await resetDatabase();
-    app = await createTestApp();
+    app = await createTestApp({ manyOtpFixtures: true });
     await app.listen(0);
     port = (app.getHttpServer().address() as AddressInfo).port;
   });

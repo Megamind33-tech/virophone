@@ -4,11 +4,13 @@ import { Repository } from 'typeorm';
 import { Block } from '../database/entities/block.entity';
 import { ViroException } from '../common/exceptions/viro.exception';
 import { HttpStatus } from '@nestjs/common';
+import { RealtimeRegistry } from '../realtime/realtime.registry';
 
 @Injectable()
 export class BlocksService {
   constructor(
     @InjectRepository(Block) private readonly blockRepo: Repository<Block>,
+    private readonly realtime: RealtimeRegistry,
   ) {}
 
   async list(blockerId: string) {
@@ -25,6 +27,10 @@ export class BlocksService {
 
     const block = this.blockRepo.create({ blockerUserId: blockerId, blockedUserId });
     await this.blockRepo.save(block);
+    // Generic invalidation, whether either person has a Moment or not: no
+    // activity or identifier is disclosed to someone just blocked.
+    await Promise.allSettled([blockerId, blockedUserId].map(id =>
+      this.realtime.deliverToUser(id, { type: 'moment.updated', payload: {} })));
     return { success: true };
   }
 

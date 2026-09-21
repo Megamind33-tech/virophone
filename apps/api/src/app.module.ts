@@ -35,6 +35,7 @@ import { MediaModule } from './media/media.module';
 import { RelationshipsModule } from './relationships/relationships.module';
 import { E2eeModule } from './e2ee/e2ee.module';
 import { BackupModule } from './backup/backup.module';
+import { MomentsModule } from './moments/moments.module';
 
 @Module({
   imports: [
@@ -75,6 +76,7 @@ import { BackupModule } from './backup/backup.module';
     MessagesModule,
     E2eeModule,
     BackupModule,
+    MomentsModule,
     RelationshipsModule,
     ConferenceModule,
     MetricsModule,

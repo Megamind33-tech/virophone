@@ -1033,7 +1033,7 @@ fun ConsumerNav(
 
         floatingActionButton = {
 
-            if (tab == ViroConsumerTab.Home && overlay == ConsumerOverlay.None) {
+            if (tab == ViroConsumerTab.Calls && overlay == ConsumerOverlay.None) {
 
                 FloatingActionButton(
 
@@ -1077,72 +1077,19 @@ fun ConsumerNav(
 
             when (tab) {
 
-                ViroConsumerTab.Home -> HomeScreen(
-
+                ViroConsumerTab.Home -> MessagesInboxScreen(
                     session = session,
-
-                    onOpenDialer = { overlay = ConsumerOverlay.Dialer },
-
-                    onCallContact = ::callContact,
-
-                    onContactDetail = { contact ->
-
-                        selectedContact = contact
-
-                        overlay = ConsumerOverlay.ContactDetail
-
+                    onOpenChat = { route -> chatRoute = route; overlay = ConsumerOverlay.Chat },
+                    onCall = { peer, phone, name ->
+                        beginCall(CallPresentation(displayName = name, phoneE164 = phone))
+                        withMic { scope.launch { runCatching { session.placeOutgoingCall(phone, name, peer) } } }
                     },
-
-                    onViewCallLog = { log ->
-
-                        scope.launch {
-
-                            runCatching {
-                                session.contactsRepository.contactForCallLog(log.name, log.phoneE164)
-                            }.getOrNull()?.let { contact ->
-                                selectedContact = contact
-                                overlay = ConsumerOverlay.ContactDetail
-                            }
-
-                        }
-
+                    onOpenRelationship = { peer, phone, name ->
+                        relationshipTarget = Triple(peer, phone, name); overlay = ConsumerOverlay.Relationship
                     },
-
-                    onMessageCallLog = { log ->
-
-                        val phone = log.phoneE164
-                        if (phone == null && log.peerUserId == null) return@HomeScreen
-
-                        scope.launch {
-
-                            // Resolve the registered contact so the chat is sent via the
-                            // real message API (peerUserId != null). Leaving this null
-                            // silently routed the message through the call-signaling
-                            // channel instead, which drops it (no active call session).
-                            val resolvedUserId = log.peerUserId ?: phone?.let {
-                                runCatching {
-                                    session.contactsRepository.contactForCallLog(log.name, it)
-                                }.getOrNull()?.userId
-                            }
-
-                            chatRoute = ChatRoute(
-
-                                conversationId = null,
-
-                                peerName = log.name,
-
-                                peerUserId = resolvedUserId,
-
-                                peerPhoneE164 = phone,
-
-                            )
-
-                            overlay = ConsumerOverlay.Chat
-
-                        }
-
-                    },
-
+                    onSearch = { overlay = ConsumerOverlay.Search },
+                    onNewGroup = { overlay = ConsumerOverlay.NewGroup },
+                    showMoments = true,
                 )
 
                 ViroConsumerTab.Contacts -> ContactsScreen(

@@ -5,8 +5,6 @@
 import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { Client } from 'pg';
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import { AddressInfo } from 'net';
 import { WebSocket } from 'ws';
 import { createTestApp } from './test-app';
@@ -16,31 +14,8 @@ const DATABASE_URL =
   process.env.DATABASE_URL ||
   'postgresql://viro:viro_dev_password@localhost:5432/viro_reach';
 
-const MIGRATIONS = [
-  '001_initial_schema.sql',
-  '002_offline_trust.sql',
-  '003_push.sql',
-  '004_messaging.sql',
-  '005_email_identity.sql',
-  '006_admin_role.sql',
-];
-
-async function resetDatabase() {
-  const client = new Client({ connectionString: DATABASE_URL });
-  await client.connect();
-  await client.query('DROP SCHEMA public CASCADE');
-  await client.query('CREATE SCHEMA public');
-  await client.query('GRANT ALL ON SCHEMA public TO viro');
-  await client.query('GRANT ALL ON SCHEMA public TO public');
-  for (const file of MIGRATIONS) {
-    const sql = readFileSync(
-      join(__dirname, '../../src/database/migrations', file),
-      'utf-8',
-    );
-    await client.query(sql);
-  }
-  await client.end();
-}
+// Use the complete current schema, including Moments and encryption.
+import { resetDatabase } from './reset-db';
 
 async function registerUser(app: INestApplication, phone: string, key: string) {
   const otpRes = await request(app.getHttpServer())
@@ -80,7 +55,7 @@ describe('Messaging end-to-end', () => {
     } catch {
       available = false;
     }
-    if (!available) return;
+    if (!available) throw new Error('PostgreSQL and Redis are required for this integration suite.');
     await resetDatabase();
     app = await createTestApp();
     await app.listen(0);

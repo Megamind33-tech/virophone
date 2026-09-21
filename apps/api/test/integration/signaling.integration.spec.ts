@@ -173,8 +173,7 @@ describe('Call signaling end-to-end', () => {
 
   const skip = () => {
     if (!available) {
-      console.warn('Skipping: PostgreSQL or Redis unavailable');
-      return true;
+      throw new Error('PostgreSQL and Redis are required for this integration suite.');
     }
     return false;
   };

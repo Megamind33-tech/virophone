@@ -39,7 +39,7 @@ describe('Redis Integration', () => {
     } catch {
       redisAvailable = false;
     }
-    if (!redisAvailable) return;
+    if (!redisAvailable) throw new Error('Redis is required for this integration suite.');
 
     await resetDatabase();
     app = await createTestApp();

@@ -9,6 +9,7 @@ import { HttpStatus } from '@nestjs/common';
 import { PushService } from '../push/push.service';
 import { publicAvatarUrl } from '../users/avatar.util';
 import { VisibilityService } from '../users/visibility.service';
+import { RealtimeRegistry } from '../realtime/realtime.registry';
 
 
 /**
@@ -29,6 +30,7 @@ export class ConnectionsService {
     @InjectRepository(Profile) private readonly profileRepo: Repository<Profile>,
     private readonly pushService: PushService,
     private readonly visibility: VisibilityService,
+    private readonly realtime: RealtimeRegistry,
   ) {}
 
   async list(userId: string) {
@@ -124,6 +126,7 @@ export class ConnectionsService {
     connection.status = 'ACCEPTED';
     connection.acceptedAt = connection.acceptedAt ?? new Date();
     const saved = await this.connectionRepo.save(connection);
+    await this.refreshMoments(connection.requesterUserId, connection.recipientUserId);
     const [me, requester] = await Promise.all([
       this.profileRepo.findOne({ where: { userId } }),
       this.profileRepo.findOne({ where: { userId: connection.requesterUserId } }),
@@ -157,7 +160,13 @@ export class ConnectionsService {
       throw new ViroException('FORBIDDEN', 'Not authorized.', HttpStatus.FORBIDDEN);
     }
     connection.status = 'REVOKED';
-    return this.toDto(await this.connectionRepo.save(connection), userId);
+    const saved = await this.connectionRepo.save(connection);
+    await this.refreshMoments(connection.requesterUserId, connection.recipientUserId);
+    return this.toDto(saved, userId);
+  }
+
+  private async refreshMoments(...userIds: string[]) {
+    await Promise.allSettled(userIds.map(id => this.realtime.deliverToUser(id, { type: 'moment.updated', payload: {} })));
   }
 
   private async notify(userId: string, payload: { title: string; body: string; data: Record<string, string> }) {
