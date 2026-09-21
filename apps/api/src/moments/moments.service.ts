@@ -45,8 +45,11 @@ export class MomentsService {
       (SELECT count(*)::int FROM moment_participants mp WHERE mp.moment_id = m.id) AS participant_count,
       -- Reactions to the Moment itself, already ranked: the emoji most people
       -- chose first, so the client shows a leading reaction without counting.
+      -- A tie goes to the reaction that was there first, not to whichever emoji
+      -- happens to sort lower — that order changes with the database collation.
       (SELECT json_agg(t) FROM (SELECT mc.emoji, count(*)::int AS count FROM moment_cheers mc
-        WHERE mc.moment_id = m.id GROUP BY mc.emoji ORDER BY count(*) DESC, mc.emoji) t) AS cheers,
+        WHERE mc.moment_id = m.id GROUP BY mc.emoji
+        ORDER BY count(*) DESC, MIN(mc.created_at), mc.emoji) t) AS cheers,
       (SELECT mc.emoji FROM moment_cheers mc WHERE mc.moment_id = m.id AND mc.user_id = $1) AS my_cheer
       FROM moments m LEFT JOIN profiles p ON p.user_id = m.creator_user_id
       WHERE m.status = 'ACTIVE' AND m.expires_at > now() AND ${VISIBLE}
