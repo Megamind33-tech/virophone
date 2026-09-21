@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { RealtimeRegistry } from '../realtime/realtime.registry';
 import { PushService } from '../push/push.service';
@@ -13,14 +13,19 @@ import {
 import {
   kindOf, looksLike, MAX_AUDIO_BYTES, MAX_VIDEO_BYTES, MediaRange, UploadedMediaProvider,
 } from './moment-media.provider';
+import {
+  applyChoice, applyTimer, ChoiceChange, MomentChoice, MomentTimer, noChoice, noTimer, TimerChange, ToolError,
+  TouchKind, withoutPicksOf,
+} from './room-tools';
+
+import {
+  applyChange, initialState, intentForLegacyType, MomentIntent, MomentRuntimeState, RoomChange, RoomChangeError,
+} from './room-engine';
 
 /** An upload as multer leaves it on disk. */
 export interface IncomingMedia { path: string; size: number; mimetype: string; originalname?: string }
 /** How many things one Moment can hold at once. */
 const MAX_MEDIA_PER_MOMENT = 20;
-import {
-  applyChange, initialState, intentForLegacyType, MomentIntent, MomentRuntimeState, RoomChange, RoomChangeError,
-} from './room-engine';
 
 export const MOMENT_TYPES = ['FREE', 'BREAK', 'LISTENING', 'WATCHING', 'GAMING', 'WORKING', 'CUSTOM'];
 export const MOMENT_AUDIENCES = ['CONNECTIONS', 'CONTACTS'];
@@ -225,6 +230,7 @@ export class MomentsService {
     await this.announceRoom(id, 'moment.left', { momentId: id, userId });
     void this.livekit.removeFromRoom(this.livekit.roomNameForMoment(id), userId);
     await this.dropMediaOf(id, userId);
+    await this.dropPicksOf(id, userId);
     return { success: true };
   }
 
@@ -267,6 +273,8 @@ export class MomentsService {
       playback: await this.playback(id),
       serverNow: Date.now(),
       media: await this.mediaRows(id),
+      timer: await this.timer(id),
+      choice: await this.choice(id),
       participants: participants.map((p: any) => ({
         userId: p.user_id, displayName: p.display_name || 'Viro user', isHost: p.is_host,
         joinedAt: new Date(p.joined_at).toISOString(),
@@ -589,6 +597,7 @@ export class MomentsService {
         void this.livekit.removeFromRoom(this.livekit.roomNameForMoment(room.id), leaving);
         await this.announceRoom(room.id, 'moment.left', { momentId: room.id, userId: leaving });
         await this.dropMediaOf(room.id, leaving);
+        await this.dropPicksOf(room.id, leaving);
         // The person leaving is no longer in the room to hear it, so they are told directly.
         await this.realtime.deliverToUser(leaving, { type: 'moment.left', payload: { momentId: room.id, userId: leaving } });
       } catch (e) {
@@ -802,6 +811,85 @@ export class MomentsService {
     });
   }
 
+  // ------------------------------------------------------ doing things together
+
+  private timerKey(momentId: string) { return `moment:timer:${momentId}`; }
+  private choiceKey(momentId: string) { return `moment:choice:${momentId}`; }
+
+  async timer(momentId: string): Promise<MomentTimer> {
+    return (await this.redis.getJson<MomentTimer>(this.timerKey(momentId))) ?? noTimer(momentId);
+  }
+
+  async choice(momentId: string): Promise<MomentChoice> {
+    return (await this.redis.getJson<MomentChoice>(this.choiceKey(momentId))) ?? noChoice(momentId);
+  }
+
+  private async saveTool(moment: any, key: string, value: unknown) {
+    const ttl = Math.max(60, Math.ceil((new Date(moment.expires_at).getTime() - Date.now()) / 1000) + 600);
+    await this.redis.setJson(key, value, ttl);
+  }
+
+  /** The room's kitchen timer: anyone can start, pause, add to or cancel it. */
+  async changeTimer(userId: string, id: string, change: TimerChange) {
+    const moment = await this.liveMoment(userId, id);
+    if (!(await this.isParticipant(id, userId))) throw new ForbiddenException('Join this Moment first.');
+    return this.serialized(`timer:${id}`, async () => {
+      const now = Date.now();
+      let next: MomentTimer;
+      try { next = applyTimer(await this.timer(id), change, userId, now); }
+      catch (e) { if (e instanceof ToolError) throw new BadRequestException(e.message); throw e; }
+      await this.saveTool(moment, this.timerKey(id), next);
+      await this.announceRoom(id, 'moment.timer', { momentId: id, timer: next, serverNow: now });
+      return { timer: next, serverNow: now };
+    });
+  }
+
+  /** A question for the room: ask, answer, decide, clear. */
+  async changeChoice(userId: string, id: string, change: ChoiceChange) {
+    const moment = await this.liveMoment(userId, id);
+    if (!(await this.isParticipant(id, userId))) throw new ForbiddenException('Join this Moment first.');
+    return this.serialized(`choice:${id}`, async () => {
+      let next: MomentChoice;
+      try { next = applyChoice(await this.choice(id), change, userId); }
+      catch (e) { if (e instanceof ToolError) throw new BadRequestException(e.message); throw e; }
+      await this.saveTool(moment, this.choiceKey(id), next);
+      await this.announceRoom(id, 'moment.choice', { momentId: id, choice: next });
+      return { choice: next };
+    });
+  }
+
+  private async dropPicksOf(momentId: string, userId: string) {
+    const [moment] = await this.db.query(`SELECT * FROM moments WHERE id = $1`, [momentId]);
+    if (!moment) return;
+    await this.serialized(`choice:${momentId}`, async () => {
+      const next = withoutPicksOf(await this.choice(momentId), userId);
+      if (!next) return;
+      await this.saveTool(moment, this.choiceKey(momentId), next);
+      await this.announceRoom(momentId, 'moment.choice', { momentId, choice: next });
+    });
+  }
+
+  /**
+   * A heart, a hug, a wave, a tap — felt on the other phone, said with a name.
+   * Never stored. To everyone else here, or to one person here. A few a
+   * second is plenty; beyond that it would be a buzzer, not a touch.
+   */
+  async touch(userId: string, id: string, kind: TouchKind, to?: string) {
+    await this.liveMoment(userId, id);
+    if (!(await this.isParticipant(id, userId))) throw new ForbiddenException('Join this Moment first.');
+    if (to && (to === userId || !(await this.isParticipant(id, to)))) throw new BadRequestException("They aren't here.");
+    const client = this.redis.getClient();
+    const key = `moment:touch:${userId}`;
+    const count = await client.incr(key);
+    if (count === 1) await client.expire(key, 10);
+    if (count > 10) throw new HttpException('Slow down a little.', HttpStatus.TOO_MANY_REQUESTS);
+    const payload = { momentId: id, from: userId, fromName: await this.nameOf(userId), kind, to: to ?? null, at: Date.now() };
+    const rows = to ? [{ user_id: to }]
+      : await this.db.query(`SELECT user_id FROM moment_participants WHERE moment_id = $1 AND user_id <> $2`, [id, userId]);
+    await Promise.allSettled(rows.map((r: any) => this.realtime.deliverToUser(r.user_id, { type: 'moment.touch', payload })));
+    return { success: true };
+  }
+
   private async announceRoom(momentId: string, type: string, payload: Record<string, unknown>) {
     const rows = await this.db.query(`SELECT user_id FROM moment_participants WHERE moment_id = $1`, [momentId]);
     await Promise.allSettled(rows.map((r: any) => this.realtime.deliverToUser(r.user_id, { type, payload })));
@@ -836,6 +924,8 @@ export class MomentsService {
     // The shape of the room goes with it, so nothing can rebuild a closed room.
     await this.redis.del(this.runtimeKey(row.id));
     await this.redis.del(this.playbackKey(row.id));
+    await this.redis.del(this.timerKey(row.id));
+    await this.redis.del(this.choiceKey(row.id));
     void this.livekit.closeRoom(this.livekit.roomNameForMoment(row.id));
     // Everything shared into the Moment ends with it, files included.
     const shared = await this.db.query(`SELECT * FROM moment_media WHERE moment_id = $1`, [row.id]);

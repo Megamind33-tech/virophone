@@ -8,6 +8,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { MOMENT_AUDIENCES, MOMENT_REACTIONS, MOMENT_TYPES, MomentsService } from './moments.service';
 import { MOMENT_INTENTS, MOMENT_MODULES, MOMENT_SCENES, RoomChange } from './room-engine';
 import { PLAYBACK_OPS, PlaybackOp } from './playback';
+import { CHOICE_OPS, ChoiceOp, TIMER_OPS, TimerOp, TOUCH_KINDS, TouchKind } from './room-tools';
 import { MAX_VIDEO_BYTES, UploadedMediaProvider } from './moment-media.provider';
 
 class CreateMomentDto {
@@ -38,6 +39,22 @@ class PlaybackDto {
   @IsIn(PLAYBACK_OPS as unknown as string[]) op!: PlaybackOp;
   @IsOptional() @IsUUID() mediaId?: string;
   @IsOptional() @IsInt() @Min(0) positionMs?: number;
+}
+class TimerDto {
+  @IsIn(TIMER_OPS as unknown as string[]) op!: TimerOp;
+  @IsOptional() @IsInt() @Min(0) durationMs?: number;
+  @IsOptional() @IsInt() @Min(0) addMs?: number;
+  @IsOptional() @IsString() @MaxLength(40) label?: string;
+}
+class ChoiceDto {
+  @IsIn(CHOICE_OPS as unknown as string[]) op!: ChoiceOp;
+  @IsOptional() @IsString() @MaxLength(120) question?: string;
+  @IsOptional() @IsArray() @ArrayMaxSize(6) @IsString({ each: true }) @MaxLength(60, { each: true }) options?: string[];
+  @IsOptional() @IsString() @MaxLength(8) optionId?: string | null;
+}
+class TouchDto {
+  @IsIn(TOUCH_KINDS as unknown as string[]) kind!: TouchKind;
+  @IsOptional() @IsUUID() to?: string;
 }
 class ExtendMomentDto {
   @IsInt() @Min(1) @Max(60) minutes!: number;
@@ -132,6 +149,18 @@ export class MomentsController {
   /** Play, pause, seek — for everyone in the room. */
   @Post(':id/playback') @HttpCode(200) playback(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: PlaybackDto) {
     return this.moments.changePlayback(req.user.sub, id, { op: body.op, mediaId: body.mediaId, positionMs: body.positionMs });
+  }
+  /** The room's kitchen timer. */
+  @Post(':id/timer') @HttpCode(200) timer(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: TimerDto) {
+    return this.moments.changeTimer(req.user.sub, id, { op: body.op, durationMs: body.durationMs, addMs: body.addMs, label: body.label });
+  }
+  /** A question for everyone in the room. */
+  @Post(':id/choice') @HttpCode(200) choice(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: ChoiceDto) {
+    return this.moments.changeChoice(req.user.sub, id, { op: body.op, question: body.question, options: body.options, optionId: body.optionId });
+  }
+  /** A heart, a hug, a wave or a tap. */
+  @Post(':id/touch') @HttpCode(200) touch(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: TouchDto) {
+    return this.moments.touch(req.user.sub, id, body.kind, body.to);
   }
   /** Admission to the room's live faces and voices; turns nothing on by itself. */
   @Post(':id/presence') @HttpCode(200) presence(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) { return this.moments.presence(req.user.sub, id); }
