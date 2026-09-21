@@ -34,6 +34,7 @@ import { PreferencesModule } from './preferences/preferences.module';
 import { MediaModule } from './media/media.module';
 import { RelationshipsModule } from './relationships/relationships.module';
 import { E2eeModule } from './e2ee/e2ee.module';
+import { BackupModule } from './backup/backup.module';
 
 @Module({
   imports: [
@@ -73,6 +74,7 @@ import { E2eeModule } from './e2ee/e2ee.module';
     RealtimeModule,
     MessagesModule,
     E2eeModule,
+    BackupModule,
     RelationshipsModule,
     ConferenceModule,
     MetricsModule,
