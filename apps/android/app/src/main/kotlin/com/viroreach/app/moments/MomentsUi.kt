@@ -170,6 +170,9 @@ fun NowScreen(
                             } else {
                                 roomId = m.id
                             }
+                        },
+                        onReact = { emoji ->
+                            scope.launch { repo.cheer(m.id, emoji).onFailure { actionError = it.message } }
                         })
                 }
                 if (error != null) item(key = "error") {
@@ -204,8 +207,47 @@ fun NowScreen(
                             modifier = Modifier.padding(vertical = 8.dp))
                         Text("Open for ${remainingMinutes(moment.endsAt(), clock)} min", color = ViroColors.textMuted)
                         Spacer(Modifier.height(24.dp))
-                        Text("Visible to ${if (moment.visibility == "CONTACTS") "your contacts" else "your Viro connections"}",
-                            color = ViroColors.textMuted)
+                        // Changing the audience while the Moment is running.
+                        // Phase 1 and 2 fixed it at creation, which meant the
+                        // only way to narrow it was to end the Moment and
+                        // start another — losing the room and everyone in it.
+                        Text("Visible to", color = ViroColors.textMuted)
+                        Spacer(Modifier.height(8.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            for ((value, label) in listOf(
+                                "CONNECTIONS" to "Viro connections",
+                                "CONTACTS" to "My contacts",
+                            )) {
+                                val chosen = moment.visibility == value
+                                FilterChip(
+                                    selected = chosen,
+                                    enabled = !busy,
+                                    onClick = {
+                                        if (!chosen) {
+                                            busy = true
+                                            scope.launch {
+                                                repo.setVisibility(id, value)
+                                                    .onFailure { actionError = it.message }
+                                                busy = false
+                                            }
+                                        }
+                                    },
+                                    label = { Text(label) },
+                                )
+                            }
+                        }
+                        if (moment.visibilityChangedAt != null) {
+                            // Said plainly, because narrowing does not unsay
+                            // anything: whoever was in the room has already
+                            // read what was said while they were there.
+                            Text(
+                                "Changed while this Moment was running. People who can no longer " +
+                                    "see it lose it from Now, but they saw what was said while they were here.",
+                                color = ViroColors.textMuted,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 8.dp),
+                            )
+                        }
                         Spacer(Modifier.height(24.dp))
                         Button(enabled = !busy, onClick = { roomId = id; manage = null },
                             modifier = Modifier.fillMaxWidth()) { Text("Open room") }
@@ -236,23 +278,66 @@ fun NowScreen(
 /** One compact card, one primary action (§15): avatar, name, activity, time or
  *  participants, and nothing else — conversations and calls live elsewhere. */
 @Composable
-private fun NowCard(m: MomentDto, clock: Long, primaryLabel: String, onPrimary: () -> Unit) {
+private fun NowCard(
+    m: MomentDto,
+    clock: Long,
+    primaryLabel: String,
+    onPrimary: () -> Unit,
+    onReact: (String?) -> Unit = {},
+) {
     Surface(shape = RoundedCornerShape(12.dp), color = ViroColors.surface, modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.clickable(onClick = onPrimary).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            MomentAvatar(m)
-            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                Text(m.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    color = ViroColors.textPrimary, fontWeight = FontWeight.SemiBold)
-                Text(m.activity(), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    color = ViroColors.textMuted, style = MaterialTheme.typography.bodySmall)
-                val people = m.participantCount ?: 0
-                Text(if (people > 1) "$people people" else "${remainingMinutes(m.endsAt(), clock)} min",
-                    color = ViroColors.textMuted, style = MaterialTheme.typography.labelSmall)
+        Column {
+            Row(Modifier.clickable(onClick = onPrimary).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                MomentAvatar(m)
+                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                    Text(m.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        color = ViroColors.textPrimary, fontWeight = FontWeight.SemiBold)
+                    Text(m.activity(), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        color = ViroColors.textMuted, style = MaterialTheme.typography.bodySmall)
+                    val people = m.participantCount ?: 0
+                    Text(if (people > 1) "$people people" else "${remainingMinutes(m.endsAt(), clock)} min",
+                        color = ViroColors.textMuted, style = MaterialTheme.typography.labelSmall)
+                }
+                Text(primaryLabel, color = ViroColors.BlueAccent, style = MaterialTheme.typography.labelLarge)
             }
-            Text(primaryLabel, color = ViroColors.BlueAccent, style = MaterialTheme.typography.labelLarge)
+            MomentReactionRow(m, onReact)
         }
     }
 }
+
+/**
+ * Reacting to the Moment itself — the small thing to do when joining is the
+ * big one. Someone posts that they are free and nobody wants a room yet;
+ * without this there is no way to say "I saw that" at all.
+ *
+ * Counts sit next to the emoji that have any, ranked by the server with the
+ * most-chosen first, and tapping your own takes it back.
+ */
+@Composable
+private fun MomentReactionRow(m: MomentDto, onReact: (String?) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (emoji in momentReactions) {
+            val count = m.reactions.firstOrNull { it.emoji == emoji }?.count ?: 0
+            val mine = m.myReaction == emoji
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = if (mine) ViroColors.BlueAccent.copy(alpha = 0.18f) else ViroColors.surfaceRaised,
+                modifier = Modifier.padding(end = 6.dp).clickable { onReact(if (mine) null else emoji) },
+            ) {
+                Text(
+                    if (count > 0) "$emoji $count" else emoji,
+                    color = if (mine) ViroColors.BlueAccent else ViroColors.textMuted,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+        }
+    }
+}
+
 
 /** The room attached to a Moment: header (who, what, how long, how many),
  *  Chat | People, and nothing the temporary interaction doesn't need (§6). */
@@ -268,6 +353,7 @@ fun MomentRoomScreen(
     val participants by room.participants.collectAsState()
     val messages by room.messages.collectAsState()
     val closed by room.closed.collectAsState()
+    val encrypted by room.encrypted.collectAsState()
     val error by room.error.collectAsState()
     val scope = rememberCoroutineScope()
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -309,7 +395,12 @@ fun MomentRoomScreen(
                     Column(Modifier.weight(1f)) {
                         Text(moment?.displayName ?: "Moment", color = ViroColors.textPrimary,
                             style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(moment?.let { "${it.activity()} · ${remainingMinutes(it.endsAt(), clock)} min" } ?: "…",
+                        // The lock is claimed only once something has
+                        // actually been sealed in this room — a promise that
+                        // appears before it is true is worse than none.
+                        Text(
+                            (if (encrypted) "🔒 " else "") +
+                                (moment?.let { "${it.activity()} · ${remainingMinutes(it.endsAt(), clock)} min" } ?: "…"),
                             color = ViroColors.textMuted, style = MaterialTheme.typography.bodySmall,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
@@ -421,7 +512,10 @@ private fun MessageBubble(message: MomentMessageDto, mine: Boolean, onReact: () 
         Surface(shape = RoundedCornerShape(12.dp),
             color = if (mine) ViroColors.BlueAccent else ViroColors.surfaceRaised,
             modifier = Modifier.combinedClickable(onClick = {}, onLongClick = onReact)) {
-            Text(message.body, color = if (mine) ViroColors.NavyBackground else ViroColors.textPrimary,
+            // A sealed message this device could not open still has its place
+            // in the room; the placeholder says so rather than showing a blank.
+            Text(message.body ?: SEALED_UNREADABLE,
+                color = if (mine) ViroColors.NavyBackground else ViroColors.textPrimary,
                 style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(10.dp))
         }
         if (message.reactions.isNotEmpty()) {

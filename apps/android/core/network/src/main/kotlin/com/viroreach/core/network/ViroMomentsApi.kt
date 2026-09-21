@@ -9,22 +9,45 @@ data class MomentDto(
     val visibility: String, val displayName: String, val avatarUrl: String?,
     val createdAt: String, val expiresAt: String, val allowVoice: Boolean,
     val participantCount: Int? = 0,
+    /** Reactions to the Moment itself, most-chosen first. */
+    val reactions: List<MomentCheerDto> = emptyList(),
+    val reactionCount: Int = 0,
+    /** What this viewer chose, so the button reads as already pressed. */
+    val myReaction: String? = null,
+    val visibilityChangedAt: String? = null,
 )
+data class MomentCheerDto(val emoji: String, val count: Int)
 data class MomentsNowDto(val serverTime: String, val moments: List<MomentDto>)
 data class CreateMomentBody(val type: String, val text: String?, val visibility: String, val durationMinutes: Int)
 data class ExtendMomentBody(val minutes: Int)
 
 data class MomentParticipantDto(val userId: String, val displayName: String, val isHost: Boolean, val joinedAt: String)
 data class MomentReactionDto(val emoji: String, val userIds: List<String>)
+/**
+ * A message in a Moment room.
+ *
+ * Either [body] is readable or [sealed] is true and [envelope] holds this
+ * device's own copy — never both. A sealed message is opened on arrival and
+ * the result put back into [body], so nothing above this layer has to know
+ * which kind it was.
+ */
 data class MomentMessageDto(
     val id: String, val momentId: String, val senderUserId: String, val senderName: String,
-    val body: String, val createdAt: String, val reactions: List<MomentReactionDto> = emptyList(),
+    val body: String?, val createdAt: String, val reactions: List<MomentReactionDto> = emptyList(),
+    val sealed: Boolean = false,
+    val senderDeviceId: String? = null,
+    val envelope: MomentEnvelopeDto? = null,
 )
+/** One sealed copy of a room message, addressed to one device. */
+data class MomentEnvelopeDto(val ciphertext: String, val type: Int = 1)
+data class MomentEnvelopeBody(val deviceId: String, val ciphertext: String, val type: Int)
 data class MomentRoomDto(
     val moment: MomentDto, val serverTime: String,
     val participants: List<MomentParticipantDto>, val messages: List<MomentMessageDto>,
 )
-data class SendMomentMessageBody(val body: String)
+/** Whichever the sender could manage: readable text, or one copy per device. */
+data class SendMomentMessageBody(val body: String? = null, val envelopes: List<MomentEnvelopeBody>? = null)
+data class MomentVisibilityBody(val visibility: String)
 data class MomentReactBody(val emoji: String?)
 data class KnockDto(val knockerUserId: String, val knockerName: String, val createdAt: String)
 data class KnocksDto(val knocks: List<KnockDto>)
@@ -41,6 +64,9 @@ interface ViroMomentsApi {
     @POST("api/v1/moments") suspend fun create(@Body body: CreateMomentBody): MomentDto
     @POST("api/v1/moments/{id}/extend") suspend fun extend(@Path("id") id: String, @Body body: ExtendMomentBody): MomentDto
     @DELETE("api/v1/moments/{id}") suspend fun end(@Path("id") id: String)
+    @PATCH("api/v1/moments/{id}/visibility") suspend fun setVisibility(@Path("id") id: String, @Body body: MomentVisibilityBody): MomentDto
+    /** A reaction to the Moment itself — no need to be in its room. */
+    @POST("api/v1/moments/{id}/react") suspend fun cheer(@Path("id") id: String, @Body body: MomentReactBody): MomentDto
 
     @POST("api/v1/moments/{id}/join") suspend fun join(@Path("id") id: String): MomentRoomDto
     @POST("api/v1/moments/{id}/leave") suspend fun leave(@Path("id") id: String)

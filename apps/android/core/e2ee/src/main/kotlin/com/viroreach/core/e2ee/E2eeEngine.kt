@@ -69,9 +69,17 @@ class E2eeEngine(
             runCatching {
                 val existing = dao.ownIdentity()
                 if (existing != null && existing.userId == userId && existing.deviceId == deviceId) {
-                    rotateIfStale(existing)
+                    // Registered here, but the directory may never have heard
+                    // of it: keys are generated locally and uploaded second,
+                    // and the upload can fail. A device the directory does not
+                    // know cannot be sealed to, and nothing would ever ask
+                    // again — so ask again here, with the keys it already has
+                    // rather than a new identity, which would set off the
+                    // safety-number warning on every phone it talks to.
+                    val ready = if (existing.publishedAt == 0L) republish(existing) else existing
+                    rotateIfStale(ready)
                     topUpIfLowInternal()
-                    return@runCatching true
+                    return@runCatching ready.publishedAt != 0L
                 }
                 if (existing != null) wipeInternal()
                 register(userId, deviceId)
@@ -83,8 +91,15 @@ class E2eeEngine(
         }
     }
 
-    /** True when this device can send and receive encrypted messages. */
-    suspend fun isRegistered(): Boolean = withContext(Dispatchers.IO) { dao.ownIdentity() != null }
+    /**
+     * True when this device can send and receive encrypted messages.
+     *
+     * Holding keys is not enough — the other side has to be able to fetch a
+     * bundle for this device, which it can only do once the directory has one.
+     */
+    suspend fun isRegistered(): Boolean = withContext(Dispatchers.IO) {
+        dao.ownIdentity()?.publishedAt?.let { it != 0L } == true
+    }
 
     /** This device's id, as other people's envelopes address it. */
     suspend fun myDeviceId(): String? = withContext(Dispatchers.IO) { dao.ownIdentity()?.deviceId }
@@ -98,19 +113,21 @@ class E2eeEngine(
         val kyber = newKyberPreKey(identity, 1, now)
         val oneTime = (1..PREKEY_BATCH).map { id -> PreKeyRecord(id, Curve.generateKeyPair()) }
 
-        dao.saveOwnIdentity(
-            OwnIdentityEntity(
-                userId = userId,
-                deviceId = deviceId,
-                registrationId = registrationId,
-                identityKeyPair = identity.serialize(),
-                createdAt = now,
-                nextPreKeyId = PREKEY_BATCH + 1,
-                nextSignedPreKeyId = 2,
-                nextKyberPreKeyId = 2,
-                signedPrekeyRotatedAt = now,
-            ),
+        val own = OwnIdentityEntity(
+            userId = userId,
+            deviceId = deviceId,
+            registrationId = registrationId,
+            identityKeyPair = identity.serialize(),
+            createdAt = now,
+            nextPreKeyId = PREKEY_BATCH + 1,
+            nextSignedPreKeyId = 2,
+            nextKyberPreKeyId = 2,
+            signedPrekeyRotatedAt = now,
+            // Not published yet, and said so on disk: if the upload below
+            // never lands, the next launch retries instead of assuming it did.
+            publishedAt = 0L,
         )
+        dao.saveOwnIdentity(own)
         dao.saveSignedPreKey(SignedPreKeyEntity(signed.id, signed.serialize()))
         dao.saveKyberPreKey(KyberPreKeyEntity(kyber.id, kyber.serialize()))
         oneTime.forEach { dao.savePreKey(PreKeyEntity(it.id, it.serialize())) }
@@ -124,6 +141,41 @@ class E2eeEngine(
                 oneTimePreKeys = oneTime.map { OneTimePrekeyBody(it.id, it.keyPair.publicKey.serialize().b64()) },
             ),
         )
+        dao.saveOwnIdentity(own.copy(publishedAt = System.currentTimeMillis()))
+    }
+
+    /**
+     * Uploads the keys this device already holds, for a registration whose
+     * first upload never arrived.
+     *
+     * The identity, signed and Kyber prekeys are the stored ones, not new
+     * ones: a fresh identity key would show up on every contact's phone as a
+     * safety-number change, which is a warning about an attack and must not be
+     * spent on our own retry. Returns the row as it now stands, so a failure
+     * here leaves publishedAt at 0 and the next launch tries again.
+     */
+    private suspend fun republish(own: OwnIdentityEntity): OwnIdentityEntity {
+        val identity = IdentityKeyPair(own.identityKeyPair)
+        val signed = dao.signedPreKey(own.nextSignedPreKeyId - 1)?.let { SignedPreKeyRecord(it.record) }
+            ?: dao.signedPreKeys().lastOrNull()?.let { SignedPreKeyRecord(it.record) }
+            ?: return own
+        val kyber = dao.kyberPreKey(own.nextKyberPreKeyId - 1)?.let { KyberPreKeyRecord(it.record) }
+            ?: dao.kyberPreKeys().lastOrNull()?.let { KyberPreKeyRecord(it.record) }
+            ?: return own
+        val oneTime = dao.preKeys(PREKEY_BATCH).map { PreKeyRecord(it.record) }
+        api.publish(
+            KeyBundleBody(
+                registrationId = own.registrationId,
+                identityKey = identity.publicKey.serialize().b64(),
+                signedPreKey = PublicKeyBody(signed.id, signed.keyPair.publicKey.serialize().b64(), signed.signature.b64()),
+                kyberPreKey = PublicKeyBody(kyber.id, kyber.keyPair.publicKey.serialize().b64(), kyber.signature.b64()),
+                oneTimePreKeys = oneTime.map { OneTimePrekeyBody(it.id, it.keyPair.publicKey.serialize().b64()) },
+            ),
+        )
+        Log.i(TAG, "published this device's keys on a retry")
+        val updated = own.copy(publishedAt = System.currentTimeMillis())
+        dao.saveOwnIdentity(updated)
+        return updated
     }
 
     private fun newSignedPreKey(identity: IdentityKeyPair, id: Int, now: Long): SignedPreKeyRecord {

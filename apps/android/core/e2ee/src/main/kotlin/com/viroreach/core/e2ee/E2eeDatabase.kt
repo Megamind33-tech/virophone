@@ -10,6 +10,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
  * Where this phone's encryption keys live.
@@ -41,6 +43,17 @@ data class OwnIdentityEntity(
     val nextKyberPreKeyId: Int,
     /** When the published signed/Kyber prekeys were last replaced. */
     val signedPrekeyRotatedAt: Long,
+    /**
+     * When the server last accepted this device's public keys — 0 when it
+     * never has.
+     *
+     * Generating keys and publishing them are two steps and only the first is
+     * local. If the upload failed, the phone still looked registered to itself
+     * while being absent from the directory: nobody could seal a message to
+     * it, so every chat it was in stayed in the clear, silently and for good.
+     * This is what lets a later launch notice and retry.
+     */
+    val publishedAt: Long = 0L,
 ) {
     // Room warns about arrays in data classes; identity is the row id, not the bytes.
     override fun equals(other: Any?): Boolean = other is OwnIdentityEntity && other.id == id
@@ -148,6 +161,10 @@ interface E2eeDao {
     @Query("SELECT * FROM prekeys WHERE keyId = :keyId")
     fun preKey(keyId: Int): PreKeyEntity?
 
+    /** The lowest-numbered prekeys still held, for re-publishing after a failed upload. */
+    @Query("SELECT * FROM prekeys ORDER BY keyId LIMIT :limit")
+    fun preKeys(limit: Int): List<PreKeyEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun savePreKey(row: PreKeyEntity)
 
@@ -219,7 +236,7 @@ interface E2eeDao {
         RemoteIdentityEntity::class,
         SenderKeyEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class E2eeDatabase : RoomDatabase() {
@@ -227,6 +244,17 @@ abstract class E2eeDatabase : RoomDatabase() {
 
     companion object {
         @Volatile private var instance: E2eeDatabase? = null
+
+        /**
+         * Adds publishedAt. Every existing install gets 0, which is the honest
+         * answer: this database cannot know whether the upload that came with
+         * its registration ever reached the server, so the next launch asks.
+         */
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE own_identity ADD COLUMN publishedAt INTEGER NOT NULL DEFAULT 0")
+            }
+        }
 
         fun get(context: Context): E2eeDatabase =
             instance ?: synchronized(this) {
@@ -237,6 +265,7 @@ abstract class E2eeDatabase : RoomDatabase() {
                 )
                     // Deliberately no destructive fallback: see the note at the
                     // top of this file. Losing this file loses the chats.
+                    .addMigrations(MIGRATION_1_2)
                     .build()
                     .also { instance = it }
             }

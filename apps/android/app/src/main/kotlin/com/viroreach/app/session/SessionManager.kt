@@ -66,9 +66,37 @@ class SessionManager private constructor(context: Context) {
     val relationships: RelationshipRepository = RelationshipRepository(appContext, messagingApi)
     val moments = com.viroreach.app.moments.MomentsRepository(viroApiClient.moments) { tokenStore.getUserId() }
 
+    /**
+     * The room's end of encryption: the same engine ordinary chats use, so a
+     * session started to say something in a Moment is the session a later
+     * private message rides on, and the safety number means one thing.
+     */
+    private val roomCrypto = object : com.viroreach.app.moments.RoomCrypto {
+        override suspend fun canSealFor(userIds: List<String>): Boolean =
+            messaging.e2ee.isRegistered() && messaging.e2ee.everyoneCanReceive(userIds)
+
+        override suspend fun seal(
+            recipients: List<String>,
+            plaintext: String,
+        ): List<com.viroreach.core.network.MomentEnvelopeBody> {
+            val me = tokenStore.getUserId() ?: return emptyList()
+            return messaging.e2ee.seal(me, recipients, plaintext)
+                .map { com.viroreach.core.network.MomentEnvelopeBody(it.deviceId, it.ciphertext, it.type) }
+        }
+
+        override suspend fun open(
+            senderUserId: String,
+            senderDeviceId: String,
+            ciphertext: String,
+            type: Int,
+        ): String? = messaging.e2ee.open(senderUserId, senderDeviceId, ciphertext, type)
+    }
+
     /** State for one open Moment Room; short-lived like the room itself. */
     fun openMomentRoom(momentId: String): com.viroreach.app.moments.MomentRoomState =
-        com.viroreach.app.moments.MomentRoomState(viroApiClient.moments, momentId) { tokenStore.getUserId() }
+        com.viroreach.app.moments.MomentRoomState(viroApiClient.moments, momentId, roomCrypto) {
+            tokenStore.getUserId()
+        }
 
     /**
      * The encrypted backup of this phone's chats. Without it, an encrypted
@@ -197,8 +225,16 @@ class SessionManager private constructor(context: Context) {
      * Messaging runs for the life of the process, not of a screen: frames are
      * applied and notifications raised whether or not a chat is open.
      */
+    private var messagingStarted = false
+
     private fun startMessaging() {
+        // Called again at sign-in, because the process-start call had no user
+        // to start a session for. messaging.start() knows to redo only the
+        // session-scoped half; the notification collector below must not be
+        // duplicated, or every message would arrive twice.
         messaging.start()
+        if (messagingStarted) return
+        messagingStarted = true
         runCatching { ReminderScheduler.start(appContext) }
         // A backup nobody remembers to run is not a backup.
         runCatching { com.viroreach.app.messaging.BackupWorker.schedule(appContext) }
@@ -324,6 +360,14 @@ class SessionManager private constructor(context: Context) {
      */
     suspend fun onAuthenticationSuccess(normalizedPhoneE164: String?) {
         normalizedPhoneE164?.let { testIdentityStore.savePhoneE164(it) }
+        // Messaging was started when the process was — which, for anyone
+        // signing in rather than being restored, was before there was a user
+        // to start it for. Its session-scoped work (the first sync, the
+        // feature flags, and registering this device's encryption keys with
+        // the directory) has to run now, or this device would publish no keys
+        // at all and nobody could send it an encrypted message until the app
+        // was killed and reopened. The collectors inside it start only once.
+        startMessaging()
         connectSignalingAuto()
         // The heavy loading happens in warmUpForSession(), behind the preparing
         // screen, so nothing here races the first paint.

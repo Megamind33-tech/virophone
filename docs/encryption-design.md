@@ -2,10 +2,28 @@
 
 Status: Stages 0 to 3 are built. One-to-one chats encrypt end to end in
 production from 2026-09-21 (`E2EE_ENABLED=true`): text, files, voice notes,
-photos, polls, places and edits. Groups and the web companion are not
-encrypted yet, and nothing in the app claims they are. Sections 8, 9 and 10
-record what each stage actually does; sections 1 to 7 are the original design
-note, kept because the trade-offs in it are the ones that were taken.
+photos, polls, places and edits. Groups, reactions and Loop answers are sealed
+too (§11), and from Phase 3 so is the chat inside a Moment room. The web
+companion is not encrypted, and nothing in the app claims it is. Sections 8, 9
+and 10 record what each stage actually does; sections 1 to 7 are the original
+design note, kept because the trade-offs in it are the ones that were taken.
+
+Two things had to be fixed before any of that was true on real phones, both on
+2026-09-21:
+
+- A device generated its keys locally and published them to the directory as a
+  second step. If that upload failed, nothing ever tried again: the phone
+  looked registered to itself while being absent from the directory, so nobody
+  could seal a message to it and every chat it was in stayed in the clear,
+  permanently and silently. `own_identity.publishedAt` now records whether the
+  directory ever accepted the keys, and a launch that finds a 0 there
+  re-publishes the keys the device already holds — not new ones, which would
+  raise a safety-number warning on every contact's phone.
+- Key registration ran once, when the process started — which for anyone
+  signing in rather than being restored was before there was an account to
+  register for. Only devices that happened to start already signed in ever
+  published anything; in production that was 3 devices out of 57, and not one
+  message had ever been sealed. Registration now also runs at sign-in.
 
 Today Viro encrypts traffic in transit (HTTPS/WSS) and calls are peer-to-peer
 media, but **messages are stored readable on the server**: `messages.body` and
@@ -338,3 +356,41 @@ which was the alternative in section 6. That is deliberate: the rule is about
 fairness, not confidentiality, and moving it onto the phones would not make the
 answers any more private than they now are — it would only mean two clients
 arguing about who answered first.
+
+## 12. Phase 3: the room around a Moment
+
+A Moment room was the one place in Viro where several people talk at once and
+the server could read all of it. Phase 2 stored `moment_messages.body` in the
+clear; Phase 3 seals it.
+
+A room has no group key of its own, and deliberately so. It lives for at most
+two hours, people arrive and leave while it is running, and it is deleted
+whole when the Moment ends — a ratcheting group key would have to be rekeyed
+on every join and would outlive the thing it protects. So a room message is
+sealed once per device, exactly as a one-to-one message is, into
+`moment_message_envelopes`. The sessions it uses are the ordinary ones: saying
+something in a Moment and sending a private message later ride the same
+session, and the safety number means one thing.
+
+`moment_messages.body` is now nullable and a message has either a body the
+server can read or envelopes and no body — never both. The room falls back to
+the clear when anyone in it has no keys, on the same rule as a group: half a
+room is not a room. The lock in the room's header appears only once something
+has actually been sealed there.
+
+Two things a room cannot do, both consequences of the design rather than
+oversights:
+
+- **No backlog for a late arrival.** A message sealed before a device was in
+  the room was never addressed to it, and nothing can address it afterwards
+  without the server holding a key. Those messages are not shown to that
+  device at all rather than shown as an unreadable placeholder.
+- **Reactions on room messages stay readable.** A reaction is `(message, user,
+  emoji)` in `moment_reactions`, which the server aggregates for everyone in
+  the room. Sealing it the way chat reactions are sealed is the same work
+  again and is not done here; the emoji someone chose on a room message is
+  visible to the server, and nothing in the app says otherwise.
+
+Reactions to the *Moment* (`moment_cheers`) are plain by design: they are a
+count shown to everyone who can see the Moment, so there is nobody to hide
+them from.

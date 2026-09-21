@@ -63,12 +63,32 @@ class MomentsRepositoryTest {
             if (failRooms) throw retrofit2.HttpException(retrofit2.Response.error<Any?>(404, okhttp3.ResponseBody.create(null, "")))
             return roomSnapshot.copy(messages = roomSnapshot.messages + sent)
         }
+        /** What the last send actually put on the wire, sealed or not. */
+        var lastSend: SendMomentMessageBody? = null
         override suspend fun sendMessage(id: String, body: SendMomentMessageBody): MomentMessageDto {
-            val m = MomentMessageDto("sent-${sent.size}", id, "bob", "Bob", body.body, Instant.now().toString())
+            lastSend = body
+            // A sealed message comes back with no body, exactly as the server
+            // returns it: it has none to return.
+            val m = MomentMessageDto(
+                "sent-${sent.size}", id, "bob", "Bob", body.body, Instant.now().toString(),
+                sealed = body.envelopes != null,
+                senderDeviceId = if (body.envelopes != null) "bob-device" else null,
+            )
             sent.add(m)
             return m
         }
         override suspend fun react(id: String, messageId: String, body: MomentReactBody) {}
+        var cheers = mutableListOf<Pair<String, String?>>()
+        override suspend fun cheer(id: String, body: MomentReactBody): MomentDto {
+            cheers.add(id to body.emoji)
+            return list.first { it.id == id }
+        }
+        var visibilities = mutableListOf<Pair<String, String>>()
+        override suspend fun setVisibility(id: String, body: MomentVisibilityBody): MomentDto {
+            visibilities.add(id to body.visibility)
+            list = list.map { if (it.id == id) it.copy(visibility = body.visibility) else it }
+            return list.first { it.id == id }
+        }
         override suspend fun knock(id: String) { knocksSent++ }
         override suspend fun knocks(id: String) = KnocksDto(emptyList())
         override suspend fun respondToKnock(id: String, knockerId: String, body: KnockResponseBody) {
@@ -198,5 +218,89 @@ class MomentsRepositoryTest {
         assertEquals(listOf("carol"), api.invited)
         assertTrue(repo.respondToKnock("moment", "bob", true).isSuccess)
         assertEquals(listOf("bob" to true), api.knockResponses)
+    }
+/**
+     * A fake that seals by wrapping, so the test can tell sealed from plain
+     * without libsignal — what matters here is which path the room took, not
+     * the cryptography, which is E2eeEngine's own concern.
+     */
+    private class FakeCrypto(private val canSeal: Boolean) : RoomCrypto {
+        var sealedFor: List<String> = emptyList()
+        override suspend fun canSealFor(userIds: List<String>) = canSeal
+        override suspend fun seal(recipients: List<String>, plaintext: String): List<MomentEnvelopeBody> {
+            sealedFor = recipients
+            return recipients.map { MomentEnvelopeBody("device-$it", "sealed:$plaintext", 3) }
+        }
+        override suspend fun open(
+            senderUserId: String,
+            senderDeviceId: String,
+            ciphertext: String,
+            type: Int,
+        ) = ciphertext.removePrefix("sealed:")
+    }
+
+    @Test fun `seals a room message for everyone else in the room`() = runTest {
+        val api = Api(listOf(moment()))
+        api.roomSnapshot = room(messages = emptyList())
+        val crypto = FakeCrypto(canSeal = true)
+        val state = MomentRoomState(api, "moment", crypto) { "bob" }
+        state.enter()
+        state.send("hello")
+        assertNull("a sealed message must not carry a readable body", api.lastSend?.body)
+        assertEquals(listOf("alice"), crypto.sealedFor)
+        assertEquals(listOf("sealed:hello"), api.lastSend?.envelopes?.map { it.ciphertext })
+        // The sender sees what they said, though the server sent nothing back.
+        assertEquals("hello", state.messages.value.last().body)
+        assertTrue(state.encrypted.value)
+    }
+
+    @Test fun `sends in the clear when someone in the room has no keys`() = runTest {
+        val api = Api(listOf(moment()))
+        api.roomSnapshot = room(messages = emptyList())
+        val state = MomentRoomState(api, "moment", FakeCrypto(canSeal = false)) { "bob" }
+        state.enter()
+        state.send("hello")
+        assertEquals("hello", api.lastSend?.body)
+        assertNull(api.lastSend?.envelopes)
+        assertFalse(state.encrypted.value)
+    }
+
+    @Test fun `opens a sealed message that arrives on the socket`() = runTest {
+        val api = Api(listOf(moment()))
+        api.roomSnapshot = room(messages = emptyList())
+        val state = MomentRoomState(api, "moment", FakeCrypto(canSeal = true)) { "bob" }
+        state.enter()
+        state.onFrame("moment.message", mapOf(
+            "momentId" to "moment",
+            "message" to mapOf(
+                "id" to "incoming", "momentId" to "moment", "senderUserId" to "alice",
+                "senderName" to "Alice", "body" to null, "sealed" to true,
+                "senderDeviceId" to "alice-device", "createdAt" to Instant.now().toString(),
+                "envelope" to mapOf("ciphertext" to "sealed:hi there", "type" to 3),
+            ),
+        ))
+        assertEquals("hi there", state.messages.value.single { it.id == "incoming" }.body)
+    }
+
+    @Test fun `a sealed message this device cannot open keeps its place`() = runTest {
+        val api = Api(listOf(moment()))
+        api.roomSnapshot = room(messages = listOf(MomentMessageDto(
+            "old", "moment", "alice", "Alice", null, Instant.now().toString(),
+            sealed = true, senderDeviceId = null, envelope = null,
+        )))
+        val state = MomentRoomState(api, "moment", FakeCrypto(canSeal = true)) { "bob" }
+        state.enter()
+        assertEquals(SEALED_UNREADABLE, state.messages.value.single { it.id == "old" }.body)
+    }
+
+    @Test fun `reacting to a Moment and changing its audience reach the server`() = runTest {
+        val api = Api(listOf(moment()))
+        val repo = MomentsRepository(api) { "bob" }
+        repo.cheer("moment", "🔥")
+        repo.cheer("moment", null)
+        assertEquals(listOf("moment" to "🔥", "moment" to null), api.cheers)
+        repo.setVisibility("moment", "CONTACTS")
+        assertEquals(listOf("moment" to "CONTACTS"), api.visibilities)
+        assertEquals("CONTACTS", repo.moments.value.single().visibility)
     }
 }

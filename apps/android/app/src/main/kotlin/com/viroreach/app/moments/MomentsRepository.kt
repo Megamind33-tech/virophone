@@ -28,6 +28,24 @@ typealias MomentFrame = Pair<String, Map<String, Any?>>
 
 private fun str(map: Map<String, Any?>?, key: String): String? = (map?.get(key) as? String)
 
+/**
+ * The encryption a Moment room needs, kept to three calls so the room can be
+ * tested on the JVM without libsignal or an Android context behind it.
+ *
+ * The implementation is the same engine ordinary chats use — a room has no
+ * group key of its own, because it lives for at most two hours and people
+ * arrive and leave while it is running, so every message is sealed once per
+ * device exactly as a one-to-one message is.
+ */
+interface RoomCrypto {
+    /** Whether every one of these people has at least one device with keys. */
+    suspend fun canSealFor(userIds: List<String>): Boolean
+    /** One sealed copy per device of [recipients], plus my own other devices. */
+    suspend fun seal(recipients: List<String>, plaintext: String): List<MomentEnvelopeBody>
+    /** Opens one copy. Null when this device cannot: opened already, or never addressed. */
+    suspend fun open(senderUserId: String, senderDeviceId: String, ciphertext: String, type: Int): String?
+}
+
 /** Process/session cache: tab switches never blank it; activity is not left on
  * disk after logout. The existing websocket only invalidates; HTTP authorizes. */
 class MomentsRepository(private val api: ViroMomentsApi, private val userId: () -> String?) {
@@ -89,7 +107,7 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
                 refresh()
                 if (type != "moment.created" && type != "moment.updated") refreshInvitations()
             }
-            "moment.joined", "moment.left" -> refresh()
+            "moment.joined", "moment.left", "moment.cheer", "moment.audience" -> refresh()
             else -> {}
         }
     }
@@ -104,6 +122,12 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
         _moments.value = _moments.value.filter { it.id != id }
     }) { api.end(id) }
     suspend fun verify(id: String): Result<MomentDto> = action { api.get(id) }
+    /** A reaction to the Moment itself; null clears the one this person left. */
+    suspend fun cheer(id: String, emoji: String?): Result<MomentDto> =
+        action(onSuccess = ::cache) { api.cheer(id, MomentReactBody(emoji)) }
+    /** The host changing who can see a Moment that is already running. */
+    suspend fun setVisibility(id: String, visibility: String): Result<MomentDto> =
+        action(onSuccess = ::cache) { api.setVisibility(id, MomentVisibilityBody(visibility)) }
     suspend fun knock(id: String): Result<Unit> = action { api.knock(id) }
     suspend fun invite(momentId: String, userId: String): Result<Unit> =
         runCatching { api.invite(momentId, InviteBody(userId)) }
@@ -141,6 +165,7 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
 class MomentRoomState(
     private val api: ViroMomentsApi,
     val momentId: String,
+    private val crypto: RoomCrypto? = null,
     private val userId: () -> String?,
 ) {
     private val mutex = Mutex()
@@ -149,6 +174,16 @@ class MomentRoomState(
     val messages = MutableStateFlow<List<MomentMessageDto>>(emptyList())
     val closed = MutableStateFlow(false)
     val error = MutableStateFlow<String?>(null)
+    /** True once anything in this room has gone out sealed, for the room's badge. */
+    val encrypted = MutableStateFlow(false)
+    /**
+     * What each sealed message said, once it has been opened.
+     *
+     * A sealed copy opens exactly once — the ratchet moves on — so the plain
+     * text has to be kept here. Nothing is written to disk: the room and
+     * everything said in it end with the Moment.
+     */
+    private val opened = mutableMapOf<String, String>()
 
     suspend fun enter(): Result<Unit> = mutex.withLock {
         try {
@@ -184,9 +219,10 @@ class MomentRoomState(
             "moment.message" -> {
                 val m = messageOf(payload["message"])
                 if (m != null && m.momentId == momentId && messages.value.none { it.id == m.id }) {
-                    messages.value = messages.value + m
+                    messages.value = messages.value + readable(m)
                 }
             }
+            "moment.audience", "moment.cheer" -> refresh()
             "moment.reaction" -> {
                 val mid = str(payload, "messageId")
                 if (mid != null) refresh()
@@ -197,13 +233,32 @@ class MomentRoomState(
         }
     }
 
+    /**
+     * Says something in the room, sealed when everyone in it can read sealed
+     * messages.
+     *
+     * Everyone, not most people: a room where one person's phone has no keys
+     * yet sends in the clear rather than leaving that person out of the
+     * conversation. That is the same rule ordinary chats follow, and it is
+     * what stops the promise being true only some of the time.
+     */
     suspend fun send(body: String): Result<MomentMessageDto> = mutex.withLock {
         val text = body.trim().take(500)
         if (text.isEmpty()) return@withLock Result.failure(IllegalStateException("Type a message first."))
         try {
-            val sent = api.sendMessage(momentId, SendMomentMessageBody(text))
-            if (messages.value.none { it.id == sent.id }) messages.value = messages.value + sent
-            Result.success(sent)
+            val envelopes = sealFor(text)
+            val sent = api.sendMessage(momentId, if (envelopes == null) {
+                SendMomentMessageBody(body = text)
+            } else {
+                SendMomentMessageBody(envelopes = envelopes)
+            })
+            if (envelopes != null) encrypted.value = true
+            // The server answers a sealed message with no body — it has none.
+            // This device knows what it just said, so it shows that.
+            val shown = if (sent.body == null) sent.copy(body = text) else sent
+            opened[sent.id] = text
+            if (messages.value.none { it.id == sent.id }) messages.value = messages.value + shown
+            Result.success(shown)
         }
         catch (e: CancellationException) { throw e }
         catch (e: Exception) {
@@ -232,14 +287,53 @@ class MomentRoomState(
         if (me != null && !isHost) runCatching { api.leave(momentId) }
     }
 
-    private fun apply(room: MomentRoomDto) {
+    /**
+     * One sealed copy per device in the room, or null to send in the clear.
+     *
+     * Null covers every reason sealing cannot happen — no encryption on this
+     * build, this device not yet in the directory, somebody here with no keys,
+     * or the key lookup failing — and each of them means the same thing to the
+     * caller: send it the ordinary way rather than not at all.
+     */
+    private suspend fun sealFor(text: String): List<MomentEnvelopeBody>? {
+        val engine = crypto ?: return null
+        val me = userId() ?: return null
+        val others = participants.value.map { it.userId }.filter { it != me }.distinct()
+        if (others.isEmpty()) return null
+        if (!engine.canSealFor(others)) return null
+        val envelopes = runCatching { engine.seal(others, text) }.getOrDefault(emptyList())
+        return envelopes.takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * Turns a sealed message into a readable one, once.
+     *
+     * A message that cannot be opened keeps its place in the room rather than
+     * vanishing: something was said, and pretending otherwise would be a
+     * stranger kind of wrong than saying so.
+     */
+    private suspend fun readable(m: MomentMessageDto): MomentMessageDto {
+        if (!m.sealed) return m
+        encrypted.value = true
+        opened[m.id]?.let { return m.copy(body = it) }
+        val engine = crypto ?: return m.copy(body = SEALED_UNREADABLE)
+        val env = m.envelope ?: return m.copy(body = SEALED_UNREADABLE)
+        val from = m.senderDeviceId ?: return m.copy(body = SEALED_UNREADABLE)
+        val plain = runCatching { engine.open(m.senderUserId, from, env.ciphertext, env.type) }.getOrNull()
+            ?: return m.copy(body = SEALED_UNREADABLE)
+        opened[m.id] = plain
+        return m.copy(body = plain)
+    }
+
+    private suspend fun apply(room: MomentRoomDto) {
         moment.value = room.moment
         participants.value = room.participants
         // Authoritative replace: reconnects can only reorder, never duplicate.
-        messages.value = room.messages.distinctBy { it.id }
+        messages.value = room.messages.distinctBy { it.id }.map { readable(it) }
         error.value = null
     }
 
+    @Suppress("UNCHECKED_CAST")
     private fun messageOf(raw: Any?): MomentMessageDto? {
         val map = raw as? Map<String, Any?> ?: return null
         val reactions = (map["reactions"] as? List<*>)?.mapNotNull { r ->
@@ -253,9 +347,22 @@ class MomentRoomState(
             momentId = map["momentId"] as? String ?: momentId,
             senderUserId = map["senderUserId"] as? String ?: return null,
             senderName = map["senderName"] as? String ?: "Viro user",
-            body = map["body"] as? String ?: return null,
+            body = map["body"] as? String,
             createdAt = map["createdAt"] as? String ?: "",
             reactions = reactions,
-        )
+            sealed = map["sealed"] == true,
+            senderDeviceId = map["senderDeviceId"] as? String,
+            envelope = (map["envelope"] as? Map<String, Any?>)?.let { e ->
+                val ct = e["ciphertext"] as? String ?: return@let null
+                MomentEnvelopeDto(ct, (e["type"] as? Number)?.toInt() ?: 1)
+            },
+        ).takeIf { it.body != null || it.sealed }
     }
 }
+
+/**
+ * Shown in place of a sealed message this device cannot open — one sent
+ * before this phone was in the room, or one already read on another of the
+ * person's devices.
+ */
+const val SEALED_UNREADABLE = "🔒 Sent before you joined"

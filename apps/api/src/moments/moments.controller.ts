@@ -1,5 +1,6 @@
-import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
-import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { MOMENT_AUDIENCES, MOMENT_REACTIONS, MOMENT_TYPES, MomentsService } from './moments.service';
 
@@ -12,8 +13,26 @@ class CreateMomentDto {
 class ExtendMomentDto {
   @IsInt() @Min(1) @Max(60) minutes!: number;
 }
+/** One sealed copy of a room message, addressed to one device in the room. */
+class MomentEnvelopeDto {
+  @IsUUID() deviceId!: string;
+  // libsignal ciphertext, base64. Generous, because a prekey message that
+  // opens a session carries a Kyber encapsulation and is much larger than the
+  // ratchet messages that follow it.
+  @IsString() @MaxLength(8192) ciphertext!: string;
+  @IsOptional() @IsInt() @Min(1) @Max(3) type?: number;
+}
+/**
+ * Either a readable body or sealed copies — the client sends whichever it
+ * could manage, and the server does not mind which, only that there is one.
+ */
 class MomentMessageDto {
-  @IsString() @MinLength(1) @MaxLength(500) body!: string;
+  @IsOptional() @IsString() @MaxLength(500) body?: string;
+  @IsOptional() @IsArray() @ArrayMaxSize(64) @ValidateNested({ each: true })
+  @Type(() => MomentEnvelopeDto) envelopes?: MomentEnvelopeDto[];
+}
+class VisibilityDto {
+  @IsIn(MOMENT_AUDIENCES) visibility!: string;
 }
 class ReactDto {
   // null removes the caller's reaction; anything sent must be in the set.
@@ -25,7 +44,7 @@ class KnockResponseDto {
 class InviteDto {
   @IsString() userId!: string;
 }
-type Authed = { user: { sub: string } };
+type Authed = { user: { sub: string; deviceId: string } };
 
 @Controller('api/v1/moments')
 @UseGuards(JwtAuthGuard)
@@ -46,15 +65,22 @@ export class MomentsController {
   @Post(':id/extend') extend(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: ExtendMomentDto) {
     return this.moments.extend(req.user.sub, id, body.minutes);
   }
+  @Patch(':id/visibility') @HttpCode(200) visibility(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: VisibilityDto) {
+    return this.moments.setVisibility(req.user.sub, id, body.visibility);
+  }
+  /** A reaction to the Moment itself. No need to be in the room to leave one. */
+  @Post(':id/react') @HttpCode(200) cheer(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: ReactDto) {
+    return this.moments.cheer(req.user.sub, id, body.emoji ?? null);
+  }
   @Delete(':id') end(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) { return this.moments.end(req.user.sub, id); }
 
   // Room actions are 200, not Nest's POST-default 201: none of them creates a
   // fetchable resource. Creating a Moment or a room message does, and stays 201.
-  @Post(':id/join') @HttpCode(200) join(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) { return this.moments.join(req.user.sub, id); }
+  @Post(':id/join') @HttpCode(200) join(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) { return this.moments.join(req.user.sub, req.user.deviceId, id); }
   @Post(':id/leave') @HttpCode(200) leave(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) { return this.moments.leave(req.user.sub, id); }
-  @Get(':id/room') room(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) { return this.moments.room(req.user.sub, id); }
+  @Get(':id/room') room(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) { return this.moments.room(req.user.sub, req.user.deviceId, id); }
   @Post(':id/messages') message(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: MomentMessageDto) {
-    return this.moments.message(req.user.sub, id, body.body);
+    return this.moments.message(req.user.sub, req.user.deviceId, id, body);
   }
   @Post(':id/messages/:messageId/react') @HttpCode(200) react(
     @Req() req: Authed,

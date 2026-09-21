@@ -8,6 +8,10 @@ export const MOMENT_TYPES = ['FREE', 'BREAK', 'LISTENING', 'WATCHING', 'GAMING',
 export const MOMENT_AUDIENCES = ['CONNECTIONS', 'CONTACTS'];
 export const MOMENT_REACTIONS = ['❤️', '😂', '🔥', '👏', '👍'];
 export interface CreateMoment { type: string; text?: string; visibility: string; durationMinutes: number }
+/** One sealed copy of a room message, addressed to one device. */
+export interface MomentEnvelope { deviceId: string; ciphertext: string; type?: number }
+/** A room message as the sender offers it: readable text, or sealed copies. */
+export interface MomentMessageInput { body?: string | null; envelopes?: MomentEnvelope[] }
 
 // Contacts is deliberately owner-directed: knowing somebody's number does not
 // entitle a stranger to their activity. Every read rechecks blocks both ways.
@@ -38,7 +42,12 @@ export class MomentsService {
           ((c.requester_user_id = $1 AND c.recipient_user_id = m.creator_user_id) OR
            (c.recipient_user_id = $1 AND c.requester_user_id = m.creator_user_id)))))
         THEN p.avatar_url ELSE NULL END AS visible_avatar,
-      (SELECT count(*)::int FROM moment_participants mp WHERE mp.moment_id = m.id) AS participant_count
+      (SELECT count(*)::int FROM moment_participants mp WHERE mp.moment_id = m.id) AS participant_count,
+      -- Reactions to the Moment itself, already ranked: the emoji most people
+      -- chose first, so the client shows a leading reaction without counting.
+      (SELECT json_agg(t) FROM (SELECT mc.emoji, count(*)::int AS count FROM moment_cheers mc
+        WHERE mc.moment_id = m.id GROUP BY mc.emoji ORDER BY count(*) DESC, mc.emoji) t) AS cheers,
+      (SELECT mc.emoji FROM moment_cheers mc WHERE mc.moment_id = m.id AND mc.user_id = $1) AS my_cheer
       FROM moments m LEFT JOIN profiles p ON p.user_id = m.creator_user_id
       WHERE m.status = 'ACTIVE' AND m.expires_at > now() AND ${VISIBLE}
       ORDER BY m.created_at DESC`, [userId]);
@@ -81,6 +90,55 @@ export class MomentsService {
     return this.get(userId, id);
   }
 
+  /**
+   * Changes who can see a Moment that is already running.
+   *
+   * Nothing is migrated or recalculated: every read derives the audience from
+   * this column, so narrowing removes the Moment from the feeds of people who
+   * no longer qualify at their next read, and ejects them from the room the
+   * next time they touch it (liveMoment rechecks). Widening announces it to
+   * the new audience, which is how they learn it exists at all.
+   *
+   * What it cannot do is unsay anything: someone who was in the room read what
+   * was said while they were there. The room tells everyone the audience
+   * changed rather than letting it happen quietly behind them.
+   */
+  async setVisibility(userId: string, id: string, visibility: string) {
+    const before = await this.liveMoment(userId, id);
+    if (before.creator_user_id !== userId) throw new ForbiddenException('Only the host can change who can see this.');
+    if (before.visibility === visibility) return this.get(userId, id);
+    const [rows] = await this.db.query(`UPDATE moments SET visibility = $3, visibility_changed_at = now()
+      WHERE id = $2 AND creator_user_id = $1 AND status = 'ACTIVE' AND expires_at > now() RETURNING *`,
+    [userId, id, visibility]);
+    const row = rows[0];
+    if (!row) throw new NotFoundException('Moment unavailable.');
+    // Both audiences are told: the one that can no longer see it, so the card
+    // goes away, and the one that now can, so it appears.
+    await this.notify(before, 'moment.updated', { momentId: id });
+    await this.notify(row, 'moment.updated', { momentId: id });
+    await this.announceRoom(id, 'moment.audience', { momentId: id, visibility });
+    return this.get(userId, id);
+  }
+
+  /**
+   * A reaction to the Moment itself, which anyone who can see it may leave —
+   * joining the room is a bigger step than saying "nice".
+   *
+   * One per person: reacting again switches the emoji, and null clears it.
+   */
+  async cheer(userId: string, id: string, emoji: string | null) {
+    await this.liveMoment(userId, id);
+    if (emoji !== null && !MOMENT_REACTIONS.includes(emoji)) throw new BadRequestException('Unsupported reaction.');
+    if (emoji === null) {
+      await this.db.query(`DELETE FROM moment_cheers WHERE moment_id = $1 AND user_id = $2`, [id, userId]);
+    } else {
+      await this.db.query(`INSERT INTO moment_cheers (moment_id, user_id, emoji) VALUES ($1,$2,$3)
+        ON CONFLICT (moment_id, user_id) DO UPDATE SET emoji = EXCLUDED.emoji, created_at = now()`, [id, userId, emoji]);
+    }
+    await this.announceRoom(id, 'moment.cheer', { momentId: id, userId, emoji });
+    return this.get(userId, id);
+  }
+
   async end(userId: string, id: string) {
     const [rows] = await this.db.query(`UPDATE moments SET status = 'ENDED'
       WHERE id = $2 AND creator_user_id = $1 AND status = 'ACTIVE' AND expires_at > now() RETURNING *`, [userId, id]);
@@ -115,7 +173,7 @@ export class MomentsService {
     return !!row;
   }
 
-  async join(userId: string, id: string) {
+  async join(userId: string, deviceId: string, id: string) {
     const moment = await this.liveMoment(userId, id);
     // Idempotent: reconnecting or re-tapping Join cannot duplicate a row or a
     // second "joined" announcement to people already in the room.
@@ -124,7 +182,7 @@ export class MomentsService {
     if (inserted.some((r) => r.user_id === userId)) {
       await this.announceRoom(id, 'moment.joined', { momentId: id, userId, displayName: await this.nameOf(userId) });
     }
-    return this.room(userId, id, moment);
+    return this.room(userId, deviceId, id, moment);
   }
 
   async leave(userId: string, id: string) {
@@ -136,7 +194,7 @@ export class MomentsService {
     return { success: true };
   }
 
-  async room(userId: string, id: string, preloaded?: any) {
+  async room(userId: string, deviceId: string, id: string, preloaded?: any) {
     const moment = preloaded ?? await this.liveMoment(userId, id);
     if (!(await this.isParticipant(id, userId))) {
       // Guests see rooms by being in them; the host is a participant from creation.
@@ -145,9 +203,14 @@ export class MomentsService {
     const participants = await this.db.query(`SELECT mp.user_id, mp.joined_at, p.display_name,
       (mp.user_id = $2) AS is_host FROM moment_participants mp
       LEFT JOIN profiles p ON p.user_id = mp.user_id WHERE mp.moment_id = $1 ORDER BY mp.joined_at`, [id, moment.creator_user_id]);
-    const messages = await this.db.query(`SELECT mm.*, p.display_name FROM moment_messages mm
+    // The copy addressed to the device asking, and no other: this join is the
+    // only reason the backlog of a sealed room is readable at all, and it can
+    // only ever hand over one device's own envelope.
+    const messages = await this.db.query(`SELECT mm.*, p.display_name,
+      e.ciphertext, e.envelope_type FROM moment_messages mm
       LEFT JOIN profiles p ON p.user_id = mm.sender_user_id
-      WHERE mm.moment_id = $1 ORDER BY mm.created_at DESC LIMIT 100`, [id]);
+      LEFT JOIN moment_message_envelopes e ON e.message_id = mm.id AND e.device_id = $2::uuid
+      WHERE mm.moment_id = $1 ORDER BY mm.created_at DESC LIMIT 100`, [id, deviceId || null]);
     const reactions = await this.db.query(`SELECT r.message_id, r.user_id, r.emoji FROM moment_reactions r
       JOIN moment_messages mm ON mm.id = r.message_id WHERE mm.moment_id = $1`, [id]);
     const byMessage = new Map<string, { emoji: string; userIds: string[] }[]>();
@@ -165,26 +228,92 @@ export class MomentsService {
         userId: p.user_id, displayName: p.display_name || 'Viro user', isHost: p.is_host,
         joinedAt: new Date(p.joined_at).toISOString(),
       })),
-      messages: messages.reverse().map((m: any) => ({
-        id: m.id, momentId: m.moment_id, senderUserId: m.sender_user_id,
-        senderName: m.display_name || 'Viro user', body: m.body,
-        createdAt: new Date(m.created_at).toISOString(),
-        reactions: byMessage.get(m.id) ?? [],
-      })),
+      // A sealed message with no copy for this device was said before this
+      // device was in the room. There is no way to show it and no honest
+      // placeholder for it either, so it is simply not part of this device's
+      // view of the room.
+      messages: messages.reverse()
+        .filter((m: any) => m.body !== null || m.ciphertext)
+        .map((m: any) => ({
+          id: m.id, momentId: m.moment_id, senderUserId: m.sender_user_id,
+          senderDeviceId: m.sender_device_id, senderName: m.display_name || 'Viro user',
+          body: m.body, sealed: m.body === null,
+          envelope: m.ciphertext ? { ciphertext: m.ciphertext, type: m.envelope_type ?? 1 } : null,
+          createdAt: new Date(m.created_at).toISOString(),
+          reactions: byMessage.get(m.id) ?? [],
+        })),
     };
   }
 
-  async message(userId: string, id: string, body: string) {
-    const moment = await this.liveMoment(userId, id);
+  /**
+   * Says something in the room, sealed when the sender could seal it.
+   *
+   * A sealed message arrives as one copy per device and no body, and that is
+   * how it is stored: this server keeps ciphertext it cannot open, addressed
+   * to devices it cannot be. A plaintext body is still accepted, because a
+   * room where one person's phone has no keys yet would otherwise be a room
+   * where that person cannot speak — the client decides, and the room tells
+   * everyone which of the two it got.
+   *
+   * Envelopes are only accepted for devices actually in the room. Otherwise
+   * the sender could address a copy to a device that left, and the server
+   * would hold it and hand it back.
+   */
+  async message(userId: string, deviceId: string, id: string, input: MomentMessageInput) {
+    await this.liveMoment(userId, id);
     if (!(await this.isParticipant(id, userId))) throw new ForbiddenException('Join this Moment to chat.');
-    const text = body.trim().slice(0, 500);
-    if (!text) throw new BadRequestException('Message is empty.');
-    const [row] = await this.db.query(`INSERT INTO moment_messages (moment_id, sender_user_id, body)
-      VALUES ($1,$2,$3) RETURNING *`, [id, userId, text]);
-    const dto = { id: row.id, momentId: id, senderUserId: userId, senderName: await this.nameOf(userId),
-      body: row.body, createdAt: new Date(row.created_at).toISOString(), reactions: [] };
-    await this.announceRoom(id, 'moment.message', { momentId: id, message: dto });
-    return dto;
+    const offered = (input.envelopes ?? []).filter((e) => e?.deviceId && e?.ciphertext);
+    const text = (input.body ?? '').trim().slice(0, 500);
+    if (!text && offered.length === 0) throw new BadRequestException('Message is empty.');
+
+    // Only devices in the room may be addressed: otherwise a sender could
+    // leave a copy here for a device that has gone, and this server would
+    // hold it and hand it over. The sender's own other devices count — they
+    // are in the room, through their owner.
+    const addressable = offered.length === 0 ? [] : await this.db.query(
+      `SELECT d.id FROM devices d JOIN moment_participants mp
+       ON mp.user_id = d.user_id AND mp.moment_id = $1 WHERE d.id = ANY($2::uuid[])`,
+      [id, offered.map((e) => e.deviceId)]);
+    const inRoom = new Set<string>(addressable.map((r: any) => r.id));
+    const envelopes = offered.filter((e) => inRoom.has(e.deviceId));
+    if (offered.length > 0 && envelopes.length === 0) {
+      throw new BadRequestException('No one in this room could be addressed.');
+    }
+    const sealed = envelopes.length > 0;
+
+    const [row] = await this.db.query(`INSERT INTO moment_messages (moment_id, sender_user_id, sender_device_id, body)
+      VALUES ($1,$2,$3,$4) RETURNING *`, [id, userId, deviceId || null, sealed ? null : text]);
+    if (sealed) {
+      const tuples = envelopes
+        .map((_, i) => `($1::uuid, $${i * 3 + 2}::uuid, $${i * 3 + 3}::text, $${i * 3 + 4}::smallint)`)
+        .join(',');
+      await this.db.query(
+        `INSERT INTO moment_message_envelopes (message_id, device_id, user_id, ciphertext, envelope_type)
+         SELECT v.message_id, v.device_id, d.user_id, v.ciphertext, v.envelope_type
+         FROM (VALUES ${tuples}) AS v(message_id, device_id, ciphertext, envelope_type)
+         JOIN devices d ON d.id = v.device_id
+         ON CONFLICT DO NOTHING`,
+        [row.id, ...envelopes.flatMap((e) => [e.deviceId, e.ciphertext, e.type ?? 1])],
+      );
+    }
+
+    const base = {
+      id: row.id, momentId: id, senderUserId: userId, senderDeviceId: deviceId || null,
+      senderName: await this.nameOf(userId),
+      createdAt: new Date(row.created_at).toISOString(), reactions: [] as unknown[],
+    };
+    if (sealed) {
+      // One frame per device, each carrying only that device's own copy — no
+      // readable body, and nobody else's ciphertext.
+      await Promise.allSettled(envelopes.map((e) => this.realtime.deliverToDevice(e.deviceId, {
+        type: 'moment.message',
+        payload: { momentId: id, message: { ...base, body: null, sealed: true,
+          envelope: { ciphertext: e.ciphertext, type: e.type ?? 1 } } },
+      })));
+      return { ...base, body: null, sealed: true };
+    }
+    await this.announceRoom(id, 'moment.message', { momentId: id, message: { ...base, body: text, sealed: false } });
+    return { ...base, body: text, sealed: false };
   }
 
   async react(userId: string, id: string, messageId: string, emoji: string | null) {
@@ -328,6 +457,7 @@ export class MomentsService {
   private async closeRoom(row: any, type: string) {
     await this.notify(row, type, { momentId: row.id });
     await this.db.query(`DELETE FROM moment_participants WHERE moment_id = $1`, [row.id]);
+    await this.db.query(`DELETE FROM moment_cheers WHERE moment_id = $1`, [row.id]);
     await this.db.query(`DELETE FROM moment_messages WHERE moment_id = $1`, [row.id]);
     await this.db.query(`DELETE FROM moment_knocks WHERE moment_id = $1`, [row.id]);
     await this.db.query(`DELETE FROM moment_invitations WHERE moment_id = $1`, [row.id]);
@@ -351,6 +481,12 @@ export class MomentsService {
     return { id: r.id, creatorUserId: r.creator_user_id, type: r.type, text: r.text,
       visibility: r.visibility, displayName: r.display_name || 'Viro user', avatarUrl: publicAvatarUrl(r.visible_avatar),
       createdAt: new Date(r.created_at).toISOString(), expiresAt: new Date(r.expires_at).toISOString(),
-      allowVoice: r.type === 'FREE', participantCount: r.participant_count ?? 0 };
+      allowVoice: r.type === 'FREE', participantCount: r.participant_count ?? 0,
+      // Ranked highest first by the query; myReaction is what this viewer
+      // chose, so the button can show as already pressed.
+      reactions: (r.cheers ?? []) as { emoji: string; count: number }[],
+      reactionCount: ((r.cheers ?? []) as { count: number }[]).reduce((n, c) => n + c.count, 0),
+      myReaction: r.my_cheer ?? null,
+      visibilityChangedAt: r.visibility_changed_at ? new Date(r.visibility_changed_at).toISOString() : null };
   }
 }

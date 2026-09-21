@@ -154,6 +154,16 @@ class MessagingRepository(
     // ------------------------------------------------------------ lifecycle
 
     fun start() {
+        // The per-session work runs on every call, including the one after a
+        // different account signs in: clearLocal() has just wiped this phone's
+        // encryption keys, and without a fresh registration the new account
+        // would hold no keys at all and quietly send everything in the clear
+        // until the app was next killed and reopened.
+        scope.launch { syncNow() }
+        scope.launch { refreshFeatures() }
+        scope.launch { setUpEncryption() }
+        // The collectors and timers below belong to the process, not to the
+        // session, so they are started once.
         if (started) return
         started = true
         scope.launch {
@@ -184,9 +194,6 @@ class MessagingRepository(
                 delay(5_000)
             }
         }
-        scope.launch { syncNow() }
-        scope.launch { refreshFeatures() }
-        scope.launch { setUpEncryption() }
     }
 
     /**
