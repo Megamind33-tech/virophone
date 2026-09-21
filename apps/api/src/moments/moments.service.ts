@@ -5,6 +5,19 @@ import { PushService } from '../push/push.service';
 import { publicAvatarUrl } from '../users/avatar.util';
 import { RedisService } from '../redis/redis.service';
 import { LiveKitService } from '../livekit/livekit.service';
+import { createHmac, timingSafeEqual } from 'crypto';
+import * as fs from 'fs';
+import {
+  applyPlayback, idlePlayback, MomentPlayback, PlaybackChange, PlaybackError, PlayableMedia,
+} from './playback';
+import {
+  kindOf, looksLike, MAX_AUDIO_BYTES, MAX_VIDEO_BYTES, MediaRange, UploadedMediaProvider,
+} from './moment-media.provider';
+
+/** An upload as multer leaves it on disk. */
+export interface IncomingMedia { path: string; size: number; mimetype: string; originalname?: string }
+/** How many things one Moment can hold at once. */
+const MAX_MEDIA_PER_MOMENT = 20;
 import {
   applyChange, initialState, intentForLegacyType, MomentIntent, MomentRuntimeState, RoomChange, RoomChangeError,
 } from './room-engine';
@@ -38,6 +51,7 @@ export class MomentsService {
     private readonly push: PushService,
     private readonly redis: RedisService,
     private readonly livekit: LiveKitService,
+    private readonly uploads: UploadedMediaProvider,
   ) {}
 
   async now(userId: string) {
@@ -210,6 +224,7 @@ export class MomentsService {
     if (removed.length === 0) return { success: true };
     await this.announceRoom(id, 'moment.left', { momentId: id, userId });
     void this.livekit.removeFromRoom(this.livekit.roomNameForMoment(id), userId);
+    await this.dropMediaOf(id, userId);
     return { success: true };
   }
 
@@ -247,6 +262,11 @@ export class MomentsService {
       // as the truth, so it lands in the film if the room became one while it
       // was away — never in the cooking it left.
       state: await this.runtime(moment),
+      // Where shared playback is, and the server's clock in milliseconds, so a
+      // phone can place itself in the film without asking again.
+      playback: await this.playback(id),
+      serverNow: Date.now(),
+      media: await this.mediaRows(id),
       participants: participants.map((p: any) => ({
         userId: p.user_id, displayName: p.display_name || 'Viro user', isHost: p.is_host,
         joinedAt: new Date(p.joined_at).toISOString(),
@@ -568,12 +588,218 @@ export class MomentsService {
         await this.db.query(`DELETE FROM moment_participants WHERE moment_id = $1 AND user_id = $2`, [room.id, leaving]);
         void this.livekit.removeFromRoom(this.livekit.roomNameForMoment(room.id), leaving);
         await this.announceRoom(room.id, 'moment.left', { momentId: room.id, userId: leaving });
+        await this.dropMediaOf(room.id, leaving);
         // The person leaving is no longer in the room to hear it, so they are told directly.
         await this.realtime.deliverToUser(leaving, { type: 'moment.left', payload: { momentId: room.id, userId: leaving } });
       } catch (e) {
         this.log.warn(`Moment separation failed for ${room.id}: ${(e as Error).message}`);
       }
     }
+  }
+
+  // ------------------------------------------------------------ shared media
+
+  private playbackKey(momentId: string) {
+    return `moment:play:${momentId}`;
+  }
+
+  /** Where the room's shared player is. Held in Redis beside the room itself. */
+  async playback(momentId: string): Promise<MomentPlayback> {
+    return (await this.redis.getJson<MomentPlayback>(this.playbackKey(momentId))) ?? idlePlayback(momentId, Date.now());
+  }
+
+  private async savePlayback(moment: any, p: MomentPlayback) {
+    const ttl = Math.max(60, Math.ceil((new Date(moment.expires_at).getTime() - Date.now()) / 1000) + 600);
+    await this.redis.setJson(this.playbackKey(moment.id), p, ttl);
+  }
+
+  private async mediaRows(momentId: string) {
+    const rows = await this.db.query(`SELECT mm.id, mm.owner_user_id, mm.kind, mm.title, mm.duration_ms, mm.size_bytes,
+      mm.created_at, p.display_name FROM moment_media mm LEFT JOIN profiles p ON p.user_id = mm.owner_user_id
+      WHERE mm.moment_id = $1 ORDER BY mm.created_at`, [momentId]);
+    return rows.map((r: any) => ({
+      id: r.id, kind: r.kind, title: r.title, durationMs: r.duration_ms ?? null, sizeBytes: Number(r.size_bytes),
+      ownerUserId: r.owner_user_id, ownerName: r.display_name || 'Viro user', createdAt: new Date(r.created_at).toISOString(),
+    }));
+  }
+
+  private removeFile(item: any) {
+    try { this.uploads.remove(item); } catch (e) { this.log.warn(`Moment media file not removed: ${(e as Error).message}`); }
+  }
+
+  /**
+   * Something a participant brings from their own phone to watch or listen to
+   * together. Checked to be the kind of file it claims, encrypted on disk, and
+   * playable only by the people in this Moment while it lasts.
+   */
+  async shareMedia(userId: string, id: string, file: IncomingMedia | undefined, meta: { title?: string; durationMs?: number }) {
+    const discard = () => { if (file?.path) fs.rmSync(file.path, { force: true }); };
+    try {
+      if (!file?.path || !file.size) throw new BadRequestException('Choose a video or a song to share.');
+      const moment = await this.liveMoment(userId, id);
+      if (!(await this.isParticipant(id, userId))) throw new ForbiddenException('Join this Moment first.');
+      const kind = kindOf(file.mimetype);
+      if (!kind) throw new BadRequestException('Only videos and music can be shared in a Moment.');
+      if (file.size > (kind === 'VIDEO' ? MAX_VIDEO_BYTES : MAX_AUDIO_BYTES)) {
+        throw new BadRequestException(kind === 'VIDEO' ? 'That video is too large to share (100 MB at most).' : 'That song is too large to share (30 MB at most).');
+      }
+      const head = Buffer.alloc(16);
+      const fd = fs.openSync(file.path, 'r');
+      try { fs.readSync(fd, head, 0, 16, 0); } finally { fs.closeSync(fd); }
+      if (!looksLike(file.mimetype, head)) throw new BadRequestException("That file isn't a video or song Viro can play.");
+      const [{ count }] = await this.db.query(`SELECT count(*)::int AS count FROM moment_media WHERE moment_id = $1`, [id]);
+      if (count >= MAX_MEDIA_PER_MOMENT) throw new BadRequestException('This Moment already has as much as it can hold. Remove something first.');
+
+      const fromName = (file.originalname ?? '').replace(/\.[a-z0-9]{1,5}$/i, '');
+      const title = (meta.title?.trim() || fromName.trim() || (kind === 'VIDEO' ? 'A video' : 'A song')).slice(0, 120);
+      const durationMs = meta.durationMs != null && Number.isFinite(meta.durationMs) && meta.durationMs > 0
+        ? Math.min(Math.round(meta.durationMs), 6 * 60 * 60 * 1000) : null;
+      const kept = await this.uploads.keep(file.path);
+      const [row] = await this.db.query(`INSERT INTO moment_media
+        (moment_id, owner_user_id, provider, kind, mime, title, size_bytes, duration_ms, file_name, file_key)
+        VALUES ($1,$2,'UPLOAD',$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+        [moment.id, userId, kind, file.mimetype, title, file.size, durationMs, kept.fileName, kept.fileKey]);
+      await this.announceRoom(id, 'moment.media', { momentId: id });
+      return (await this.mediaRows(id)).find((m: any) => m.id === row.id);
+    } finally {
+      discard();
+    }
+  }
+
+  async listMedia(userId: string, id: string) {
+    await this.liveMoment(userId, id);
+    if (!(await this.isParticipant(id, userId))) throw new ForbiddenException('Join this Moment first.');
+    return { media: await this.mediaRows(id) };
+  }
+
+  /** Takes something back out of the Moment. Only whoever shared it can. */
+  async unshareMedia(userId: string, id: string, mediaId: string) {
+    await this.liveMoment(userId, id);
+    const rows = this.rowsOf(await this.db.query(`DELETE FROM moment_media WHERE id = $1 AND moment_id = $2 AND owner_user_id = $3
+      RETURNING *`, [mediaId, id, userId]));
+    if (rows.length === 0) throw new NotFoundException('Nothing like that is shared here.');
+    await this.afterMediaRemoved(id, rows);
+    return { success: true };
+  }
+
+  /** Someone left: what they brought goes with them, and stops if it was playing. */
+  private async dropMediaOf(momentId: string, userId: string) {
+    const rows = this.rowsOf(await this.db.query(`DELETE FROM moment_media WHERE moment_id = $1 AND owner_user_id = $2
+      RETURNING *`, [momentId, userId]));
+    if (rows.length > 0) await this.afterMediaRemoved(momentId, rows);
+  }
+
+  private async afterMediaRemoved(momentId: string, rows: any[]) {
+    for (const item of rows) this.removeFile(item);
+    const [moment] = await this.db.query(`SELECT * FROM moments WHERE id = $1`, [momentId]);
+    if (moment) {
+      await this.serialized(`play:${momentId}`, async () => {
+        const current = await this.playback(momentId);
+        if (current.mediaId && rows.some((r) => r.id === current.mediaId)) {
+          const stopped = applyPlayback(current, { op: 'STOP' }, 'viro', Date.now());
+          await this.savePlayback(moment, stopped);
+          await this.announceRoom(momentId, 'moment.playback', { momentId, playback: stopped, serverNow: Date.now() });
+        }
+      });
+    }
+    await this.announceRoom(momentId, 'moment.media', { momentId });
+  }
+
+  /**
+   * Files nothing refers to any more — their row went with a deleted
+   * account, or an upload died half way — are removed. Only files older than
+   * an hour, so an upload in progress is never touched.
+   */
+  async sweepOrphanMedia(olderThanMs = 60 * 60 * 1000) {
+    const dir = this.uploads.dir();
+    const cutoff = Date.now() - olderThanMs;
+    const known = new Set((await this.db.query(`SELECT file_name FROM moment_media`)).map((r: any) => r.file_name));
+    let removed = 0;
+    const consider = (full: string, orphan: boolean) => {
+      try {
+        if (orphan && fs.statSync(full).mtimeMs < cutoff) { fs.rmSync(full, { force: true }); removed++; }
+      } catch { /* gone already */ }
+    };
+    for (const name of fs.readdirSync(dir)) {
+      if (name.endsWith('.bin')) consider(`${dir}/${name}`, !known.has(name));
+    }
+    const incoming = this.uploads.incomingDir();
+    for (const name of fs.readdirSync(incoming)) consider(`${incoming}/${name}`, true);
+    return { removed };
+  }
+
+  private streamSecret(): string {
+    return process.env.MOMENT_MEDIA_SECRET || process.env.JWT_ACCESS_SECRET || 'dev_access_secret';
+  }
+
+  private sign(mediaId: string, userId: string, expires: number): string {
+    return createHmac('sha256', this.streamSecret()).update(`moment-media.${mediaId}.${userId}.${expires}`).digest('base64url');
+  }
+
+  /**
+   * An address a phone's player can fetch without a login header: signed,
+   * for this person and this item, and short-lived. It is only a way in —
+   * every request still checks that they are in the Moment right now.
+   */
+  async streamUrl(userId: string, id: string, mediaId: string) {
+    const moment = await this.liveMoment(userId, id);
+    if (!(await this.isParticipant(id, userId))) throw new ForbiddenException('Join this Moment first.');
+    const [item] = await this.db.query(`SELECT id FROM moment_media WHERE id = $1 AND moment_id = $2`, [mediaId, id]);
+    if (!item) throw new NotFoundException('That is no longer here to play.');
+    const expires = Math.min(Date.now() + 3 * 60 * 60 * 1000, new Date(moment.expires_at).getTime() + 10 * 60 * 1000);
+    const q = new URLSearchParams({ u: userId, e: String(expires), s: this.sign(mediaId, userId, expires) });
+    return { url: `/api/v1/moment-media/${mediaId}?${q.toString()}`, expiresAt: new Date(expires).toISOString() };
+  }
+
+  /** Serves a byte range to someone holding a valid address and still in the room. */
+  async openStream(mediaId: string, userId: string, expires: string, signature: string, range?: string):
+    Promise<{ range: MediaRange; partial: boolean } | 'gone' | 'unsatisfiable'> {
+    const exp = Number(expires);
+    const expected = Buffer.from(this.sign(mediaId, userId, exp));
+    const given = Buffer.from(String(signature ?? ''));
+    if (!Number.isFinite(exp) || exp < Date.now() || given.length !== expected.length || !timingSafeEqual(given, expected)) return 'gone';
+    const [item] = await this.db.query(`SELECT mm.* FROM moment_media mm
+      JOIN moments m ON m.id = mm.moment_id AND m.status = 'ACTIVE' AND m.expires_at > now()
+      JOIN moment_participants mp ON mp.moment_id = mm.moment_id AND mp.user_id = $2
+      WHERE mm.id = $1`, [mediaId, userId]);
+    if (!item) return 'gone';
+    const size = Number(item.size_bytes);
+    if (!range) return { range: this.uploads.open(item), partial: false };
+    const m = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+    if (!m || (m[1] === '' && m[2] === '')) return 'unsatisfiable';
+    let start: number; let end: number;
+    if (m[1] === '') { start = Math.max(0, size - Number(m[2])); end = size - 1; }
+    else { start = Number(m[1]); end = m[2] === '' ? size - 1 : Math.min(Number(m[2]), size - 1); }
+    if (start >= size || start > end) return 'unsatisfiable';
+    return { range: this.uploads.open(item, start, end), partial: true };
+  }
+
+  /**
+   * Play, pause, seek, load, stop — for everyone in the room at once.
+   * Anyone here may press them; the room says who did.
+   */
+  async changePlayback(userId: string, id: string, change: PlaybackChange) {
+    const moment = await this.liveMoment(userId, id);
+    if (!(await this.isParticipant(id, userId))) throw new ForbiddenException('Join this Moment first.');
+    return this.serialized(`play:${id}`, async () => {
+      let media: PlayableMedia | null = null;
+      if (change.op === 'LOAD') {
+        const [row] = await this.db.query(`SELECT id, kind, title, duration_ms FROM moment_media WHERE id = $1 AND moment_id = $2`,
+          [change.mediaId ?? null, id]);
+        media = row ? { id: row.id, kind: row.kind, title: row.title, durationMs: row.duration_ms ?? null } : null;
+      }
+      const now = Date.now();
+      let next: MomentPlayback;
+      try {
+        next = applyPlayback(await this.playback(id), change, userId, now, media);
+      } catch (e) {
+        if (e instanceof PlaybackError) throw new BadRequestException(e.message);
+        throw e;
+      }
+      await this.savePlayback(moment, next);
+      await this.announceRoom(id, 'moment.playback', { momentId: id, playback: next, serverNow: now });
+      return { playback: next, serverNow: now };
+    });
   }
 
   private async announceRoom(momentId: string, type: string, payload: Record<string, unknown>) {
@@ -609,7 +835,12 @@ export class MomentsService {
     await this.db.query(`DELETE FROM moment_invitations WHERE moment_id = $1`, [row.id]);
     // The shape of the room goes with it, so nothing can rebuild a closed room.
     await this.redis.del(this.runtimeKey(row.id));
+    await this.redis.del(this.playbackKey(row.id));
     void this.livekit.closeRoom(this.livekit.roomNameForMoment(row.id));
+    // Everything shared into the Moment ends with it, files included.
+    const shared = await this.db.query(`SELECT * FROM moment_media WHERE moment_id = $1`, [row.id]);
+    for (const item of shared) this.removeFile(item);
+    await this.db.query(`DELETE FROM moment_media WHERE moment_id = $1`, [row.id]);
   }
 
   private async notify(row: any, type: string, extra: Record<string, unknown> = {}) {

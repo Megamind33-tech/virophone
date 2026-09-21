@@ -105,6 +105,8 @@ services:
       # unencrypt anything — it only stops new chats from starting.
       E2EE_ENABLED: ${E2EE_ENABLED:-false}
       MEDIA_UPLOAD_DIR: /app/uploads/media
+      # Videos and songs people share into a Moment; deleted when it ends.
+      MOMENT_MEDIA_DIR: /app/uploads/moment-media
       # Voice-note transcripts: the self-hosted speech model below.
       WHISPER_URL: ${WHISPER_URL:-http://whisper:9000}
       # GIF search switches on when either key is set in .env.vps.
@@ -122,6 +124,9 @@ services:
       # Voice notes. Private (served only through an authorised endpoint) and,
       # like avatars, must survive redeploys.
       - viro_reach_media:/app/uploads/media
+      # What people share into a Moment, kept only while it lasts, but a
+      # redeploy mid-Moment must not lose it.
+      - viro_reach_moment_media:/app/uploads/moment-media
       # Read-only, and never part of the image or the synced tree.
       - ./secrets/firebase-admin.json:/app/secrets/firebase-admin.json:ro
     ports:
@@ -231,3 +236,4 @@ volumes:
   viro_reach_avatars:
   viro_reach_whisper:
   viro_reach_media:
+  viro_reach_moment_media:

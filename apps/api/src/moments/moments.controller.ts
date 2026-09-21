@@ -1,9 +1,14 @@
-import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
-import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateNested } from 'class-validator';
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { randomUUID } from 'crypto';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsNumberString, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { MOMENT_AUDIENCES, MOMENT_REACTIONS, MOMENT_TYPES, MomentsService } from './moments.service';
 import { MOMENT_INTENTS, MOMENT_MODULES, MOMENT_SCENES, RoomChange } from './room-engine';
+import { PLAYBACK_OPS, PlaybackOp } from './playback';
+import { MAX_VIDEO_BYTES, UploadedMediaProvider } from './moment-media.provider';
 
 class CreateMomentDto {
   @IsIn(MOMENT_TYPES) type!: string;
@@ -23,6 +28,16 @@ class RoomChangeDto {
   @IsOptional() @IsIn(MOMENT_MODULES as unknown as string[]) module?: string;
   // null gives the scene back to the activity.
   @IsOptional() @IsIn((MOMENT_SCENES as unknown as (string | null)[]).concat([null])) scene?: string | null;
+}
+/** Sent with the file; multipart fields arrive as text. */
+class ShareMediaDto {
+  @IsOptional() @IsString() @MaxLength(120) title?: string;
+  @IsOptional() @IsNumberString() durationMs?: string;
+}
+class PlaybackDto {
+  @IsIn(PLAYBACK_OPS as unknown as string[]) op!: PlaybackOp;
+  @IsOptional() @IsUUID() mediaId?: string;
+  @IsOptional() @IsInt() @Min(0) positionMs?: number;
 }
 class ExtendMomentDto {
   @IsInt() @Min(1) @Max(60) minutes!: number;
@@ -95,6 +110,28 @@ export class MomentsController {
   /** Changes what the room is, for everyone in it, without anyone leaving. */
   @Post(':id/state') @HttpCode(200) changeRoom(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: RoomChangeDto) {
     return this.moments.changeRoom(req.user.sub, id, this.toChange(body));
+  }
+  /** Shares a video or song from this person's own phone into the Moment. */
+  @Post(':id/media') @UseInterceptors(FileInterceptor('file', {
+    storage: diskStorage({
+      destination: (_req, _file, done) => done(null, new UploadedMediaProvider().incomingDir()),
+      filename: (_req, _file, done) => done(null, randomUUID()),
+    }),
+    limits: { fileSize: MAX_VIDEO_BYTES, files: 1 },
+  }))
+  shareMedia(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @UploadedFile() file: Express.Multer.File,
+    @Body() body: ShareMediaDto) {
+    const durationMs = body.durationMs ? parseInt(body.durationMs, 10) : undefined;
+    return this.moments.shareMedia(req.user.sub, id, file, { title: body.title, durationMs });
+  }
+  @Get(':id/media') listMedia(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) { return this.moments.listMedia(req.user.sub, id); }
+  @Delete(':id/media/:mediaId') unshareMedia(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string,
+    @Param('mediaId', ParseUUIDPipe) mediaId: string) { return this.moments.unshareMedia(req.user.sub, id, mediaId); }
+  @Post(':id/media/:mediaId/stream') @HttpCode(200) streamUrl(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string,
+    @Param('mediaId', ParseUUIDPipe) mediaId: string) { return this.moments.streamUrl(req.user.sub, id, mediaId); }
+  /** Play, pause, seek — for everyone in the room. */
+  @Post(':id/playback') @HttpCode(200) playback(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: PlaybackDto) {
+    return this.moments.changePlayback(req.user.sub, id, { op: body.op, mediaId: body.mediaId, positionMs: body.positionMs });
   }
   /** Admission to the room's live faces and voices; turns nothing on by itself. */
   @Post(':id/presence') @HttpCode(200) presence(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) { return this.moments.presence(req.user.sub, id); }
