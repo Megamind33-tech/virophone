@@ -48,7 +48,9 @@ describe('Account export/delete and admin APIs', () => {
     process.env.ADMIN_API_KEY = 'test-admin-key';
     await resetDatabase();
     app = await createTestApp();
-  });
+    // The schema this suite drops and rebuilds keeps growing; the default 5 s
+    // hook timeout turns a slow DROP SCHEMA into a phantom dependency failure.
+  }, 120000);
 
   afterAll(async () => {
     if (previousAdminKey === undefined) delete process.env.ADMIN_API_KEY;

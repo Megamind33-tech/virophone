@@ -175,7 +175,7 @@ fun ConsumerNav(
 
     val scope = rememberCoroutineScope()
 
-    var tab by remember { mutableStateOf(ViroConsumerTab.Home) }
+    var tab by remember { mutableStateOf(ViroConsumerTab.Now) }
 
     var overlay by remember { mutableStateOf(ConsumerOverlay.None) }
 
@@ -321,7 +321,7 @@ fun ConsumerNav(
         when (target.screen) {
             com.viroreach.app.MainActivity.OPEN_CONNECTIONS -> {
                 overlay = ConsumerOverlay.None
-                tab = ViroConsumerTab.Messages
+                tab = ViroConsumerTab.Chats
                 connectionsRequested = true
             }
             com.viroreach.app.MainActivity.OPEN_CONNECTIONS_REQUESTS -> {
@@ -466,8 +466,8 @@ fun ConsumerNav(
             ConsumerOverlay.Call -> Unit
             ConsumerOverlay.GroupCall -> Unit
             ConsumerOverlay.None -> {
-                if (tab != ViroConsumerTab.Home) {
-                    tab = ViroConsumerTab.Home
+                if (tab != ViroConsumerTab.Now) {
+                    tab = ViroConsumerTab.Now
                 } else {
                     (context as? ComponentActivity)?.moveTaskToBack(true)
                 }
@@ -745,7 +745,7 @@ fun ConsumerNav(
 
                     overlay = ConsumerOverlay.None
 
-                    tab = ViroConsumerTab.Messages
+                    tab = ViroConsumerTab.Chats
 
                 },
 
@@ -939,7 +939,7 @@ fun ConsumerNav(
 
                     overlay = ConsumerOverlay.None
 
-                    tab = ViroConsumerTab.Messages
+                    tab = ViroConsumerTab.Chats
 
                 },
 
@@ -1077,19 +1077,22 @@ fun ConsumerNav(
 
             when (tab) {
 
-                ViroConsumerTab.Home -> MessagesInboxScreen(
+                ViroConsumerTab.Now -> com.viroreach.app.moments.NowScreen(
                     session = session,
-                    onOpenChat = { route -> chatRoute = route; overlay = ConsumerOverlay.Chat },
                     onCall = { peer, phone, name ->
                         beginCall(CallPresentation(displayName = name, phoneE164 = phone))
                         withMic { scope.launch { runCatching { session.placeOutgoingCall(phone, name, peer) } } }
                     },
-                    onOpenRelationship = { peer, phone, name ->
-                        relationshipTarget = Triple(peer, phone, name); overlay = ConsumerOverlay.Relationship
+                    onOpenChat = { userId, name ->
+                        overlay = ConsumerOverlay.None
+                        chatRoute = ChatRoute(
+                            conversationId = null,
+                            peerName = name,
+                            peerUserId = userId,
+                            peerPhoneE164 = null,
+                        )
+                        overlay = ConsumerOverlay.Chat
                     },
-                    onSearch = { overlay = ConsumerOverlay.Search },
-                    onNewGroup = { overlay = ConsumerOverlay.NewGroup },
-                    showMoments = true,
                 )
 
                 ViroConsumerTab.Contacts -> ContactsScreen(
@@ -1146,7 +1149,7 @@ fun ConsumerNav(
 
                 )
 
-                ViroConsumerTab.Messages -> MessagesInboxScreen(
+                ViroConsumerTab.Chats -> MessagesInboxScreen(
 
                     session = session,
 
@@ -1310,6 +1313,16 @@ fun ConsumerNav(
                 )
 
             }
+
+            // Knocks reach the host wherever they happen to be in the app;
+            // accepting launches the ordinary call flow from right here.
+            com.viroreach.app.moments.MomentKnockListener(
+                session = session,
+                onCall = { peer, phone, name ->
+                    beginCall(CallPresentation(displayName = name, phoneE164 = phone))
+                    withMic { scope.launch { runCatching { session.placeOutgoingCall(phone, name, peer) } } }
+                },
+            )
 
         }
 

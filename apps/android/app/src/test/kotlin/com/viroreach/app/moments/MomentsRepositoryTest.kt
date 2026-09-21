@@ -9,11 +9,34 @@ import java.time.Instant
 class MomentsRepositoryTest {
     private fun moment(end: Long = System.currentTimeMillis() + 60_000) = MomentDto(
         "moment", "alice", "FREE", null, "CONNECTIONS", "Alice", null,
-        Instant.now().toString(), Instant.ofEpochMilli(end).toString(), true,
+        Instant.now().toString(), Instant.ofEpochMilli(end).toString(), true, 1,
     )
+    private fun message(id: String = "m1", sender: String = "bob", body: String = "hello") = MomentMessageDto(
+        id, "moment", sender, if (sender == "alice") "Alice" else "Bob", body, Instant.now().toString(),
+        listOf(MomentReactionDto("🔥", listOf("alice"))),
+    )
+    private fun room(messages: List<MomentMessageDto> = listOf(message()),
+                     participants: List<MomentParticipantDto> = listOf(
+                         MomentParticipantDto("alice", "Alice", true, Instant.now().toString()),
+                         MomentParticipantDto("bob", "Bob", false, Instant.now().toString()),
+                     )) = MomentRoomDto(moment(), Instant.now().toString(), participants, messages)
+
     private class Api(var list: List<MomentDto>) : ViroMomentsApi {
         var fail = false
+        var failRooms = false
         var afterMutation: () -> Unit = {}
+        var roomSnapshot: MomentRoomDto = MomentRoomDto(
+            MomentDto("moment", "alice", "FREE", null, "CONNECTIONS", "Alice", null,
+                Instant.now().toString(), Instant.ofEpochMilli(System.currentTimeMillis() + 60_000).toString(), true, 1),
+            Instant.now().toString(),
+            listOf(MomentParticipantDto("alice", "Alice", true, Instant.now().toString())),
+            emptyList(),
+        )
+        var sent = mutableListOf<MomentMessageDto>()
+        var knocksSent = 0
+        var invited = mutableListOf<String>()
+        var knockResponses = mutableListOf<Pair<String, Boolean>>()
+        var left = 0
         override suspend fun now(): MomentsNowDto {
             if (fail) error("offline")
             return MomentsNowDto(Instant.now().toString(), list)
@@ -26,7 +49,34 @@ class MomentsRepositoryTest {
         }
         override suspend fun extend(id: String, body: ExtendMomentBody) = error("unused")
         override suspend fun end(id: String) { list = emptyList(); afterMutation() }
+        override suspend fun invitations(): MomentInvitationsDto {
+            if (fail) error("offline")
+            return MomentInvitationsDto(emptyList())
+        }
+        override suspend fun declineInvitation(id: String) {}
+        override suspend fun join(id: String): MomentRoomDto {
+            if (failRooms) throw retrofit2.HttpException(retrofit2.Response.error<Any?>(404, okhttp3.ResponseBody.create(null, "")))
+            return roomSnapshot
+        }
+        override suspend fun leave(id: String) { left++ }
+        override suspend fun room(id: String): MomentRoomDto {
+            if (failRooms) throw retrofit2.HttpException(retrofit2.Response.error<Any?>(404, okhttp3.ResponseBody.create(null, "")))
+            return roomSnapshot.copy(messages = roomSnapshot.messages + sent)
+        }
+        override suspend fun sendMessage(id: String, body: SendMomentMessageBody): MomentMessageDto {
+            val m = MomentMessageDto("sent-${sent.size}", id, "bob", "Bob", body.body, Instant.now().toString())
+            sent.add(m)
+            return m
+        }
+        override suspend fun react(id: String, messageId: String, body: MomentReactBody) {}
+        override suspend fun knock(id: String) { knocksSent++ }
+        override suspend fun knocks(id: String) = KnocksDto(emptyList())
+        override suspend fun respondToKnock(id: String, knockerId: String, body: KnockResponseBody) {
+            knockResponses.add(knockerId to body.accept)
+        }
+        override suspend fun invite(id: String, body: InviteBody) { invited.add(body.userId) }
     }
+
     @Test fun `expired cached entries never return`() = runTest {
         val api = Api(listOf(moment(System.currentTimeMillis()-1000)))
         val repo = MomentsRepository(api) { "bob" }
@@ -70,4 +120,83 @@ class MomentsRepositoryTest {
         assertEquals(2,remainingMinutes(61001,1000))
     }
     @Test fun `free activity has consumer label`() { assertEquals("Free for a quick call", moment().activity()) }
+
+    // ------------------------------------------------------------- Phase 2
+
+    @Test fun `entering a room applies its snapshot once`() = runTest {
+        val api = Api(emptyList()); api.roomSnapshot = room()
+        val state = MomentRoomState(api, "moment") { "bob" }
+        assertTrue(state.enter().isSuccess)
+        assertEquals(2, state.participants.value.size)
+        assertEquals(1, state.messages.value.size)
+        assertEquals("alice", state.moment.value?.creatorUserId)
+    }
+    @Test fun `a vanished Moment closes the room instead of erroring forever`() = runTest {
+        val api = Api(emptyList()); api.failRooms = true
+        val state = MomentRoomState(api, "moment") { "bob" }
+        assertTrue(state.enter().isFailure)
+        assertTrue(state.closed.value)
+    }
+    @Test fun `reconnect cannot duplicate messages - the server list is authoritative`() = runTest {
+        val api = Api(emptyList())
+        val state = MomentRoomState(api, "moment") { "bob" }
+        api.roomSnapshot = room(messages = listOf(message()))
+        state.enter()
+        // The same message arrives twice from the socket while refetching.
+        val frame = mapOf("momentId" to "moment", "message" to mapOf(
+            "id" to "m1", "momentId" to "moment", "senderUserId" to "bob", "senderName" to "Bob",
+            "body" to "hello", "createdAt" to Instant.now().toString(), "reactions" to emptyList<Any>()))
+        state.onFrame("moment.message", frame)
+        state.onFrame("moment.message", frame)
+        assertEquals(1, state.messages.value.count { it.id == "m1" })
+        state.refresh()
+        assertEquals(listOf("m1"), state.messages.value.map { it.id })
+    }
+    @Test fun `frames for other rooms are ignored`() = runTest {
+        val api = Api(emptyList())
+        val state = MomentRoomState(api, "moment") { "bob" }
+        state.enter()
+        state.onFrame("moment.ended", mapOf("momentId" to "other-moment"))
+        assertFalse(state.closed.value)
+    }
+    @Test fun `end and expiry frames close the room`() = runTest {
+        val api = Api(emptyList())
+        val state = MomentRoomState(api, "moment") { "bob" }
+        state.enter()
+        state.onFrame("moment.ended", mapOf("momentId" to "moment"))
+        assertTrue(state.closed.value)
+    }
+    @Test fun `guests leave on close, the host does not`() = runTest {
+        val api = Api(emptyList())
+        val guest = MomentRoomState(api, "moment") { "bob" }
+        guest.enter(); guest.leave()
+        assertEquals(1, api.left)
+        val host = MomentRoomState(api, "moment") { "alice" }
+        host.enter(); host.leave()
+        assertEquals(1, api.left)
+    }
+    @Test fun `empty sends never reach the server`() = runTest {
+        val api = Api(emptyList())
+        val state = MomentRoomState(api, "moment") { "bob" }
+        state.enter()
+        assertTrue(state.send("   ").isFailure)
+        assertEquals(0, api.sent.size)
+    }
+    @Test fun `sending appends the authoritative message`() = runTest {
+        val api = Api(emptyList())
+        val state = MomentRoomState(api, "moment") { "bob" }
+        state.enter()
+        assertTrue(state.send("I'm in").isSuccess)
+        assertEquals("I'm in", state.messages.value.last().body)
+    }
+    @Test fun `knock and invite delegate to the api`() = runTest {
+        val api = Api(emptyList())
+        val repo = MomentsRepository(api) { "bob" }
+        assertTrue(repo.knock("moment").isSuccess)
+        assertEquals(1, api.knocksSent)
+        assertTrue(repo.invite("moment", "carol").isSuccess)
+        assertEquals(listOf("carol"), api.invited)
+        assertTrue(repo.respondToKnock("moment", "bob", true).isSuccess)
+        assertEquals(listOf("bob" to true), api.knockResponses)
+    }
 }

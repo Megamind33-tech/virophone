@@ -177,6 +177,9 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(project(":feature:calling"))
+    // The Moments fakes simulate HTTP statuses (a vanished Moment must close
+    // the room); retrofit types are otherwise internal to core:network.
+    testImplementation(libs.retrofit)
     androidTestImplementation(libs.androidx.junit)
     debugImplementation(libs.androidx.ui.tooling)
 }

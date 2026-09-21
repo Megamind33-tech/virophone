@@ -1,6 +1,7 @@
 import { Injectable, Logger, Module, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { MomentsService } from './moments.service';
 import { MomentsController } from './moments.controller';
+import { PushModule } from '../push/push.module';
 
 @Injectable()
 export class MomentsClock implements OnModuleInit, OnModuleDestroy {
@@ -20,5 +21,5 @@ export class MomentsClock implements OnModuleInit, OnModuleDestroy {
   }
 }
 
-@Module({ controllers: [MomentsController], providers: [MomentsService, MomentsClock] })
+@Module({ imports: [PushModule], controllers: [MomentsController], providers: [MomentsService, MomentsClock] })
 export class MomentsModule {}

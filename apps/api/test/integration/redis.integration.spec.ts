@@ -43,7 +43,9 @@ describe('Redis Integration', () => {
 
     await resetDatabase();
     app = await createTestApp();
-  });
+    // Same as the other DB-resetting suites: the schema keeps growing, and the
+    // default 5 s hook timeout turns a slow DROP SCHEMA into a false failure.
+  }, 120000);
 
   afterAll(async () => {
     if (app) await app.close();

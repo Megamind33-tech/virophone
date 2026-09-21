@@ -166,7 +166,11 @@ describe('Viro Now: authenticated visibility and lifecycle', () => {
       await http().delete(`/api/v1/moments/${m.id}`).set(auth(a)).expect(200); await waitFor('moment.ended');
       const expiring = await create(); await db.query(`UPDATE moments SET created_at=now()-interval '2 minutes', expires_at=now()-interval '1 minute' WHERE id=$1`, [expiring.id]);
       await app.get(MomentsClock).tick(); await waitFor('moment.expired');
-      expect(frames.filter(f=>f.type?.startsWith('moment.')).every(f=>Object.keys(f.payload).length===0)).toBe(true);
+      expect(frames.filter(f=>f.type==='moment.created'||f.type==='moment.updated')
+        .every(f=>Object.keys(f.payload).length===0)).toBe(true);
+      // Phase 2 rooms close on these, so they name their Moment — and nothing else.
+      expect(frames.filter(f=>f.type==='moment.ended'||f.type==='moment.expired')
+        .every(f=>JSON.stringify(Object.keys(f.payload).sort())===JSON.stringify(['momentId']))).toBe(true);
     } finally {
       socket.close();
       for (let i=0; i<100 && !disconnect.mock.results.length; i++) await new Promise(r=>setTimeout(r,20));

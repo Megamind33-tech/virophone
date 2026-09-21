@@ -66,6 +66,10 @@ class SessionManager private constructor(context: Context) {
     val relationships: RelationshipRepository = RelationshipRepository(appContext, messagingApi)
     val moments = com.viroreach.app.moments.MomentsRepository(viroApiClient.moments) { tokenStore.getUserId() }
 
+    /** State for one open Moment Room; short-lived like the room itself. */
+    fun openMomentRoom(momentId: String): com.viroreach.app.moments.MomentRoomState =
+        com.viroreach.app.moments.MomentRoomState(viroApiClient.moments, momentId) { tokenStore.getUserId() }
+
     /**
      * The encrypted backup of this phone's chats. Without it, an encrypted
      * conversation exists only on the phone that opened it.
@@ -158,16 +162,36 @@ class SessionManager private constructor(context: Context) {
         startWssWatchdog()
         startMessaging()
         scope.launch {
-            callManager.messagingFrames.collect { (type, _) ->
-                if (type.startsWith("moment.")) moments.refresh()
+            callManager.messagingFrames.collect { (type, payload) ->
+                if (type.startsWith("moment.")) moments.onFrame(type, jsonToMap(payload))
             }
         }
         scope.launch {
             callManager.wssConnectionState.collect { state ->
-                if (state == SignalingConnectionState.CONNECTED && isAuthenticated) moments.refresh()
+                if (state == SignalingConnectionState.CONNECTED && isAuthenticated) {
+                    moments.refresh(); moments.refreshInvitations()
+                }
             }
         }
     }
+
+    /** Socket payloads arrive as org.json objects (stubbed on the unit-test
+     *  classpath); repositories take plain maps so they stay testable. */
+    private fun jsonToMap(json: org.json.JSONObject): Map<String, Any?> =
+        json.keys().asSequence().associateWith { key ->
+            when (val value = json.get(key)) {
+                is org.json.JSONObject -> jsonToMap(value)
+                is org.json.JSONArray -> (0 until value.length()).mapNotNull { i ->
+                    val item = value.get(i)
+                    when (item) {
+                        is org.json.JSONObject -> jsonToMap(item)
+                        is org.json.JSONArray -> null
+                        else -> item
+                    }
+                }
+                else -> value
+            }
+        }
 
     /**
      * Messaging runs for the life of the process, not of a screen: frames are

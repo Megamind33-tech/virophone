@@ -63,7 +63,6 @@ fun MessagesInboxScreen(
     startOnConnections: Boolean = false,
     onSearch: () -> Unit = {},
     onNewGroup: () -> Unit = {},
-    showMoments: Boolean = false,
 ) {
     var tab by rememberSaveable { mutableIntStateOf(if (startOnConnections) 1 else 0) }
     LaunchedEffect(startOnConnections) { if (startOnConnections) tab = 1 }
@@ -74,16 +73,15 @@ fun MessagesInboxScreen(
                     Modifier.fillMaxWidth().padding(horizontal = ViroSpacing.md, vertical = ViroSpacing.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (showMoments) Text("Viro", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
-                    else Segmented(listOf("Messages", "Connections"), tab) { tab = it }
+                    Segmented(listOf("Messages", "Connections"), tab) { tab = it }
                     Spacer(Modifier.weight(1f))
-                    if (showMoments || tab == 0) {
+                    if (tab == 0) {
                         IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Search messages", tint = Color.White) }
                         IconButton(onClick = onNewGroup) { Icon(Icons.Default.GroupAdd, "New group", tint = Color.White) }
                     }
                 }
-                if (showMoments || tab == 0) {
-                    Inbox(session, onOpenChat, if (showMoments) ({ com.viroreach.app.moments.MomentsHeader(session, onCall) }) else null)
+                if (tab == 0) {
+                    Inbox(session, onOpenChat, null)
                 } else {
                     ConnectionsDashboard(session, onOpenChat, onCall, onOpenRelationship)
                 }
