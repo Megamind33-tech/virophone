@@ -71,9 +71,9 @@ The previously excluded/early-returning API regression suites were exercised aga
 
 ## 7. Test results
 
-- Android `:app:assembleDebug testDebugUnitTest --offline`: passed; 113 tests, zero failures/errors.
+- Android `:app:assembleDebug testDebugUnitTest --offline`: passed; 113 tests, zero failures/errors. Rerun on the release commit `4b7dc7d` (all Android modules): 113/113 again.
 - Compose regression checker: 933 methods, zero imbalanced.
-- Backend isolated full-suite result: pending final run record.
+- Backend isolated full suite (`jest --runInBand`, builder image + isolated PostgreSQL 16 and Redis 7 on the VPS): **42/42 suites, 308/308 tests passed**, 203 s, final run 2026-09-21 09:58 UTC. Log preserved on the VPS at `/tmp/viro-moments-validation-20260921/tests-final.log`.
 - `git diff --check`: passed.
 
 ## 8. Two-device test result
@@ -97,4 +97,23 @@ Pending tester captures. The previously attempted emulator failed with WHPX. No 
 
 ## 12. Commit and delivery
 
-Implementation commit, APK hash, backend migration verification and Firebase App Distribution release link will be recorded after release. The APK is a tester debug build delivered through the existing distribution script, not a Play production release.
+Released 2026-09-21, following the existing `scripts/vps-deploy.sh` and `scripts/distribute-android.sh` workflow.
+
+**Implementation commit:** `4b7dc7d` — "Now, phase one: what you're up to, for the people allowed to see it" (29 files, +1126/−210, including this report, the audit and the tester checklist).
+
+**Backend deployment (https://reach.viro3.online):**
+
+- Pre-release safety, before deploying: running API image tagged `viro-reach-api:pre-moments-20260921` (rollback point) and database backed up to `/opt/viro-reach/backups/pre_moments_20260921T101100Z.sql.gz` (gzip-verified).
+- `scripts/vps-deploy.sh` completed 2026-09-21 10:14 UTC; `/health/live` and `/health/ready` OK (database and redis connected, media configured); LiveKit verified listening by the deploy script.
+- Migration `025_moments` recorded in `schema_migrations` at 10:13:59 UTC; `moments` table present with all three indexes, including the partial unique `moments_one_active_per_creator`.
+- Production smoke test (hardware-test OTP flow via the public URL): authenticated create → now list → extend (expiry correctly advanced to creation + 30 min) → end → now list empty. All 2xx. Unauthenticated `GET /api/v1/moments/now` returns 401 both directly and through Caddy.
+
+**Tester APK (Firebase App Distribution, debug build):**
+
+- versionCode 91, versionName `0.4.91-4b7dc7d`, built from commit `4b7dc7d`.
+- SHA-256 `faf5d366844304611a9c6d89ccdc43a1c75ec50683d886a6c9c84548747f4820`; Firebase's uploaded-binary URL names the same digest.
+- Release `0jf4oj33crpig` distributed to the configured tester with the checklist notes attached.
+- Console: https://console.firebase.google.com/project/viro-8a/appdistribution/app/android:com.viroreach.app/releases/0jf4oj33crpig
+- Tester link: https://appdistribution.firebase.google.com/testerapps/1:74644641402:android:57579c43fba4ecbde98dc3/releases/0jf4oj33crpig
+
+This is a tester debug build delivered through the existing distribution script, not a Play production release. Device acceptance (section 8) remains open until the two testers return results against this release.
