@@ -24,6 +24,7 @@ import com.viroreach.core.network.MsgDto
 import com.viroreach.core.network.PrivateBody
 import com.viroreach.core.network.ReactBody
 import com.viroreach.core.network.ReactionDto
+import com.viroreach.core.network.ReplyDto
 import com.viroreach.core.network.SendBody
 import com.viroreach.core.network.TokenStore
 import com.viroreach.core.network.ViroMessagingApi
@@ -345,11 +346,30 @@ class MessagingRepository(
             metadata = payload.meta,
             media = payload.media?.let { SealedMessage.mediaDto(it, payload.type) },
             poll = pollFrom(payload.meta, dto),
+            replyTo = quotedFrom(dto),
+        )
+    }
+
+    /**
+     * The line quoted above a reply.
+     *
+     * The server sends what it knows of the message being replied to, which
+     * for an encrypted one is nothing. This phone opened that message, so it
+     * fills the quote in from its own copy.
+     */
+    private suspend fun quotedFrom(dto: MsgDto): ReplyDto? {
+        val reply = dto.replyTo ?: return null
+        if (!reply.body.isNullOrBlank() || reply.deleted == true) return reply
+        val quoted = dao.message(reply.id) ?: return reply
+        return reply.copy(
+            type = quoted.type,
+            body = quoted.body?.take(160),
+            deleted = quoted.deletedAt != null,
         )
     }
 
     /** The message as this phone already holds it, with the votes brought up to date. */
-    private fun asOpenedBefore(dto: MsgDto, existing: MessageEntity): MsgDto {
+    private suspend fun asOpenedBefore(dto: MsgDto, existing: MessageEntity): MsgDto {
         val meta = ChatJson.map(existing.metadataJson).takeIf { it.isNotEmpty() }
         return dto.copy(
             type = existing.type,
@@ -358,6 +378,7 @@ class MessagingRepository(
             media = ChatJson.media(existing.mediaJson),
             poll = pollFrom(meta, dto)
                 ?: existing.pollJson?.let { runCatching { ChatJson.gson.fromJson(it, PollDto::class.java) }.getOrNull() },
+            replyTo = ChatJson.reply(existing.replyJson) ?: quotedFrom(dto),
         )
     }
 

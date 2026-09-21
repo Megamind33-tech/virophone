@@ -457,7 +457,9 @@ export class MessagesService {
                 .map((v) => ({ userId: v.userId, optionIndex: v.optionIndex }))
             : null,
         envelopes:
-          m.type === 'ENCRYPTED' && !deleted
+          // A view-once message that has been opened gives up nothing more,
+          // and the key to its file is inside the envelope.
+          m.type === 'ENCRYPTED' && !deleted && !consumed
             ? sealed
                 .filter((e) => e.messageId === m.id)
                 .map((e) => ({ deviceId: e.deviceId, ciphertext: e.ciphertext, type: e.envelopeType }))
