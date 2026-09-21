@@ -2,6 +2,7 @@ import { Injectable, Logger, Module, OnModuleDestroy, OnModuleInit } from '@nest
 import { MomentsService } from './moments.service';
 import { MomentsController } from './moments.controller';
 import { PushModule } from '../push/push.module';
+import { LiveKitService } from '../livekit/livekit.service';
 
 @Injectable()
 export class MomentsClock implements OnModuleInit, OnModuleDestroy {
@@ -21,5 +22,5 @@ export class MomentsClock implements OnModuleInit, OnModuleDestroy {
   }
 }
 
-@Module({ imports: [PushModule], controllers: [MomentsController], providers: [MomentsService, MomentsClock] })
+@Module({ imports: [PushModule], controllers: [MomentsController], providers: [MomentsService, MomentsClock, LiveKitService], exports: [MomentsService] })
 export class MomentsModule {}

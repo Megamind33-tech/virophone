@@ -96,6 +96,8 @@ export class MomentsController {
   @Post(':id/state') @HttpCode(200) changeRoom(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: RoomChangeDto) {
     return this.moments.changeRoom(req.user.sub, id, this.toChange(body));
   }
+  /** Admission to the room's live faces and voices; turns nothing on by itself. */
+  @Post(':id/presence') @HttpCode(200) presence(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) { return this.moments.presence(req.user.sub, id); }
   @Get(':id/room') room(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) { return this.moments.room(req.user.sub, req.user.deviceId, id); }
   @Post(':id/messages') message(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: MomentMessageDto) {
     return this.moments.message(req.user.sub, req.user.deviceId, id, body);

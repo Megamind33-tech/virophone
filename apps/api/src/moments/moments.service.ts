@@ -1,9 +1,10 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { RealtimeRegistry } from '../realtime/realtime.registry';
 import { PushService } from '../push/push.service';
 import { publicAvatarUrl } from '../users/avatar.util';
 import { RedisService } from '../redis/redis.service';
+import { LiveKitService } from '../livekit/livekit.service';
 import {
   applyChange, initialState, intentForLegacyType, MomentIntent, MomentRuntimeState, RoomChange, RoomChangeError,
 } from './room-engine';
@@ -36,6 +37,7 @@ export class MomentsService {
     private readonly realtime: RealtimeRegistry,
     private readonly push: PushService,
     private readonly redis: RedisService,
+    private readonly livekit: LiveKitService,
   ) {}
 
   async now(userId: string) {
@@ -183,6 +185,12 @@ export class MomentsService {
 
   async join(userId: string, deviceId: string, id: string) {
     const moment = await this.liveMoment(userId, id);
+    // A block is absolute: two people who have blocked each other never share
+    // a room, whoever's Moment it is. The answer is the same one a Moment the
+    // person cannot see gets, so it says nothing about who blocked whom.
+    if (!(await this.isParticipant(id, userId)) && (await this.blockedInRoom(id, userId))) {
+      throw new NotFoundException('Moment unavailable.');
+    }
     // Idempotent: reconnecting or re-tapping Join cannot duplicate a row or a
     // second "joined" announcement to people already in the room.
     const inserted = this.rowsOf(await this.db.query(`INSERT INTO moment_participants (moment_id, user_id)
@@ -197,8 +205,11 @@ export class MomentsService {
     const hosts = this.rowsOf(await this.db.query(`SELECT 1 AS one FROM moments WHERE id = $2 AND creator_user_id = $1`, [userId, id]));
     if (hosts.length > 0) throw new BadRequestException('End your Moment instead of leaving it.');
     const removed = this.rowsOf(await this.db.query(`DELETE FROM moment_participants WHERE moment_id = $1 AND user_id = $2 RETURNING user_id`, [id, userId]));
-    if (removed.length === 0) throw new NotFoundException('You are not in this room.');
+    // Already out — left on another phone, or separated by a block — is still
+    // out: leaving twice is not an error, and says nothing about why.
+    if (removed.length === 0) return { success: true };
     await this.announceRoom(id, 'moment.left', { momentId: id, userId });
+    void this.livekit.removeFromRoom(this.livekit.roomNameForMoment(id), userId);
     return { success: true };
   }
 
@@ -513,6 +524,58 @@ export class MomentsService {
     });
   }
 
+  // --------------------------------------------------------------- presence
+
+  private readonly log = new Logger(MomentsService.name);
+
+  private async blockedInRoom(momentId: string, userId: string) {
+    const [row] = await this.db.query(`SELECT 1 FROM moment_participants mp JOIN blocks b ON
+      (b.blocker_user_id = $2 AND b.blocked_user_id = mp.user_id) OR (b.blocker_user_id = mp.user_id AND b.blocked_user_id = $2)
+      WHERE mp.moment_id = $1 AND mp.user_id <> $2 LIMIT 1`, [momentId, userId]);
+    return !!row;
+  }
+
+  /**
+   * Admission to the room's live media: faces and voices, for the people in
+   * this Moment only.
+   *
+   * The token lets a phone publish its camera and microphone; it does not
+   * turn either on. That happens on the phone, only when its person chooses.
+   */
+  async presence(userId: string, id: string) {
+    await this.liveMoment(userId, id);
+    if (!(await this.isParticipant(id, userId))) throw new ForbiddenException('Join this Moment first.');
+    if (await this.blockedInRoom(id, userId)) throw new NotFoundException('Moment unavailable.');
+    if (!this.livekit.isConfigured()) throw new ServiceUnavailableException("Live video isn't available right now.");
+    const creds = await this.livekit.generateMomentToken(id, userId, await this.nameOf(userId));
+    return { url: creds.url, token: creds.token, roomName: creds.roomName };
+  }
+
+  /**
+   * Someone has just blocked someone. In every live Moment they are both in,
+   * they stop sharing it: the host keeps their own room; otherwise the person
+   * blocked leaves. They are taken out of the media room too, not just the
+   * list, since a live connection outlasts the token that opened it.
+   */
+  async separate(blockerId: string, blockedId: string) {
+    const rooms = await this.db.query(`SELECT m.id, m.creator_user_id FROM moments m
+      JOIN moment_participants a ON a.moment_id = m.id AND a.user_id = $1
+      JOIN moment_participants b ON b.moment_id = m.id AND b.user_id = $2
+      WHERE m.status = 'ACTIVE' AND m.expires_at > now()`, [blockerId, blockedId]);
+    for (const room of rooms) {
+      const leaving = room.creator_user_id === blockedId ? blockerId : blockedId;
+      try {
+        await this.db.query(`DELETE FROM moment_participants WHERE moment_id = $1 AND user_id = $2`, [room.id, leaving]);
+        void this.livekit.removeFromRoom(this.livekit.roomNameForMoment(room.id), leaving);
+        await this.announceRoom(room.id, 'moment.left', { momentId: room.id, userId: leaving });
+        // The person leaving is no longer in the room to hear it, so they are told directly.
+        await this.realtime.deliverToUser(leaving, { type: 'moment.left', payload: { momentId: room.id, userId: leaving } });
+      } catch (e) {
+        this.log.warn(`Moment separation failed for ${room.id}: ${(e as Error).message}`);
+      }
+    }
+  }
+
   private async announceRoom(momentId: string, type: string, payload: Record<string, unknown>) {
     const rows = await this.db.query(`SELECT user_id FROM moment_participants WHERE moment_id = $1`, [momentId]);
     await Promise.allSettled(rows.map((r: any) => this.realtime.deliverToUser(r.user_id, { type, payload })));
@@ -546,6 +609,7 @@ export class MomentsService {
     await this.db.query(`DELETE FROM moment_invitations WHERE moment_id = $1`, [row.id]);
     // The shape of the room goes with it, so nothing can rebuild a closed room.
     await this.redis.del(this.runtimeKey(row.id));
+    void this.livekit.closeRoom(this.livekit.roomNameForMoment(row.id));
   }
 
   private async notify(row: any, type: string, extra: Record<string, unknown> = {}) {
