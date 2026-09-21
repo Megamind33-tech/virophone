@@ -95,6 +95,21 @@ class MomentsRepositoryTest {
             knockResponses.add(knockerId to body.accept)
         }
         override suspend fun invite(id: String, body: InviteBody) { invited.add(body.userId) }
+        /** What the ending offered, and what was actually asked to be kept. */
+        var offers = listOf(
+            MomentKeepsakeOfferDto("o1", "MOMENT", "Cooking together", null),
+            MomentKeepsakeOfferDto("o2", "DECISION", "Which rice?", "Jollof"),
+        )
+        var endingFails = false
+        val keptCalls = mutableListOf<List<String>>()
+        override suspend fun ending(id: String): MomentEndingDto {
+            if (endingFails) throw retrofit2.HttpException(
+                retrofit2.Response.error<Any?>(404, okhttp3.ResponseBody.create(null, "")))
+            return MomentEndingDto(id, listOf("Natasha"), 4_320_000, null, offers)
+        }
+        override suspend fun keep(id: String, body: KeepBody) { keptCalls.add(body.offerIds) }
+        override suspend fun keepsakes() = MomentKeepsakesDto(emptyList())
+        override suspend fun forgetKeepsake(id: String) {}
         /** The room shape the fake server holds, and every change asked of it. */
         var runtimeState = MomentRuntimeDto("moment", 1, "COOK", "PRESENCE", emptyList(), "KITCHEN")
         val changes = mutableListOf<MomentRoomChangeBody>()
@@ -323,5 +338,38 @@ class MomentsRepositoryTest {
         repo.setVisibility("moment", "CONTACTS")
         assertEquals(listOf("moment" to "CONTACTS"), api.visibilities)
         assertEquals("CONTACTS", repo.moments.value.single().visibility)
+    }
+// ----------------------------------------------------- keeping something
+
+    @Test fun `an ending offers what the Moment had, and how long it was`() = runTest {
+        val api = Api(listOf(moment()))
+        val repo = MomentsRepository(api) { "bob" }
+        val ending = repo.ending("moment")!!
+        assertEquals(listOf("Natasha"), ending.withPeople)
+        assertEquals(4_320_000L, ending.togetherMs)
+        assertEquals(listOf("Cooking together", "Which rice?"), ending.offers.map { it.title })
+    }
+
+    @Test fun `keeping nothing sends nothing at all`() = runTest {
+        val api = Api(listOf(moment()))
+        val repo = MomentsRepository(api) { "bob" }
+        assertTrue(repo.keep("moment", emptyList()).isSuccess)
+        // Not an empty request — no request. Keeping nothing is the default,
+        // and the default must not need the server's permission.
+        assertEquals(emptyList<List<String>>(), api.keptCalls)
+    }
+
+    @Test fun `keeping sends exactly what was chosen`() = runTest {
+        val api = Api(listOf(moment()))
+        val repo = MomentsRepository(api) { "bob" }
+        assertTrue(repo.keep("moment", listOf("o2")).isSuccess)
+        assertEquals(listOf(listOf("o2")), api.keptCalls)
+    }
+
+    @Test fun `an ending that is gone is not an error, it is simply over`() = runTest {
+        val api = Api(listOf(moment()))
+        api.endingFails = true
+        val repo = MomentsRepository(api) { "bob" }
+        assertNull(repo.ending("moment"))
     }
 }

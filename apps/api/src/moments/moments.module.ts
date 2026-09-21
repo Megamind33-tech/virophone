@@ -24,6 +24,8 @@ export class MomentsClock implements OnModuleInit, OnModuleDestroy {
     // Every ten minutes or so: files nothing points at any more.
     if (++this.ticks % 120 === 0) {
       try { await this.moments.sweepOrphanMedia(); } catch (e) { this.logger.warn(`Moment media sweep failed: ${(e as Error).message}`); }
+      // Endings nobody answered: the Moment leaves nothing behind.
+      try { await this.moments.sweepKeepsakeOffers(); } catch (e) { this.logger.warn(`Keepsake sweep failed: ${(e as Error).message}`); }
     }
     this.running = false;
   }

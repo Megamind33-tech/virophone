@@ -6,6 +6,7 @@ import { publicAvatarUrl } from '../users/avatar.util';
 import { RedisService } from '../redis/redis.service';
 import { LiveKitService } from '../livekit/livekit.service';
 import { createHmac, timingSafeEqual } from 'crypto';
+import { decryptText, encryptText } from '../common/crypto/field-cipher';
 import * as fs from 'fs';
 import {
   applyPlayback, idlePlayback, MomentPlayback, PlaybackChange, PlaybackError, PlayableMedia,
@@ -19,7 +20,7 @@ import {
 } from './room-tools';
 
 import {
-  applyChange, initialState, intentForLegacyType, MomentIntent, MomentRuntimeState, RoomChange, RoomChangeError,
+  applyChange, initialState, intentForLegacyType, intentWords, MomentIntent, MomentRuntimeState, RoomChange, RoomChangeError,
 } from './room-engine';
 
 /** An upload as multer leaves it on disk. */
@@ -915,6 +916,8 @@ export class MomentsService {
    * no participants, messages, reactions, knocks or invitations, so the room
    * cannot be rejoined, inspected or resurrected. */
   private async closeRoom(row: any, type: string) {
+    // Before anything is erased, and only from what the room already had.
+    await this.offerKeepsakes(row);
     await this.notify(row, type, { momentId: row.id });
     await this.db.query(`DELETE FROM moment_participants WHERE moment_id = $1`, [row.id]);
     await this.db.query(`DELETE FROM moment_cheers WHERE moment_id = $1`, [row.id]);
@@ -931,6 +934,224 @@ export class MomentsService {
     const shared = await this.db.query(`SELECT * FROM moment_media WHERE moment_id = $1`, [row.id]);
     for (const item of shared) this.removeFile(item);
     await this.db.query(`DELETE FROM moment_media WHERE moment_id = $1`, [row.id]);
+  }
+
+  // -------------------------------------------------------------- keepsakes
+
+  /** How long an unanswered ending waits before it leaves nothing behind. */
+  private static readonly KEEPSAKE_OFFER_HOURS = 48;
+
+  /**
+   * Gathers what this Moment could leave behind, just before its room is
+   * erased.
+   *
+   * Nothing here is kept — these are offers, and an offer nobody accepts is
+   * swept away. Everything is metadata: "we watched this" rather than the
+   * file, which is deleted at closing exactly as it was before. That is the
+   * difference between a Moment that leaves a memory and a Moment that
+   * quietly becomes a recording.
+   *
+   * A Moment somebody spent alone offers nothing: there is no "together" in
+   * it to keep.
+   */
+  private async offerKeepsakes(row: any) {
+    const people = await this.db.query(
+      `SELECT user_id FROM moment_participants WHERE moment_id = $1`, [row.id]);
+    if (people.length < 2) return;
+
+    const endedAt = new Date();
+    await this.db.query(`UPDATE moments SET ended_at = $2 WHERE id = $1 AND ended_at IS NULL`,
+      [row.id, endedAt]);
+
+    // The right to keep outlives the participant rows, which are about to go.
+    const audience = people.map((_: any, i: number) => `($1, ${i + 2}::uuid)`).join(',');
+    await this.db.query(
+      `INSERT INTO moment_keepsake_audience (moment_id, user_id) VALUES ${audience}
+       ON CONFLICT DO NOTHING`,
+      [row.id, ...people.map((x: any) => x.user_id)]);
+
+    const offers: { kind: string; title: string; detail: string | null }[] = [];
+
+    // The evening itself: what it was, with the people and the date carried by
+    // the Moment. This is the one nearly every Moment has, and often the only
+    // one anybody wants.
+    offers.push({
+      kind: 'MOMENT',
+      title: (row.text ?? '').trim() || intentWords(row.intent ?? intentForLegacyType(row.type)),
+      detail: null,
+    });
+
+    // What was decided, if anything was. A decision made together is exactly
+    // the thing that otherwise disappears into a chat nobody scrolls back to.
+    const choice = await this.choice(row.id);
+    if (choice.status === 'DECIDED' && choice.question) {
+      const chosen = choice.options.find((o) => o.id === choice.decided);
+      if (chosen) offers.push({ kind: 'DECISION', title: choice.question, detail: chosen.text });
+    }
+
+    // What was brought to watch or listen to, by name. The files themselves are
+    // deleted seconds from now, and are not what is being kept.
+    const shared = await this.db.query(
+      `SELECT title, kind FROM moment_media WHERE moment_id = $1 ORDER BY created_at`, [row.id]);
+    for (const item of shared) {
+      offers.push({
+        kind: 'MEDIA',
+        title: item.title,
+        detail: item.kind === 'AUDIO' ? 'Listened to together' : 'Watched together',
+      });
+    }
+
+    const expiresAt = new Date(endedAt.getTime() + MomentsService.KEEPSAKE_OFFER_HOURS * 3600_000);
+    const tuples = offers
+      .map((_, i) => `($1::uuid, ${i * 3 + 2}, ${i * 3 + 3}, ${i * 3 + 4}, ${offers.length * 3 + 2}::timestamptz)`)
+      .join(',');
+    await this.db.query(
+      `INSERT INTO moment_keepsake_offers (moment_id, kind, title, detail, expires_at) VALUES ${tuples}`,
+      [row.id,
+        ...offers.flatMap((o) => [o.kind, encryptText(o.title), o.detail === null ? null : encryptText(o.detail)]),
+        expiresAt]);
+  }
+
+  /**
+   * The ending, for somebody who was there: how long, with whom, and what
+   * could be kept.
+   *
+   * Readable only by the people who were in the room, and only while the
+   * offers live. After that the Moment leaves nothing behind, which is the
+   * behaviour somebody who simply closed the app should get.
+   */
+  async keepsakeOffers(userId: string, momentId: string) {
+    const [allowed] = await this.db.query(
+      `SELECT 1 FROM moment_keepsake_audience WHERE moment_id = $1 AND user_id = $2`,
+      [momentId, userId]);
+    if (!allowed) throw new NotFoundException('Moment unavailable.');
+
+    const [moment] = await this.db.query(
+      `SELECT id, created_at, ended_at FROM moments WHERE id = $1`, [momentId]);
+    if (!moment) throw new NotFoundException('Moment unavailable.');
+
+    // Names, never ids: a Viro id is not a person's name anywhere a person can
+    // see it.
+    const others = await this.db.query(
+      `SELECT p.display_name FROM moment_keepsake_audience a
+       LEFT JOIN profiles p ON p.user_id = a.user_id
+       WHERE a.moment_id = $1 AND a.user_id <> $2`, [momentId, userId]);
+
+    const offers = await this.db.query(
+      `SELECT id, kind, title, detail FROM moment_keepsake_offers
+       WHERE moment_id = $1 AND expires_at > now() ORDER BY
+         CASE kind WHEN 'MOMENT' THEN 0 WHEN 'DECISION' THEN 1 ELSE 2 END, created_at`,
+      [momentId]);
+    const mine = await this.db.query(
+      `SELECT offer_id FROM moment_keepsakes WHERE moment_id = $1 AND user_id = $2`,
+      [momentId, userId]);
+    const kept = new Set(mine.map((k: any) => k.offer_id));
+
+    const ended = moment.ended_at ? new Date(moment.ended_at) : new Date();
+    return {
+      momentId,
+      // The pieces, not the sentence: the app writes the ending in its own
+      // words, and knows the person's language.
+      withPeople: others.map((o: any) => (o.display_name || '').trim() || 'Viro user'),
+      togetherMs: Math.max(0, ended.getTime() - new Date(moment.created_at).getTime()),
+      endedAt: ended.toISOString(),
+      offers: offers.map((o: any) => ({
+        id: o.id,
+        kind: o.kind,
+        title: decryptText(o.title),
+        detail: o.detail === null ? null : decryptText(o.detail),
+        kept: kept.has(o.id),
+      })),
+    };
+  }
+
+  /**
+   * Keeps what somebody chose, and nothing else.
+   *
+   * An empty list is a real answer and the default one: it means "keep
+   * nothing". Keeping is per person — two people who keep the same evening
+   * each hold their own, and neither can reach into the other's.
+   */
+  async keepKeepsakes(userId: string, momentId: string, offerIds: string[]) {
+    const [allowed] = await this.db.query(
+      `SELECT 1 FROM moment_keepsake_audience WHERE moment_id = $1 AND user_id = $2`,
+      [momentId, userId]);
+    if (!allowed) throw new NotFoundException('Moment unavailable.');
+    const wanted = [...new Set(offerIds)];
+    if (wanted.length === 0) return { kept: 0 };
+
+    const offers = await this.db.query(
+      `SELECT id, kind, title, detail FROM moment_keepsake_offers
+       WHERE moment_id = $1 AND expires_at > now() AND id = ANY($2::uuid[])`,
+      [momentId, wanted]);
+    if (offers.length === 0) throw new NotFoundException('There is nothing left to keep from this Moment.');
+
+    const tuples = offers
+      .map((_: any, i: number) =>
+        `($1::uuid, $2::uuid, ${i * 4 + 3}::uuid, ${i * 4 + 4}, ${i * 4 + 5}, ${i * 4 + 6})`)
+      .join(',');
+    await this.db.query(
+      `INSERT INTO moment_keepsakes (moment_id, user_id, offer_id, kind, title, detail)
+       VALUES ${tuples} ON CONFLICT (user_id, offer_id) DO NOTHING`,
+      [momentId, userId, ...offers.flatMap((o: any) => [o.id, o.kind, o.title, o.detail])]);
+    return { kept: offers.length };
+  }
+
+  /**
+   * What this person has kept: the part of Viro that does not end when a
+   * Moment does.
+   */
+  async keepsakes(userId: string, limit = 100) {
+    const rows = await this.db.query(
+      `SELECT k.id, k.moment_id, k.kind, k.title, k.detail, k.kept_at, m.created_at
+       FROM moment_keepsakes k JOIN moments m ON m.id = k.moment_id
+       WHERE k.user_id = $1 ORDER BY k.kept_at DESC LIMIT $2`, [userId, Math.min(limit, 200)]);
+    const ids = [...new Set(rows.map((r: any) => r.moment_id))] as string[];
+    const people = ids.length === 0 ? [] : await this.db.query(
+      `SELECT a.moment_id, p.display_name FROM moment_keepsake_audience a
+       LEFT JOIN profiles p ON p.user_id = a.user_id
+       WHERE a.moment_id = ANY($1::uuid[]) AND a.user_id <> $2`, [ids, userId]);
+    const withWhom = new Map<string, string[]>();
+    for (const row of people) {
+      const list = withWhom.get(row.moment_id) ?? [];
+      list.push((row.display_name || '').trim() || 'Viro user');
+      withWhom.set(row.moment_id, list);
+    }
+    return {
+      keepsakes: rows.map((r: any) => ({
+        id: r.id,
+        momentId: r.moment_id,
+        kind: r.kind,
+        title: decryptText(r.title),
+        detail: r.detail === null ? null : decryptText(r.detail),
+        withPeople: withWhom.get(r.moment_id) ?? [],
+        happenedAt: new Date(r.created_at).toISOString(),
+        keptAt: new Date(r.kept_at).toISOString(),
+      })),
+    };
+  }
+
+  /** Someone's own keepsake, theirs to drop. */
+  async forgetKeepsake(userId: string, keepsakeId: string) {
+    const removed = this.rowsOf(await this.db.query(
+      `DELETE FROM moment_keepsakes WHERE id = $1 AND user_id = $2 RETURNING id`,
+      [keepsakeId, userId]));
+    if (removed.length === 0) throw new NotFoundException('Keepsake unavailable.');
+    return { success: true };
+  }
+
+  /**
+   * Offers nobody answered. A Moment that ended while everyone had already
+   * closed the app leaves nothing behind, which is the right default.
+   */
+  async sweepKeepsakeOffers() {
+    await this.db.query(`DELETE FROM moment_keepsake_offers WHERE expires_at <= now()`);
+    // An audience with no offers left and nothing kept is only the right to
+    // answer an ending that no longer exists.
+    await this.db.query(
+      `DELETE FROM moment_keepsake_audience a WHERE
+         NOT EXISTS (SELECT 1 FROM moment_keepsake_offers o WHERE o.moment_id = a.moment_id)
+         AND NOT EXISTS (SELECT 1 FROM moment_keepsakes k WHERE k.moment_id = a.moment_id)`);
   }
 
   private async notify(row: any, type: string, extra: Record<string, unknown> = {}) {

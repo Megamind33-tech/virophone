@@ -4,7 +4,7 @@ One engine renders every Moment. A Moment does not become a different app when
 people start cooking, listening or watching: the **room** changes around the
 people in it, and the Moment (who is here, how long, its chat) stays.
 
-Status: **Stages A (engine), B (live presence) and C (shared media) done.**
+Status: **Stages A (engine), B (live presence), C (shared media), D (interaction) and E (memory) done.**
 Interaction and memory are listed at the end with what they still need.
 
 ## Shape of a room
@@ -244,7 +244,41 @@ beside cooking or talking as a slim bar ("Put some music on").
   dips ignored, quiet room, background, retry with nothing on, nothing
   reconnects after the room ends.
 
-## Next stages
+## What a Moment leaves behind (Stage E)
 
-* **D Interaction** — Touch, Choice, Shared timer.
-* **E Memory** — "Keep anything from this?" at the end; nothing kept by default.
+A room is erased when its Moment ends — that has not changed. What changed is
+that just before the erasing, the room writes down what it had, and offers it.
+
+Nothing is kept unless somebody says so. The offers expire after 48 hours and
+the sweeper removes them, so a Moment that ended while everyone had already
+closed the app leaves nothing at all. That is the default, and it is the
+behaviour somebody who never answered should get.
+
+What can be offered, all of it metadata:
+
+* **The Moment** — what it was called, or what the activity is called, with
+  the people and the date it carries anyway.
+* **A decision** — a question that was actually decided, and what was chosen.
+  An open question is not a memory.
+* **What was played** — the title of something shared to watch or listen to.
+
+The file is *not* kept. It is deleted at closing exactly as before, so keeping
+a memory can never quietly become keeping a copy of someone's video. The same
+rule is why there is no recording and no transcript.
+
+Keeping is per person. Two people who keep the same evening each hold their
+own, and one of them dropping it does not reach into the other's. Titles and
+details are encrypted at rest with the rest of message content.
+
+`moment_keepsake_audience` is what makes this possible at all: the room's
+participants are deleted the instant it closes, and the right to answer an
+ending has to outlive them. It is also the record of who was there, which is
+itself part of what the memory is — a Moment is not "cooking", it is
+"cooking with Natasha".
+
+### Next
+
+* **A game module** — "Play with me" asks for a GAME module that does not
+  exist, so it is not offered. Nothing else is waiting on it.
+* Room-message reactions are still readable by the server; see
+  `encryption-design.md` §12.

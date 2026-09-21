@@ -181,9 +181,55 @@ data class InviteBody(val userId: String)
 data class MomentInvitationDto(val invitationId: String, val invitedAt: String, val moment: MomentDto)
 data class MomentInvitationsDto(val invitations: List<MomentInvitationDto>)
 
+/**
+ * Something a Moment could leave behind. An offer, not a memory: it is kept
+ * only if somebody says so, and it expires if nobody does.
+ */
+data class MomentKeepsakeOfferDto(
+    val id: String,
+    /** MOMENT (the time itself), DECISION (what was chosen), MEDIA (what was played). */
+    val kind: String,
+    val title: String,
+    val detail: String?,
+    val kept: Boolean = false,
+)
+
+/**
+ * The ending of a Moment, for somebody who was in it.
+ *
+ * The pieces rather than the sentence — how long, with whom — so the app can
+ * say it in its own words.
+ */
+data class MomentEndingDto(
+    val momentId: String,
+    val withPeople: List<String> = emptyList(),
+    val togetherMs: Long = 0,
+    val endedAt: String? = null,
+    val offers: List<MomentKeepsakeOfferDto> = emptyList(),
+)
+data class KeepBody(val offerIds: List<String>)
+data class MomentKeepsakeDto(
+    val id: String,
+    val momentId: String,
+    val kind: String,
+    val title: String,
+    val detail: String?,
+    val withPeople: List<String> = emptyList(),
+    val happenedAt: String,
+    val keptAt: String,
+)
+data class MomentKeepsakesDto(val keepsakes: List<MomentKeepsakeDto>)
+
 interface ViroMomentsApi {
     @GET("api/v1/moments/now") suspend fun now(): MomentsNowDto
     @GET("api/v1/moments/invitations") suspend fun invitations(): MomentInvitationsDto
+    /** What this person has kept from Moments that have ended. */
+    @GET("api/v1/moments/keepsakes") suspend fun keepsakes(): MomentKeepsakesDto
+    @DELETE("api/v1/moments/keepsakes/{id}") suspend fun forgetKeepsake(@Path("id") id: String)
+    /** The ending of a Moment, and what it could leave behind. */
+    @GET("api/v1/moments/{id}/keepsakes") suspend fun ending(@Path("id") id: String): MomentEndingDto
+    /** Keeps exactly what was chosen. An empty list keeps nothing, and is the default. */
+    @POST("api/v1/moments/{id}/keepsakes") suspend fun keep(@Path("id") id: String, @Body body: KeepBody)
     @DELETE("api/v1/moments/invitations/{id}") suspend fun declineInvitation(@Path("id") id: String)
     @GET("api/v1/moments/{id}") suspend fun get(@Path("id") id: String): MomentDto
     @POST("api/v1/moments") suspend fun create(@Body body: CreateMomentBody): MomentDto

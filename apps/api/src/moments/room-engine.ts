@@ -86,6 +86,32 @@ const INTENT_SHAPES: Record<MomentIntent, { primary: MomentModule; scene: Moment
   STAY: { primary: 'QUIET', scene: 'QUIET' },
 };
 
+/**
+ * What an activity is called when it has to be written down rather than drawn.
+ *
+ * Only for text the server stores and every phone then reads back the same —
+ * a kept memory's title. Anything on screen while the room is live is worded
+ * by the app, which knows the person's own language.
+ */
+const INTENT_WORDS: Record<MomentIntent, string> = {
+  BE: 'Time together',
+  TALK: 'A talk',
+  WATCH: 'Watching together',
+  LISTEN: 'Listening together',
+  PLAY: 'Playing together',
+  COOK: 'Cooking together',
+  WALK: 'A walk together',
+  CHOOSE: 'Deciding together',
+  LEARN: 'Learning together',
+  CELEBRATE: 'A celebration',
+  REMEMBER: 'Remembering together',
+  STAY: 'Quiet time together',
+};
+
+export function intentWords(intent: MomentIntent): string {
+  return INTENT_WORDS[intent] ?? 'Time together';
+}
+
 /** A Moment created before intents existed still opens into a sensible room. */
 export function intentForLegacyType(type: string | null | undefined): MomentIntent {
   switch (type) {

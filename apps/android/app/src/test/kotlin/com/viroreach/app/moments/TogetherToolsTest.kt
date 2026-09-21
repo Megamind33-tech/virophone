@@ -141,5 +141,9 @@ class TogetherToolsTest {
         override suspend fun knocks(id: String) = error("unused")
         override suspend fun respondToKnock(id: String, knockerId: String, body: KnockResponseBody) = error("unused")
         override suspend fun invite(id: String, body: InviteBody) = error("unused")
+        override suspend fun ending(id: String) = error("unused")
+        override suspend fun keep(id: String, body: KeepBody) = error("unused")
+        override suspend fun keepsakes() = error("unused")
+        override suspend fun forgetKeepsake(id: String) = error("unused")
     }
 }

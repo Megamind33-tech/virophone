@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -422,7 +424,14 @@ fun MomentRoomScreen(
     Dialog(onDismissRequest = onBack, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = ViroColors.background) {
             if (closed) {
-                MomentEnding(people = lastPeople, me = me, now = clock, onDone = onBack)
+                MomentEnding(
+                    repo = session.moments,
+                    momentId = room.momentId,
+                    people = lastPeople,
+                    me = me,
+                    now = clock,
+                    onDone = onBack,
+                )
             } else {
                 com.viroreach.app.moments.engine.MomentRoomEngine(
                     session = session,
@@ -461,6 +470,8 @@ fun MomentRoomScreen(
  */
 @Composable
 private fun MomentEnding(
+    repo: MomentsRepository,
+    momentId: String,
     people: List<com.viroreach.core.network.MomentParticipantDto>,
     me: String?,
     now: Long,
@@ -471,11 +482,29 @@ private fun MomentEnding(
     val since = listOfNotNull(mine, others.firstOrNull()?.joinedAt)
         .mapNotNull { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }
         .maxOrNull()
-    val together = since?.let { ((now - it).coerceAtLeast(0) / 60_000).toInt() }
+    val localMinutes = since?.let { ((now - it).coerceAtLeast(0) / 60_000).toInt() }
+
+    // The ending is drawn from what this phone already knows and then corrects
+    // itself when the server answers. Nobody should watch a spinner to be told
+    // their evening is over.
+    var ending by remember(momentId) { mutableStateOf<com.viroreach.core.network.MomentEndingDto?>(null) }
+    var answered by remember(momentId) { mutableStateOf(false) }
+    var busy by remember(momentId) { mutableStateOf(false) }
+    // Nothing is selected to begin with: keeping is a thing somebody chooses.
+    val chosen = remember(momentId) { mutableStateListOf<String>() }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(momentId) { ending = repo.ending(momentId) }
+
+    val who = ending?.withPeople?.takeIf { it.isNotEmpty() }
+        ?: others.map { it.displayName.substringBefore(' ') }
+    val minutes = ending?.togetherMs?.let { (it / 60_000).toInt() } ?: localMinutes
+    val offers = ending?.offers.orEmpty().filter { !it.kept }
+
     Box(Modifier.fillMaxSize()) {
         com.viroreach.app.moments.engine.MomentScene("QUIET")
         Column(
-            Modifier.fillMaxSize().safeDrawingPadding().padding(32.dp),
+            Modifier.fillMaxSize().safeDrawingPadding().padding(32.dp)
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -484,17 +513,60 @@ private fun MomentEnding(
                 color = androidx.compose.ui.graphics.Color.White,
                 style = MaterialTheme.typography.headlineSmall,
             )
-            if (others.isNotEmpty() && together != null && together > 0) {
+            if (who.isNotEmpty() && minutes != null && minutes > 0) {
                 Spacer(Modifier.height(12.dp))
-                val who = if (others.size == 1) others.first().displayName.substringBefore(' ') else "${others.size} people"
-                val howLong = if (together >= 60) "${together / 60} h ${together % 60} min" else "$together min"
+                val name = if (who.size == 1) who.first() else "${who.size} people"
+                val howLong = if (minutes >= 60) "${minutes / 60} h ${minutes % 60} min" else "$minutes min"
                 Text(
-                    "You and $who spent $howLong together.",
+                    "You and $name spent $howLong together.",
                     color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.75f),
                     style = MaterialTheme.typography.bodyLarge,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 )
             }
+
+            // Asked once, and only when there is something to ask about. An
+            // ending with nothing worth keeping just says goodbye.
+            if (!answered && offers.isNotEmpty()) {
+                Spacer(Modifier.height(28.dp))
+                Text(
+                    "Keep anything from this?",
+                    color = androidx.compose.ui.graphics.Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Spacer(Modifier.height(12.dp))
+                for (offer in offers) {
+                    KeepsakeChoice(
+                        offer = offer,
+                        selected = offer.id in chosen,
+                        onToggle = { if (offer.id in chosen) chosen.remove(offer.id) else chosen.add(offer.id) },
+                    )
+                }
+                Spacer(Modifier.height(20.dp))
+                Button(
+                    enabled = !busy && chosen.isNotEmpty(),
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            repo.keep(momentId, chosen.toList())
+                            busy = false
+                            answered = true
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(if (chosen.size > 1) "Keep these" else "Keep this") }
+                TextButton(onClick = { answered = true }, enabled = !busy) {
+                    Text("Keep nothing", color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.7f))
+                }
+            } else if (answered && chosen.isNotEmpty()) {
+                Spacer(Modifier.height(20.dp))
+                Text(
+                    "Kept.",
+                    color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.75f),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
+
             Spacer(Modifier.height(28.dp))
             TextButton(onClick = onDone) {
                 Text("Back to Now", color = androidx.compose.ui.graphics.Color.White)
@@ -503,6 +575,58 @@ private fun MomentEnding(
     }
 }
 
+/**
+ * One thing that could be kept.
+ *
+ * Deliberately unticked until touched, and plainly worded: this is the last
+ * screen of an evening, not a form.
+ */
+@Composable
+private fun KeepsakeChoice(
+    offer: com.viroreach.core.network.MomentKeepsakeOfferDto,
+    selected: Boolean,
+    onToggle: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = if (selected) ViroColors.BlueAccent.copy(alpha = 0.22f)
+        else androidx.compose.ui.graphics.Color.White.copy(alpha = 0.10f),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable(onClick = onToggle),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    offer.title,
+                    color = androidx.compose.ui.graphics.Color.White,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val note = offer.detail ?: when (offer.kind) {
+                    "MOMENT" -> "The time itself"
+                    else -> null
+                }
+                if (note != null) {
+                    Text(
+                        note,
+                        color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.65f),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Text(
+                if (selected) "✓" else "",
+                color = ViroColors.BlueAccent,
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+    }
+}
 @Composable
 internal fun RoomChat(
     room: MomentRoomState,

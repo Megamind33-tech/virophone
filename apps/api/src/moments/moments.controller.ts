@@ -80,6 +80,13 @@ class MomentMessageDto {
 class VisibilityDto {
   @IsIn(MOMENT_AUDIENCES) visibility!: string;
 }
+/**
+ * What to keep from a Moment that has ended. An empty list is the default and
+ * a real answer: keep nothing.
+ */
+class KeepDto {
+  @IsOptional() @IsArray() @ArrayMaxSize(32) @IsUUID('4', { each: true }) offerIds?: string[];
+}
 class ReactDto {
   // null removes the caller's reaction; anything sent must be in the set.
   @IsOptional() @IsIn(MOMENT_REACTIONS.concat([null as unknown as string])) emoji?: string | null;
@@ -100,6 +107,11 @@ export class MomentsController {
   @Get('now') now(@Req() req: Authed) { return this.moments.now(req.user.sub); }
   // Declared before the :id routes so 'invitations' is never parsed as an id.
   @Get('invitations') invitations(@Req() req: Authed) { return this.moments.invitations(req.user.sub); }
+  /** What this person has kept from Moments that have ended. Same reason as above. */
+  @Get('keepsakes') keepsakes(@Req() req: Authed) { return this.moments.keepsakes(req.user.sub); }
+  @Delete('keepsakes/:keepsakeId') forget(@Req() req: Authed, @Param('keepsakeId', ParseUUIDPipe) keepsakeId: string) {
+    return this.moments.forgetKeepsake(req.user.sub, keepsakeId);
+  }
   @Delete('invitations/:invitationId') decline(@Req() req: Authed, @Param('invitationId', ParseUUIDPipe) invitationId: string) {
     return this.moments.declineInvitation(req.user.sub, invitationId);
   }
@@ -117,6 +129,16 @@ export class MomentsController {
   /** A reaction to the Moment itself. No need to be in the room to leave one. */
   @Post(':id/react') @HttpCode(200) cheer(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: ReactDto) {
     return this.moments.cheer(req.user.sub, id, body.emoji ?? null);
+  }
+  /**
+   * The ending of a Moment somebody was in: how long, with whom, and what
+   * could be kept. Available only for a little while after it ends.
+   */
+  @Get(':id/keepsakes') offers(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) {
+    return this.moments.keepsakeOffers(req.user.sub, id);
+  }
+  @Post(':id/keepsakes') @HttpCode(200) keep(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string, @Body() body: KeepDto) {
+    return this.moments.keepKeepsakes(req.user.sub, id, body.offerIds ?? []);
   }
   @Delete(':id') end(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) { return this.moments.end(req.user.sub, id); }
 

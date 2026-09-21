@@ -131,6 +131,34 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
     /** The host changing who can see a Moment that is already running. */
     suspend fun setVisibility(id: String, visibility: String): Result<MomentDto> =
         action(onSuccess = ::cache) { api.setVisibility(id, MomentVisibilityBody(visibility)) }
+    /**
+     * The ending of a Moment that has finished: how long, with whom, and what
+     * it could leave behind.
+     *
+     * Null rather than an error when there is nothing to answer — a Moment
+     * spent alone, or one whose offers have already expired. An ending with
+     * nothing in it is not a failure, it is simply over.
+     */
+    suspend fun ending(id: String): MomentEndingDto? =
+        try { api.ending(id) }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { null }
+
+    /** Keeps what was chosen. An empty list is a real answer: keep nothing. */
+    suspend fun keep(id: String, offerIds: List<String>): Result<Unit> =
+        runCatching { if (offerIds.isNotEmpty()) api.keep(id, KeepBody(offerIds)) }
+            .onFailure { if (it is CancellationException) throw it }
+
+    /** What this person has kept, newest first. */
+    suspend fun keepsakes(): List<MomentKeepsakeDto> =
+        try { api.keepsakes().keepsakes }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { emptyList() }
+
+    suspend fun forgetKeepsake(keepsakeId: String): Result<Unit> =
+        runCatching { api.forgetKeepsake(keepsakeId) }
+            .onFailure { if (it is CancellationException) throw it }
+
     suspend fun knock(id: String): Result<Unit> = action { api.knock(id) }
     suspend fun invite(momentId: String, userId: String): Result<Unit> =
         runCatching { api.invite(momentId, InviteBody(userId)) }
