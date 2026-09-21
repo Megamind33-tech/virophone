@@ -29,6 +29,8 @@ class MomentRoomContext(
     val video: MomentVideo? = null,
     /** Front camera to back, for showing what's in front of you. */
     val flipCamera: () -> Unit = {},
+    /** The room's shared player and what has been shared; null without one. */
+    val player: MomentMediaContext? = null,
 ) {
     /** Everyone here but me. */
     val others: List<MomentParticipantDto> get() = participants.filter { it.userId != me }
@@ -64,6 +66,8 @@ object MomentModules {
     private val registered: Map<String, MomentModule> = listOf<MomentModule>(
         PresenceModule,
         QuietModule,
+        VideoModule,
+        MusicModule,
     ).associateBy { it.key }
 
     fun find(key: String): MomentModule? = registered[key]

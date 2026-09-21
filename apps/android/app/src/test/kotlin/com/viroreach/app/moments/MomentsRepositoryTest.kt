@@ -98,6 +98,11 @@ class MomentsRepositoryTest {
         /** The room shape the fake server holds, and every change asked of it. */
         var runtimeState = MomentRuntimeDto("moment", 1, "COOK", "PRESENCE", emptyList(), "KITCHEN")
         val changes = mutableListOf<MomentRoomChangeBody>()
+        override suspend fun shareMedia(id: String, file: okhttp3.MultipartBody.Part, title: okhttp3.RequestBody?, durationMs: okhttp3.RequestBody?) = error("unused")
+        override suspend fun listMedia(id: String) = MomentMediaListDto(emptyList())
+        override suspend fun unshareMedia(id: String, mediaId: String) {}
+        override suspend fun streamUrl(id: String, mediaId: String) = error("unused")
+        override suspend fun playback(id: String, body: MomentPlaybackBody) = error("unused")
         override suspend fun presence(id: String) = MomentPresenceDto("wss://media.test", "token", "viro-moment-$id")
         override suspend fun changeRoom(id: String, body: MomentRoomChangeBody): MomentRuntimeDto {
             changes.add(body)

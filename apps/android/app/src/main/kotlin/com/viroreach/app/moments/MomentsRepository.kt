@@ -169,6 +169,8 @@ class MomentRoomState(
     private val api: ViroMomentsApi,
     val momentId: String,
     private val crypto: RoomCrypto? = null,
+    /** This phone's clock; replaced in tests. */
+    private val clock: () -> Long = System::currentTimeMillis,
     private val userId: () -> String?,
 ) {
     private val mutex = Mutex()
@@ -183,6 +185,19 @@ class MomentRoomState(
      * late or repeated frame cannot move the room backwards.
      */
     val runtime = MutableStateFlow<MomentRuntimeDto?>(null)
+    /** The room's shared player, newest revision only. */
+    val playback = MutableStateFlow<MomentPlaybackDto?>(null)
+    /** What people have brought to watch or listen to. */
+    val media = MutableStateFlow<List<MomentMediaDto>>(emptyList())
+    /**
+     * How far the server's clock is from this phone's, in ms. Taken from
+     * request round-trips (the midpoint), never from pushed frames, whose
+     * delay is unknown.
+     */
+    @Volatile var serverOffsetMs: Long = 0L
+        private set
+    /** The server's time now, as well as this phone can tell. */
+    fun serverNow(): Long = clock() + serverOffsetMs
     /** True once anything in this room has gone out sealed, for the room's badge. */
     val encrypted = MutableStateFlow(false)
     /**
@@ -196,7 +211,9 @@ class MomentRoomState(
 
     suspend fun enter(): Result<Unit> = mutex.withLock {
         try {
+            val sentAt = clock()
             val room = api.join(momentId)
+            observeClock(room.serverNow, sentAt)
             apply(room)
             Result.success(Unit)
         }
@@ -214,7 +231,12 @@ class MomentRoomState(
 
     suspend fun refresh() = mutex.withLock {
         if (closed.value) return@withLock
-        try { apply(api.room(momentId)) }
+        try {
+            val sentAt = clock()
+            val room = api.room(momentId)
+            observeClock(room.serverNow, sentAt)
+            apply(room)
+        }
         catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             // 403: no longer in this room — left on another phone, or taken
@@ -236,6 +258,8 @@ class MomentRoomState(
                 }
             }
             "moment.state" -> runtimeOf(payload["state"])?.let { adopt(it) }
+            "moment.playback" -> playbackOf(payload["playback"])?.let { adoptPlayback(it) }
+            "moment.media" -> refreshMedia()
             "moment.audience", "moment.cheer" -> refresh()
             "moment.reaction" -> {
                 val mid = str(payload, "messageId")
@@ -320,6 +344,67 @@ class MomentRoomState(
     }
 
     /**
+     * Play, pause, seek, load or stop — for everyone here. The answer is the
+     * new shared state and is applied at once; its frame is then ignored.
+     */
+    suspend fun playback(body: MomentPlaybackBody): Result<Unit> = try {
+        val sentAt = clock()
+        val result = api.playback(momentId, body)
+        observeClock(result.serverNow, sentAt)
+        adoptPlayback(result.playback)
+        Result.success(Unit)
+    }
+    catch (e: CancellationException) { throw e }
+    catch (e: Exception) {
+        if (momentHttpStatus(e) == 404) closed.value = true
+        Result.failure(IllegalStateException(when (momentHttpStatus(e)) {
+            404 -> "This Moment has ended."
+            403 -> "You're no longer in this room."
+            400 -> "That isn't here to play any more."
+            else -> "Couldn't reach the room. Check your connection."
+        }))
+    }
+
+    /** A fresh address for the player; relative to the API. */
+    suspend fun streamUrl(mediaId: String): Result<String> = try {
+        Result.success(api.streamUrl(momentId, mediaId).url)
+    }
+    catch (e: CancellationException) { throw e }
+    catch (e: Exception) { Result.failure(IllegalStateException("Couldn't open this on your phone.")) }
+
+    suspend fun refreshMedia() {
+        runCatching { api.listMedia(momentId).media }.getOrNull()?.let { media.value = it }
+    }
+
+    /** Takes something this person shared back out of the room. */
+    suspend fun unshare(mediaId: String): Result<Unit> = try {
+        api.unshareMedia(momentId, mediaId)
+        media.value = media.value.filter { it.id != mediaId }
+        Result.success(Unit)
+    }
+    catch (e: CancellationException) { throw e }
+    catch (e: Exception) { Result.failure(IllegalStateException("Couldn't remove it. Try again.")) }
+
+    /** Something this phone just shared: shown at once, before its frame. */
+    fun added(item: MomentMediaDto) {
+        if (media.value.none { it.id == item.id }) media.value = media.value + item
+    }
+
+    internal fun adoptPlayback(p: MomentPlaybackDto, authoritative: Boolean = false) {
+        if (p.momentId != momentId) return
+        val current = playback.value
+        if (current == null || p.revision > current.revision || (authoritative && p.revision >= current.revision)) {
+            playback.value = p
+        }
+    }
+
+    private fun observeClock(serverNow: Long?, sentAt: Long) {
+        if (serverNow == null) return
+        val receivedAt = clock()
+        serverOffsetMs = serverNow - (sentAt + receivedAt) / 2
+    }
+
+    /**
      * Takes a room shape if it is newer than the one held. A room read passes
      * [authoritative], because a reconnect can land on the same revision the
      * phone already has and should still take it.
@@ -384,9 +469,29 @@ class MomentRoomState(
         // A room read is the truth: after a reconnect this is what the room
         // became while this phone was away.
         room.state?.let { adopt(it, authoritative = true) }
+        room.playback?.let { adoptPlayback(it, authoritative = true) }
+        room.media?.let { media.value = it }
         // Authoritative replace: reconnects can only reorder, never duplicate.
         messages.value = room.messages.distinctBy { it.id }.map { readable(it) }
         error.value = null
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun playbackOf(raw: Any?): MomentPlaybackDto? {
+        val m = raw as? Map<String, Any?> ?: return null
+        return MomentPlaybackDto(
+            momentId = m["momentId"] as? String ?: return null,
+            revision = (m["revision"] as? Number)?.toInt() ?: return null,
+            mediaId = m["mediaId"] as? String,
+            kind = m["kind"] as? String,
+            title = m["title"] as? String,
+            durationMs = (m["durationMs"] as? Number)?.toLong(),
+            status = m["status"] as? String ?: return null,
+            positionMs = (m["positionMs"] as? Number)?.toLong() ?: 0L,
+            anchorAt = (m["anchorAt"] as? Number)?.toLong() ?: return null,
+            rate = (m["rate"] as? Number)?.toDouble() ?: 1.0,
+            updatedBy = m["updatedBy"] as? String,
+        )
     }
 
     @Suppress("UNCHECKED_CAST")

@@ -171,6 +171,9 @@ dependencies {
     // Relationship reminders and the morning brief run on schedules that
     // must survive the app being closed.
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+    // Watching and listening together in a Moment: the shared player.
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
     // Chat lock and hidden chats.
     implementation("androidx.biometric:biometric:1.1.0")
 

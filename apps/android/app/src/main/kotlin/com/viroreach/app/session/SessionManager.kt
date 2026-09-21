@@ -98,6 +98,17 @@ class SessionManager private constructor(context: Context) {
             tokenStore.getUserId()
         }
 
+    /** Sharing from this phone into one open Moment Room. */
+    fun openMomentMedia(
+        context: android.content.Context,
+        room: com.viroreach.app.moments.MomentRoomState,
+        playback: com.viroreach.app.moments.engine.SharedPlayback,
+        scope: kotlinx.coroutines.CoroutineScope,
+    ) = com.viroreach.app.moments.engine.MomentMediaShare(context, viroApiClient.moments, room, playback, scope)
+
+    /** An address the server gave relative to itself, made absolute for a player. */
+    fun apiUrl(path: String): String = viroApiClient.baseUrl + path.removePrefix("/")
+
     /** The live faces and voices of one open Moment Room, over [media]. */
     fun openMomentLive(momentId: String, media: com.viroreach.voice.webrtc.MomentMediaTransport) =
         com.viroreach.app.moments.engine.MomentLive(viroApiClient.moments, momentId, media)

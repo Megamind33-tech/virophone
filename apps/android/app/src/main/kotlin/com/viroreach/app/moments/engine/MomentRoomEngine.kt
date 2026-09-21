@@ -107,6 +107,8 @@ fun MomentRoomEngine(
     onOpenChat: (userId: String?, name: String) -> Unit,
     live: MomentLive? = null,
     video: MomentVideo? = null,
+    shared: MomentMediaShare? = null,
+    exo: androidx.media3.exoplayer.ExoPlayer? = null,
 ) {
     val moment by room.moment.collectAsState()
     val participants by room.participants.collectAsState()
@@ -119,6 +121,8 @@ fun MomentRoomEngine(
     val liveNotice by (live?.notice ?: remember { MutableStateFlow<String?>(null) }).collectAsState()
     val unavailable by (live?.unavailable ?: remember { MutableStateFlow<String?>(null) }).collectAsState()
     val context = LocalContext.current
+    val sharedItems by room.media.collectAsState()
+    val playerView by (shared?.playback?.view ?: remember { MutableStateFlow(SharedPlayerView()) }).collectAsState()
 
     var chatOpen by remember { mutableStateOf(false) }
     var peopleOpen by remember { mutableStateOf(false) }
@@ -207,6 +211,7 @@ fun MomentRoomEngine(
                         media = media,
                         video = video,
                         flipCamera = { live?.flipCamera() },
+                        player = shared?.let { MomentMediaContext(it, playerView, sharedItems, exo) },
                     )
                     AnimatedContent(
                         targetState = shape.primary,
@@ -280,11 +285,25 @@ fun MomentRoomEngine(
         ) {
             DoSomethingTogether(
                 current = shape?.intent,
+                // Music can sit beside cooking or talking; a film or a quiet room has its own.
+                musicBeside = when {
+                    shape == null || shape.primary == "MUSIC" || shape.primary == "VIDEO" -> null
+                    "MUSIC" in shape.secondary -> false
+                    else -> true
+                },
                 onPick = { intent ->
                     togetherOpen = false
                     scope.launch {
                         room.change(MomentRoomChangeBody(op = "TRANSFORM", intent = intent.key))
                             .onFailure { notice = it.message }
+                    }
+                },
+                onMusic = { add ->
+                    togetherOpen = false
+                    scope.launch {
+                        room.change(MomentRoomChangeBody(op = if (add) "ADD" else "REMOVE", module = "MUSIC"))
+                            .onFailure { notice = it.message }
+                        if (!add && playerView.kind == "AUDIO") shared?.playback?.stop()
                     }
                 },
             )
@@ -464,7 +483,12 @@ private fun RoundAction(label: String, onClick: () -> Unit) {
  * listed — nothing here leads to a screen that says "coming soon".
  */
 @Composable
-private fun DoSomethingTogether(current: String?, onPick: (MomentIntent) -> Unit) {
+private fun DoSomethingTogether(
+    current: String?,
+    musicBeside: Boolean?,
+    onPick: (MomentIntent) -> Unit,
+    onMusic: (add: Boolean) -> Unit,
+) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
         Text("Do something together", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(4.dp))
@@ -474,6 +498,17 @@ private fun DoSomethingTogether(current: String?, onPick: (MomentIntent) -> Unit
             style = MaterialTheme.typography.bodyMedium,
         )
         Spacer(Modifier.height(16.dp))
+        if (musicBeside != null) {
+            TextButton(onClick = { onMusic(musicBeside) }, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    if (musicBeside) "Put some music on" else "Turn the music off",
+                    color = ViroColors.textPrimary,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Start,
+                )
+            }
+        }
         MomentIntent.offered().filter { it.key != current }.forEach { intent ->
             TextButton(onClick = { onPick(intent) }, modifier = Modifier.fillMaxWidth()) {
                 Text(

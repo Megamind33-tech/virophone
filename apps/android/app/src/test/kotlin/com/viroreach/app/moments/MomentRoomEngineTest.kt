@@ -146,9 +146,9 @@ class MomentRoomEngineTest {
 
     @Test fun `only activities this build can deliver are offered`() {
         val offered = MomentIntent.offered().map { it.key }
-        // Presence, quiet, voice and the camera exist; a shared player and choices do not yet.
-        listOf("BE", "TALK", "COOK", "WALK", "LEARN", "CELEBRATE", "REMEMBER", "STAY").forEach { assertTrue(it, it in offered) }
-        listOf("WATCH", "LISTEN", "PLAY", "CHOOSE").forEach { assertFalse(it, it in offered) }
+        // Presence, quiet, voice, the camera and the shared player exist; games and choices do not yet.
+        listOf("BE", "TALK", "WATCH", "LISTEN", "COOK", "WALK", "LEARN", "CELEBRATE", "REMEMBER", "STAY").forEach { assertTrue(it, it in offered) }
+        listOf("PLAY", "CHOOSE").forEach { assertFalse(it, it in offered) }
         offered.forEach { key ->
             val intent = MomentIntent.of(key)!!
             assertTrue("$key needs something missing", intent.needs.all { MomentCapabilities.has(it) })
@@ -169,6 +169,11 @@ class MomentRoomEngineTest {
         override suspend fun leave(id: String) {}
         override suspend fun room(id: String) = error("unused")
         override suspend fun presence(id: String) = error("unused")
+        override suspend fun shareMedia(id: String, file: okhttp3.MultipartBody.Part, title: okhttp3.RequestBody?, durationMs: okhttp3.RequestBody?) = error("unused")
+        override suspend fun listMedia(id: String) = MomentMediaListDto(emptyList())
+        override suspend fun unshareMedia(id: String, mediaId: String) {}
+        override suspend fun streamUrl(id: String, mediaId: String) = error("unused")
+        override suspend fun playback(id: String, body: MomentPlaybackBody) = error("unused")
         override suspend fun changeRoom(id: String, body: MomentRoomChangeBody) = error("unused")
         override suspend fun sendMessage(id: String, body: SendMomentMessageBody) = error("unused")
         override suspend fun react(id: String, messageId: String, body: MomentReactBody) = error("unused")

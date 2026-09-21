@@ -361,6 +361,17 @@ fun MomentRoomScreen(
     val engine = remember(room) { com.viroreach.voice.webrtc.MomentPresenceEngine(appContext) }
     val live = remember(room) { session.openMomentLive(room.momentId, engine) }
     val video = remember(engine) { com.viroreach.app.moments.engine.MomentVideo(engine) }
+    // The room's one shared player. It plays only what the room says, only
+    // while this screen is showing.
+    var shared by remember { mutableStateOf<com.viroreach.app.moments.engine.SharedPlayback?>(null) }
+    val exoPlayer = remember(room) {
+        com.viroreach.app.moments.engine.ExoLocalPlayer(appContext) { shared?.playerFailed() }
+    }
+    val playback = remember(room) {
+        com.viroreach.app.moments.engine.SharedPlayback(room, exoPlayer, session::apiUrl).also { shared = it }
+    }
+    val sharing = remember(room) { session.openMomentMedia(appContext, room, playback, scope) }
+    LaunchedEffect(room) { room.playback.collect { playback.follow(it) } }
     // Remembered while the room is open, for the ending: who was here, and for how long.
     var lastPeople by remember { mutableStateOf(participants) }
     LaunchedEffect(participants) { if (participants.isNotEmpty()) lastPeople = participants }
@@ -370,7 +381,7 @@ fun MomentRoomScreen(
         while (true) {
             delay(1000)
             clock = System.currentTimeMillis()
-            if (!closed) live.tick()
+            if (!closed) { live.tick(); playback.tick() }
             // Every change arrives as a frame; this is only a safety net for a
             // frame that never came, so it does not need to spend data every second.
             if (!closed && ++tick % 15 == 0) room.refresh()
@@ -382,12 +393,16 @@ fun MomentRoomScreen(
     }
     // However the room goes away — ended, left, taken out of it — the camera
     // and microphone go with it.
-    LaunchedEffect(closed) { if (closed) live.stop() }
+    LaunchedEffect(closed) { if (closed) { live.stop(); playback.release() } }
     // Nothing keeps capturing once Viro is no longer on screen.
     val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle, live) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) scope.launch { live.onBackground() }
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                playback.pauseHere()
+                scope.launch { live.onBackground() }
+            }
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_START) playback.resumeHere()
         }
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
@@ -398,6 +413,8 @@ fun MomentRoomScreen(
             // microphone must not depend on that, so it runs on its own.
             @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
             kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.Main) { live.stop() }
+            playback.release()
+            exoPlayer.release()
             scope.launch { room.leave() }
         }
     }
@@ -428,6 +445,8 @@ fun MomentRoomScreen(
                     onOpenChat = onOpenChat,
                     live = live,
                     video = video,
+                    shared = sharing,
+                    exo = exoPlayer.exo,
                 )
             }
         }

@@ -4,8 +4,8 @@ One engine renders every Moment. A Moment does not become a different app when
 people start cooking, listening or watching: the **room** changes around the
 people in it, and the Moment (who is here, how long, its chat) stays.
 
-Status: **Stage A (engine) and Stage B (live presence) done.** Media,
-interaction and memory stages are listed at the end with what they still need.
+Status: **Stages A (engine), B (live presence) and C (shared media) done.**
+Interaction and memory are listed at the end with what they still need.
 
 ## Shape of a room
 
@@ -163,6 +163,53 @@ Known limits: a Moment's media and a phone call are not coordinated — being
 in both at once is untested. Two phones on real networks have not been tried
 from this workstation; see the report.
 
+## Watching and listening together (Stage C)
+
+**Where media comes from.** One provider exists: media a participant brings
+from their own phone (`UploadedMediaProvider`). The `MomentMediaProvider`
+interface is where a licensed source would go, with its own rights checks;
+the room, player and sync would not change. Nothing connects to, records or
+re-streams Spotify, YouTube, Apple Music or any other service, and the app
+never says it does. The share button says: *Share only what you have the
+right to share. It plays only for the people here, leaves with you, and is
+deleted when the Moment ends.*
+
+**Storage.** `moment_media` (migration 029) holds what was shared: owner,
+kind, title, size, duration, file name and a per-file key. Files are checked
+against their claimed type by their first bytes (a renamed APK is refused),
+capped at 100 MB video / 30 MB audio / 20 items per Moment, and encrypted on
+disk with AES-256-CTR under their own key (wrapped by `MESSAGE_ENCRYPTION_KEY`
+when set) so any byte range decrypts on its own for seeking. On the VPS they
+live on the `viro_reach_moment_media` volume. They are deleted when their
+owner leaves, is separated by a block, removes them, or the Moment ends; a
+sweep every ten minutes removes files older than an hour that no row refers to.
+
+**Playing.** `POST /moments/:id/media/:mediaId/stream` returns a signed,
+short-lived address (`/api/v1/moment-media/:mediaId?u=&e=&s=`) for this person
+and item. Each request is rechecked: still a participant, Moment still live.
+Byte ranges (206) are served; nothing is cached.
+
+**One clock.** Redis `moment:play:<id>` holds the room's playback:
+`{mediaId, kind, title, durationMs, status IDLE|PLAYING|PAUSED, positionMs,
+anchorAt (server ms), rate, revision, updatedBy}`. `POST /moments/:id/playback`
+takes `LOAD | PLAY | PAUSE | SEEK | STOP`; anyone in the room may press them.
+Load starts paused; pause records the position the person pausing saw.
+Every change goes to the room as `moment.playback {momentId, playback,
+serverNow}` and room reads include `playback`, `serverNow` and `media`.
+Positions are never streamed.
+
+On the phone (`SharedPlayback`, `ExoLocalPlayer` on Media3): the server clock
+is estimated from request round-trips (midpoint), never from pushed frames.
+Expected position = `positionMs + (serverNow − anchorAt) × rate`. Drift under
+0.3 s is left alone; 0.3–1.5 s is closed by playing at 0.95× or 1.05×; beyond
+1.5 s it jumps. A phone that buffers waits alone, then jumps to the room. Off
+screen, a phone goes quiet without pausing anyone and rejoins on return. An
+expired address is renewed twice, then the phone says it can't play the file.
+
+The **Watch** room is the film with a small strip of faces; the **Listen**
+room is a turning record, the song and who brought it. Music can also sit
+beside cooking or talking as a slim bar ("Put some music on").
+
 ## Tests
 
 * `apps/api/src/moments/room-engine.spec.ts` — 8 rule tests.
@@ -180,6 +227,18 @@ from this workstation; see the report.
   voice-only, non-participants refused, 503 said plainly, leave and end evict,
   a block mid-Moment separates (in the host's room and in a third person's),
   blocked people can't join the same room.
+* `apps/api/test/integration/moments-media.integration.spec.ts` — 10 tests with
+  two phones on the socket: share → both see it; encrypted on disk; whole and
+  ranged reads; fake files refused; only participants; altered or borrowed
+  addresses refused; play/pause/seek reach both phones identically; reconnect
+  lands where the film is; concurrent presses both count; owner leaving stops
+  and deletes; only the owner removes; ending deletes everything; orphan sweep.
+* `src/moments/playback.spec.ts` (6) and `moment-media.provider.spec.ts` (2):
+  the clock rules; encryption round-trip over arbitrary ranges; file sniffing.
+* `app/src/test/.../SharedPlaybackTest.kt` — 11 tests: drift rules, load,
+  playing on the server's clock (5 s skew), slow-down/jump/settle, pausing
+  where the other person saw it, echo ignored, reconnect mid-film, buffering
+  alone, off-screen and back, address renewal and giving up, stop.
 * `app/src/test/.../MomentLiveTest.kt` — 11 tests: joins publishing nothing,
   soft failure, a weak network costs the camera and never restores it, short
   dips ignored, quiet room, background, retry with nothing on, nothing
@@ -187,10 +246,5 @@ from this workstation; see the report.
 
 ## Next stages
 
-* **C Media** — `MomentMediaProvider`; first provider is media a participant
-  owns and uploads. Shared playback is one authoritative record
-  (content, status, position at a server time, rate, revision); phones compute
-  position locally, never stream positions. Unlocks Watch and Listen. No DRM
-  bypass, no rebroadcast, no claimed Spotify/YouTube support.
 * **D Interaction** — Touch, Choice, Shared timer.
 * **E Memory** — "Keep anything from this?" at the end; nothing kept by default.

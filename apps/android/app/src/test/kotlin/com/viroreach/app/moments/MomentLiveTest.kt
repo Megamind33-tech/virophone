@@ -190,6 +190,11 @@ class MomentLiveTest {
         override suspend fun leave(id: String) {}
         override suspend fun room(id: String) = error("unused")
         override suspend fun presence(id: String) = error("unused")
+        override suspend fun shareMedia(id: String, file: okhttp3.MultipartBody.Part, title: okhttp3.RequestBody?, durationMs: okhttp3.RequestBody?) = error("unused")
+        override suspend fun listMedia(id: String) = MomentMediaListDto(emptyList())
+        override suspend fun unshareMedia(id: String, mediaId: String) {}
+        override suspend fun streamUrl(id: String, mediaId: String) = error("unused")
+        override suspend fun playback(id: String, body: MomentPlaybackBody) = error("unused")
         override suspend fun changeRoom(id: String, body: MomentRoomChangeBody) = error("unused")
         override suspend fun sendMessage(id: String, body: SendMomentMessageBody) = error("unused")
         override suspend fun react(id: String, messageId: String, body: MomentReactBody) = error("unused")
