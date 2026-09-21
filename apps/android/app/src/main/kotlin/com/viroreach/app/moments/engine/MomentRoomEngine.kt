@@ -192,6 +192,27 @@ fun MomentRoomEngine(
 
     val shape = runtime
     val scene = shape?.scene ?: "NEUTRAL"
+    /**
+     * Which module this phone is giving the room to, when its owner wants
+     * something other than what the activity chose.
+     *
+     * Deliberately this phone's business and nobody else's. Whether the film
+     * or the faces should be large is how one person wants to watch, not a
+     * fact about the room — taking everyone else's layout away because you
+     * wanted to see a face would be the wrong kind of shared. The scene is
+     * shared because it is the room's atmosphere; this is not.
+     */
+    var focus by remember { mutableStateOf<String?>(null) }
+    // A room that becomes something else starts again from what it chose.
+    LaunchedEffect(shape?.primary) { focus = null }
+    val primaryKey = focus ?: shape?.primary
+    val besideKeys = remember(shape?.primary, shape?.secondary, focus) {
+        buildList {
+            shape?.secondary?.let { addAll(it) }
+            // What was the room before the swap now sits beside it.
+            if (focus != null) shape?.primary?.let { add(it) }
+        }.filter { it != primaryKey }.distinct()
+    }
     LaunchedEffect(shape?.primary) { shape?.primary?.let { live?.onRoomShape(it) } }
 
     // Something playing lifts the whole room: the light swells a little and
@@ -230,14 +251,14 @@ fun MomentRoomEngine(
                         player = shared?.let { MomentMediaContext(it, playerView, sharedItems, exo) },
                     )
                     AnimatedContent(
-                        targetState = shape.primary,
+                        targetState = primaryKey,
                         transitionSpec = {
                             (fadeIn(tween(500)) + scaleIn(tween(500), initialScale = 0.94f)) togetherWith
                                 (fadeOut(tween(300)) + scaleOut(tween(300), targetScale = 1.04f))
                         },
                         label = "momentPrimary",
                     ) { primary ->
-                        val module = MomentModules.find(primary)
+                        val module = primary?.let { MomentModules.find(it) }
                         if (module != null) {
                             module.Primary(ctx, Modifier.fillMaxSize())
                         } else {
@@ -247,7 +268,7 @@ fun MomentRoomEngine(
                         }
                     }
                     // Whatever sits beside the room, compact, above the controls.
-                    val besides = shape.secondary.mapNotNull { MomentModules.find(it) }
+                    val besides = besideKeys.mapNotNull { MomentModules.find(it) }
                     if (besides.isNotEmpty()) {
                         Column(
                             Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 16.dp),
@@ -320,6 +341,19 @@ fun MomentRoomEngine(
                 onTimer = { togetherOpen = false; timerOpen = true },
                 onAsk = { togetherOpen = false; askOpen = true },
                 onScene = { togetherOpen = false; sceneOpen = true },
+                // Only offered when there are two things here worth choosing
+                // between: something playing, and people who can be seen.
+                swapLabel = when {
+                    shape == null -> null
+                    focus != null -> "Put the " + (if (shape.primary == "MUSIC") "music" else "film") + " back"
+                    shape.primary == "VIDEO" -> "Make the people bigger"
+                    shape.primary == "MUSIC" -> "Make the people bigger"
+                    else -> null
+                },
+                onSwap = {
+                    togetherOpen = false
+                    focus = if (focus == null) "PRESENCE" else null
+                },
                 onMusic = { add ->
                     togetherOpen = false
                     scope.launch {
@@ -570,6 +604,9 @@ private fun DoSomethingTogether(
     onTimer: () -> Unit,
     onAsk: () -> Unit,
     onScene: () -> Unit,
+    /** Null when this room has nothing worth swapping. */
+    swapLabel: String?,
+    onSwap: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
         Text("Do something together", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
@@ -583,6 +620,7 @@ private fun DoSomethingTogether(
         TogetherAction("Set a timer for everyone", onTimer)
         TogetherAction("Ask everyone something", onAsk)
         TogetherAction("Change how the room looks", onScene)
+        if (swapLabel != null) TogetherAction(swapLabel, onSwap)
         if (musicBeside != null) {
             TextButton(onClick = { onMusic(musicBeside) }, modifier = Modifier.fillMaxWidth()) {
                 Text(

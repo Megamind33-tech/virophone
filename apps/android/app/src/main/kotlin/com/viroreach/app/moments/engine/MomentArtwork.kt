@@ -41,8 +41,9 @@ import kotlin.math.sin
  *
  * An activity shows a bundled photograph when one exists for it, and a drawn
  * picture otherwise. Both are wanted: a photograph says more in a glance, and
- * the drawing costs nothing to download, scales to any card without a folder
- * of densities, and is there for an activity no artwork has been made for yet.
+ * the drawing costs nothing to download — which matters wherever data is
+ * metered, and somewhere it always is — scales to any card without a folder of
+ * densities, and is there for an activity no artwork has been made for yet.
  *
  * Either way the picture carries the room's own colours, so the card is a
  * glimpse of the room it opens — the cinema card is already dark, the kitchen

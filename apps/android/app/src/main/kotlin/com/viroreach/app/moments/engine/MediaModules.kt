@@ -11,6 +11,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -126,6 +127,69 @@ object VideoModule : MomentModule {
             }
             if (controls || !media.view.playing) {
                 Transport(ctx, media, Modifier.align(Alignment.BottomCenter).fillMaxWidth())
+            }
+        }
+    }
+
+    /**
+     * Beside the people: the film, small, still running and still in step.
+     *
+     * This is what makes the room's shape a choice rather than a consequence.
+     * Watching together with the picture large and faces in the corner is one
+     * way to be in a room; talking with the film small in the corner is
+     * another, and both are reasonable at different points in the same
+     * evening.
+     */
+    @Composable
+    override fun Secondary(ctx: MomentRoomContext, modifier: Modifier) {
+        val media = ctx.player
+        if (media != null && media.view.mediaId != null && media.view.kind == "VIDEO") {
+            VideoBar(media, modifier)
+        }
+    }
+
+    @Composable
+    private fun VideoBar(media: MomentMediaContext, modifier: Modifier) {
+        val scope = rememberCoroutineScope()
+        Surface(shape = RoundedCornerShape(20.dp), color = Color.Black.copy(alpha = 0.55f), modifier = modifier) {
+            Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                // The one player this room has, in a smaller frame. Nothing is
+                // re-buffered and nothing restarts: it is the same playback,
+                // drawn somewhere else.
+                Box(
+                    Modifier.width(104.dp).aspectRatio(16f / 9f)
+                        .clip(RoundedCornerShape(12.dp)).background(Color.Black),
+                ) {
+                    val exo = media.exo
+                    if (exo != null) {
+                        AndroidView(
+                            factory = { context ->
+                                PlayerView(context).apply {
+                                    useController = false
+                                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                    player = exo
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                            onRelease = { it.player = null },
+                        )
+                    }
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        media.view.title ?: "Watching",
+                        color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        if (media.view.buffering) "Catching up…" else if (media.view.playing) "Playing" else "Paused",
+                        color = Color.White.copy(alpha = 0.65f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                PlayPause(media.view.playing, size = 36) {
+                    scope.launch { if (media.view.playing) media.share.playback.pause() else media.share.playback.play() }
+                }
             }
         }
     }
