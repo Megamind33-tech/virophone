@@ -1,7 +1,7 @@
 package com.viroreach.app.moments
 
 import com.viroreach.app.moments.engine.MomentIntent
-import com.viroreach.app.moments.engine.MomentModules
+import com.viroreach.app.moments.engine.MomentCapabilities
 import com.viroreach.core.network.*
 import kotlinx.coroutines.test.runTest
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -134,17 +134,24 @@ class MomentRoomEngineTest {
         assertEquals(1, room.runtime.value?.revision)
     }
 
+    @Test fun `being taken out of the room closes it on this phone, someone else leaving does not`() = runTest {
+        val server = Server(roomWith(shape(1)))
+        val room = MomentRoomState(server, "moment") { "bob" }
+        room.enter()
+        room.onFrame("moment.left", mapOf("momentId" to "moment", "userId" to "alice"))
+        assertFalse(room.closed.value)
+        room.onFrame("moment.left", mapOf("momentId" to "moment", "userId" to "bob"))
+        assertTrue(room.closed.value)
+    }
+
     @Test fun `only activities this build can deliver are offered`() {
         val offered = MomentIntent.offered().map { it.key }
-        // Presence and quiet exist; nothing needing a camera, a player or a choice yet.
-        assertTrue("BE" in offered)
-        assertTrue("STAY" in offered)
-        assertFalse("WATCH" in offered)
-        assertFalse("COOK" in offered)
-        assertFalse("CHOOSE" in offered)
+        // Presence, quiet, voice and the camera exist; a shared player and choices do not yet.
+        listOf("BE", "TALK", "COOK", "WALK", "LEARN", "CELEBRATE", "REMEMBER", "STAY").forEach { assertTrue(it, it in offered) }
+        listOf("WATCH", "LISTEN", "PLAY", "CHOOSE").forEach { assertFalse(it, it in offered) }
         offered.forEach { key ->
             val intent = MomentIntent.of(key)!!
-            assertTrue("$key needs something missing", intent.needs.all { MomentModules.has(it) })
+            assertTrue("$key needs something missing", intent.needs.all { MomentCapabilities.has(it) })
         }
     }
 
@@ -161,6 +168,7 @@ class MomentRoomEngineTest {
         override suspend fun join(id: String) = error("unused")
         override suspend fun leave(id: String) {}
         override suspend fun room(id: String) = error("unused")
+        override suspend fun presence(id: String) = error("unused")
         override suspend fun changeRoom(id: String, body: MomentRoomChangeBody) = error("unused")
         override suspend fun sendMessage(id: String, body: SendMomentMessageBody) = error("unused")
         override suspend fun react(id: String, messageId: String, body: MomentReactBody) = error("unused")

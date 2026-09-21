@@ -10,7 +10,22 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.VideocamOff
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import com.viroreach.voice.webrtc.PresenceSnapshot
+import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -90,6 +105,8 @@ fun MomentRoomEngine(
     onEnd: () -> Unit,
     onCall: (String?, String?, String) -> Unit,
     onOpenChat: (userId: String?, name: String) -> Unit,
+    live: MomentLive? = null,
+    video: MomentVideo? = null,
 ) {
     val moment by room.moment.collectAsState()
     val participants by room.participants.collectAsState()
@@ -98,6 +115,10 @@ fun MomentRoomEngine(
     val encrypted by room.encrypted.collectAsState()
     val scope = rememberCoroutineScope()
     val me = session.tokenStore.getUserId()
+    val media by (live?.state ?: remember { MutableStateFlow(PresenceSnapshot()) }).collectAsState()
+    val liveNotice by (live?.notice ?: remember { MutableStateFlow<String?>(null) }).collectAsState()
+    val unavailable by (live?.unavailable ?: remember { MutableStateFlow<String?>(null) }).collectAsState()
+    val context = LocalContext.current
 
     var chatOpen by remember { mutableStateOf(false) }
     var peopleOpen by remember { mutableStateOf(false) }
@@ -129,9 +150,35 @@ fun MomentRoomEngine(
     }
     LaunchedEffect(arrival) { if (arrival != null) { delay(3_500); arrival = null } }
     LaunchedEffect(notice) { if (notice != null) { delay(3_000); notice = null } }
+    // Something the live link did on its own - always something turned off -
+    // is said once, in the room's own voice.
+    LaunchedEffect(liveNotice) {
+        val said = liveNotice
+        if (said != null) { notice = said; delay(4_500); live?.notice?.value = null }
+    }
+    LaunchedEffect(unavailable) { unavailable?.let { notice = it } }
+
+    // The camera and microphone are asked for when they are wanted, and only then.
+    fun toggleCamera() {
+        val l = live ?: return
+        scope.launch { l.setCamera(!media.cameraOn) }
+    }
+    fun toggleMic() {
+        val l = live ?: return
+        scope.launch { l.setMicrophone(!media.micOn) }
+    }
+    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) toggleCamera() else notice = "Viro needs the camera to show you. You can allow it in Settings."
+    }
+    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) toggleMic() else notice = "Viro needs the microphone for them to hear you. You can allow it in Settings."
+    }
+    fun granted(permission: String) =
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
     val shape = runtime
     val scene = shape?.scene ?: "NEUTRAL"
+    LaunchedEffect(shape?.primary) { shape?.primary?.let { live?.onRoomShape(it) } }
 
     Box(Modifier.fillMaxSize()) {
         MomentScene(scene)
@@ -155,7 +202,12 @@ fun MomentRoomEngine(
             // transforms — the room, not a jump to another screen.
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (shape != null) {
-                    val ctx = MomentRoomContext(room, moment, shape, participants, me, now)
+                    val ctx = MomentRoomContext(
+                        room, moment, shape, participants, me, now,
+                        media = media,
+                        video = video,
+                        flipCamera = { live?.flipCamera() },
+                    )
                     AnimatedContent(
                         targetState = shape.primary,
                         transitionSpec = {
@@ -203,9 +255,19 @@ fun MomentRoomEngine(
 
             RoomControls(
                 unread = unread,
+                live = live != null,
+                micOn = media.micOn,
+                cameraOn = media.cameraOn,
+                onMic = {
+                    if (media.micOn || granted(Manifest.permission.RECORD_AUDIO)) toggleMic()
+                    else micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                },
+                onCamera = {
+                    if (media.cameraOn || granted(Manifest.permission.CAMERA)) toggleCamera()
+                    else cameraPermission.launch(Manifest.permission.CAMERA)
+                },
                 onTogether = { togetherOpen = true },
                 onChat = { chatOpen = true },
-                onPeople = { peopleOpen = true },
             )
         }
     }
@@ -321,26 +383,65 @@ private fun RoomHeader(
     }
 }
 
-/** Three things near the thumb; everything else lives in a sheet. */
+/**
+ * Four things near the thumb: your microphone, your camera, changing what the
+ * room is, and the chat. People and the rest live behind the menu.
+ * The microphone and camera start off, every time, for everyone.
+ */
 @Composable
-private fun RoomControls(unread: Int, onTogether: () -> Unit, onChat: () -> Unit, onPeople: () -> Unit) {
+private fun RoomControls(
+    unread: Int,
+    live: Boolean,
+    micOn: Boolean,
+    cameraOn: Boolean,
+    onMic: () -> Unit,
+    onCamera: () -> Unit,
+    onTogether: () -> Unit,
+    onChat: () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (live) {
+            MediaToggle(on = micOn, onIcon = Icons.Default.Mic, offIcon = Icons.Default.MicOff,
+                label = if (micOn) "Turn microphone off" else "Turn microphone on", onClick = onMic)
+            MediaToggle(on = cameraOn, onIcon = Icons.Default.Videocam, offIcon = Icons.Default.VideocamOff,
+                label = if (cameraOn) "Turn camera off" else "Turn camera on", onClick = onCamera)
+        }
         Surface(
             shape = RoundedCornerShape(28.dp),
             color = Color.White.copy(alpha = 0.16f),
             modifier = Modifier.weight(1f).height(56.dp).clickable(onClick = onTogether),
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Text("Do something together", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                Text("Do something together", color = Color.White, style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 8.dp))
             }
         }
-        RoundAction("People", onPeople)
         BadgedBox(badge = { if (unread > 0) Badge { Text(if (unread > 9) "9+" else "$unread") } }) {
             RoundAction("Chat", onChat)
+        }
+    }
+}
+
+@Composable
+private fun MediaToggle(
+    on: Boolean,
+    onIcon: ImageVector,
+    offIcon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        shape = CircleShape,
+        // Lit when on, so nobody has to wonder whether they can be seen or heard.
+        color = if (on) Color.White else Color.White.copy(alpha = 0.12f),
+        modifier = Modifier.size(56.dp).clickable(onClickLabel = label, onClick = onClick),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(if (on) onIcon else offIcon, label, tint = if (on) Color.Black else Color.White)
         }
     }
 }

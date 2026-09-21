@@ -74,6 +74,9 @@ data class MomentRuntimeDto(
     val updatedBy: String? = null,
 )
 
+/** Where this Moment's live room is, and a short-lived pass into it. */
+data class MomentPresenceDto(val url: String, val token: String, val roomName: String)
+
 /** One change to what a room is. Only the field its [op] needs is read. */
 data class MomentRoomChangeBody(
     val op: String,
@@ -108,6 +111,10 @@ interface ViroMomentsApi {
     @POST("api/v1/moments/{id}/leave") suspend fun leave(@Path("id") id: String)
     @GET("api/v1/moments/{id}/room") suspend fun room(@Path("id") id: String): MomentRoomDto
     /** Changes what the room is, for everyone in it. */
+    /** Admission to the room's live faces and voices. Turns nothing on by itself. */
+    @POST("api/v1/moments/{id}/presence")
+    suspend fun presence(@Path("id") id: String): MomentPresenceDto
+
     @POST("api/v1/moments/{id}/state") suspend fun changeRoom(@Path("id") id: String, @Body body: MomentRoomChangeBody): MomentRuntimeDto
     @POST("api/v1/moments/{id}/messages") suspend fun sendMessage(@Path("id") id: String, @Body body: SendMomentMessageBody): MomentMessageDto
     @POST("api/v1/moments/{id}/messages/{messageId}/react") suspend fun react(@Path("id") id: String, @Path("messageId") messageId: String, @Body body: MomentReactBody)

@@ -98,6 +98,7 @@ class MomentsRepositoryTest {
         /** The room shape the fake server holds, and every change asked of it. */
         var runtimeState = MomentRuntimeDto("moment", 1, "COOK", "PRESENCE", emptyList(), "KITCHEN")
         val changes = mutableListOf<MomentRoomChangeBody>()
+        override suspend fun presence(id: String) = MomentPresenceDto("wss://media.test", "token", "viro-moment-$id")
         override suspend fun changeRoom(id: String, body: MomentRoomChangeBody): MomentRuntimeDto {
             changes.add(body)
             runtimeState = runtimeState.copy(

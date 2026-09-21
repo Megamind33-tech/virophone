@@ -216,7 +216,11 @@ class MomentRoomState(
         if (closed.value) return@withLock
         try { apply(api.room(momentId)) }
         catch (e: CancellationException) { throw e }
-        catch (e: Exception) { if (momentHttpStatus(e) == 404) closed.value = true }
+        catch (e: Exception) {
+            // 403: no longer in this room — left on another phone, or taken
+            // out of it. Either way this phone's room is over too.
+            if (momentHttpStatus(e) == 404 || momentHttpStatus(e) == 403) closed.value = true
+        }
     }
 
     /** The room state machine for socket frames: chat and reactions apply
@@ -237,7 +241,8 @@ class MomentRoomState(
                 val mid = str(payload, "messageId")
                 if (mid != null) refresh()
             }
-            "moment.joined", "moment.left" -> refresh()
+            "moment.left" -> if (str(payload, "userId") == userId()) closed.value = true else refresh()
+            "moment.joined" -> refresh()
             "moment.ended", "moment.expired" -> closed.value = true
             else -> {}
         }

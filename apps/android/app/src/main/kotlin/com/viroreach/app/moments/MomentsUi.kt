@@ -355,15 +355,22 @@ fun MomentRoomScreen(
     val scope = rememberCoroutineScope()
     var clock by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val me = session.tokenStore.getUserId()
+    // Faces and voices. The engine joins the room's media once the room is
+    // entered and publishes nothing until its person turns something on.
+    val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
+    val engine = remember(room) { com.viroreach.voice.webrtc.MomentPresenceEngine(appContext) }
+    val live = remember(room) { session.openMomentLive(room.momentId, engine) }
+    val video = remember(engine) { com.viroreach.app.moments.engine.MomentVideo(engine) }
     // Remembered while the room is open, for the ending: who was here, and for how long.
     var lastPeople by remember { mutableStateOf(participants) }
     LaunchedEffect(participants) { if (participants.isNotEmpty()) lastPeople = participants }
     LaunchedEffect(room) {
-        room.enter()
+        if (room.enter().isSuccess) live.start()
         var tick = 0
         while (true) {
             delay(1000)
             clock = System.currentTimeMillis()
+            if (!closed) live.tick()
             // Every change arrives as a frame; this is only a safety net for a
             // frame that never came, so it does not need to spend data every second.
             if (!closed && ++tick % 15 == 0) room.refresh()
@@ -373,8 +380,26 @@ fun MomentRoomScreen(
     LaunchedEffect(room) {
         session.moments.frames.collect { (type, payload) -> room.onFrame(type, payload) }
     }
+    // However the room goes away — ended, left, taken out of it — the camera
+    // and microphone go with it.
+    LaunchedEffect(closed) { if (closed) live.stop() }
+    // Nothing keeps capturing once Viro is no longer on screen.
+    val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle, live) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) scope.launch { live.onBackground() }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
     DisposableEffect(room) {
-        onDispose { scope.launch { room.leave() } }
+        onDispose {
+            // The screen's own scope ends with it; releasing the camera and
+            // microphone must not depend on that, so it runs on its own.
+            @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
+            kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.Main) { live.stop() }
+            scope.launch { room.leave() }
+        }
     }
 
     Dialog(onDismissRequest = onBack, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -401,6 +426,8 @@ fun MomentRoomScreen(
                     },
                     onCall = onCall,
                     onOpenChat = onOpenChat,
+                    live = live,
+                    video = video,
                 )
             }
         }

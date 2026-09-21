@@ -27,6 +27,7 @@ dependencies {
     // used for actual call media, which LiveKit now owns (see LiveKitCallEngine).
     implementation("io.getstream:stream-webrtc-android:1.1.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-    implementation("io.livekit:livekit-android:2.18.2")
+    // The app draws Moment video with LiveKit's own renderer view, so it sees the same version.
+    api("io.livekit:livekit-android:2.18.2")
     testImplementation("junit:junit:4.13.2")
 }

@@ -6,6 +6,7 @@ import com.viroreach.app.moments.MomentRoomState
 import com.viroreach.core.network.MomentDto
 import com.viroreach.core.network.MomentParticipantDto
 import com.viroreach.core.network.MomentRuntimeDto
+import com.viroreach.voice.webrtc.PresenceSnapshot
 
 /**
  * Everything a module is told about the room it is drawn in.
@@ -22,6 +23,12 @@ class MomentRoomContext(
     val me: String?,
     /** Wall-clock now, ticking once a second, for anything that counts time. */
     val now: Long,
+    /** Faces and voices, as they are right now. Empty when there is no live link. */
+    val media: PresenceSnapshot = PresenceSnapshot(),
+    /** Draws someone's camera; null when this room has no live link. */
+    val video: MomentVideo? = null,
+    /** Front camera to back, for showing what's in front of you. */
+    val flipCamera: () -> Unit = {},
 ) {
     /** Everyone here but me. */
     val others: List<MomentParticipantDto> get() = participants.filter { it.userId != me }
@@ -110,8 +117,11 @@ enum class MomentIntent(
  * name counts as a capability once it is registered.
  */
 object MomentCapabilities {
-    /** Filled in as each stage lands: voice and camera arrive with presence. */
-    private val extra = mutableSetOf<String>()
+    /**
+     * Voice and the camera come with live presence. When a server has no live
+     * media the room says so and carries on as presence, so these stay on.
+     */
+    private val extra = mutableSetOf("VOICE", "CAMERA")
 
     fun has(capability: String): Boolean = MomentModules.has(capability) || capability in extra
 

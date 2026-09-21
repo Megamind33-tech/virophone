@@ -46,6 +46,16 @@ internal fun togetherFor(ctx: MomentRoomContext, other: MomentParticipantDto? = 
 
 private fun millisOf(iso: String): Long? = runCatching { Instant.parse(iso).toEpochMilli() }.getOrNull()
 
+/** Whether someone can be heard right now, in words: "Talking", "Can hear you". */
+private fun voiceOf(ctx: MomentRoomContext, p: MomentParticipantDto): String? {
+    val peer = ctx.media.peers.firstOrNull { it.identity == p.userId } ?: return null
+    return when {
+        peer.speaking -> "Talking"
+        peer.micOn -> "Microphone on"
+        else -> null
+    }
+}
+
 private fun firstName(p: MomentParticipantDto): String = p.displayName.trim().substringBefore(' ').ifBlank { "Someone" }
 
 /**
@@ -62,6 +72,17 @@ object PresenceModule : MomentModule {
     @OptIn(ExperimentalLayoutApi::class)
     @Composable
     override fun Primary(ctx: MomentRoomContext, modifier: Modifier) {
+        if (ctx.video != null && ctx.anyVideo()) {
+            // Someone has chosen to show themselves: the room becomes faces.
+            LiveStage(ctx, modifier)
+        } else {
+            Gathered(ctx, modifier)
+        }
+    }
+
+    @OptIn(ExperimentalLayoutApi::class)
+    @Composable
+    private fun Gathered(ctx: MomentRoomContext, modifier: Modifier) {
         val others = ctx.others
         Column(
             modifier.fillMaxSize().padding(horizontal = 24.dp),
@@ -94,6 +115,10 @@ object PresenceModule : MomentModule {
                 )
                 Spacer(Modifier.height(6.dp))
                 Text("is here with you", color = Color.White.copy(alpha = 0.75f), style = MaterialTheme.typography.bodyLarge)
+                voiceOf(ctx, other)?.let {
+                    Spacer(Modifier.height(6.dp))
+                    Text(it, color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.bodyMedium)
+                }
                 togetherFor(ctx, other)?.let {
                     Spacer(Modifier.height(18.dp))
                     Text(it, color = Color.White.copy(alpha = 0.55f), style = MaterialTheme.typography.bodyMedium)

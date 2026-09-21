@@ -98,6 +98,10 @@ class SessionManager private constructor(context: Context) {
             tokenStore.getUserId()
         }
 
+    /** The live faces and voices of one open Moment Room, over [media]. */
+    fun openMomentLive(momentId: String, media: com.viroreach.voice.webrtc.MomentMediaTransport) =
+        com.viroreach.app.moments.engine.MomentLive(viroApiClient.moments, momentId, media)
+
     /**
      * The encrypted backup of this phone's chats. Without it, an encrypted
      * conversation exists only on the phone that opened it.
