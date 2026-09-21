@@ -6,6 +6,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -103,22 +110,13 @@ fun NowScreen(
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 item(key = "mine") {
-                    Surface(shape = RoundedCornerShape(16.dp), color = ViroColors.surfaceRaised,
-                        modifier = Modifier.fillMaxWidth().clickable { if (own == null) create = true else manage = own.id }) {
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            ViroAvatar(size = ViroAvatarSize.Small, imageUrl = profile.effectivePhotoUrl, displayName = profile.displayName)
-                            Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(if (own == null) "What are you up to?" else "Your Moment", color = ViroColors.textPrimary,
-                                    fontWeight = FontWeight.SemiBold)
-                                Text(own?.let { "${it.activity()} · ${remainingMinutes(it.endsAt(), clock)} min left" }
-                                    ?: "Start a Moment for your people", color = ViroColors.textMuted,
-                                    style = MaterialTheme.typography.bodySmall)
-                            }
-                            Text(if (own == null) "Start" else "Manage", color = ViroColors.BlueAccent,
-                                style = MaterialTheme.typography.labelLarge)
-                        }
-                    }
+                    YourMomentCard(
+                        own = own,
+                        photoUrl = profile.effectivePhotoUrl,
+                        displayName = profile.displayName,
+                        clock = clock,
+                        onClick = { if (own == null) create = true else manage = own.id },
+                    )
                 }
                 if (invitations.isNotEmpty()) {
                     item(key = "invitations-title") {
@@ -127,11 +125,18 @@ fun NowScreen(
                     }
                     items(invitations, key = { it.invitationId }) { invitation ->
                         val m = invitation.moment
-                        Surface(shape = RoundedCornerShape(12.dp), color = ViroColors.surface, modifier = Modifier.fillMaxWidth()) {
-                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(shape = RoundedCornerShape(18.dp), color = ViroColors.surfaceRaised, modifier = Modifier.fillMaxWidth()) {
+                            Row(Modifier.height(78.dp), verticalAlignment = Alignment.CenterVertically) {
+                                // A glimpse of the room they are holding open.
+                                Box(Modifier.width(78.dp).fillMaxHeight().clickable { roomId = m.id }) {
+                                    com.viroreach.app.moments.engine.MomentActivityArt(m.intent ?: "BE", Modifier.fillMaxSize())
+                                    Box(Modifier.align(Alignment.Center)) { MomentAvatar(m) }
+                                }
+                                Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f).clickable { roomId = m.id }) {
                                     Text("${m.displayName} invited you", color = ViroColors.textMuted, style = MaterialTheme.typography.labelMedium)
-                                    Text(m.activity(), color = ViroColors.textPrimary, fontWeight = FontWeight.Medium)
+                                    Text(m.activity(), color = ViroColors.textPrimary, fontWeight = FontWeight.Medium,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                                 TextButton(onClick = { roomId = m.id }) { Text("Join", color = ViroColors.BlueAccent) }
                                 IconButton(onClick = { scope.launch { repo.declineInvitation(invitation.invitationId) } },
@@ -287,23 +292,91 @@ private fun NowCard(
     onPrimary: () -> Unit,
     onReact: (String?) -> Unit = {},
 ) {
-    Surface(shape = RoundedCornerShape(12.dp), color = ViroColors.surface, modifier = Modifier.fillMaxWidth()) {
+    val people = m.participantCount ?: 0
+    val left = remainingMinutes(m.endsAt(), clock)
+    Surface(
+        shape = RoundedCornerShape(22.dp),
+        color = ViroColors.surfaceRaised,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         Column {
-            Row(Modifier.clickable(onClick = onPrimary).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                MomentAvatar(m)
-                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                    Text(m.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        color = ViroColors.textPrimary, fontWeight = FontWeight.SemiBold)
-                    Text(m.activity(), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        color = ViroColors.textMuted, style = MaterialTheme.typography.bodySmall)
-                    val people = m.participantCount ?: 0
-                    Text(if (people > 1) "$people people" else "${remainingMinutes(m.endsAt(), clock)} min",
-                        color = ViroColors.textMuted, style = MaterialTheme.typography.labelSmall)
+            // The picture is the card. A Moment is somebody making room for
+            // you, and that should be visible before the words are read.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(158.dp)
+                    .clickable(onClick = onPrimary),
+            ) {
+                com.viroreach.app.moments.engine.MomentActivityArt(
+                    m.intent ?: "BE",
+                    Modifier.fillMaxSize(),
+                )
+                // How much of it is left, and who is already in.
+                Row(
+                    Modifier.align(Alignment.TopEnd).padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (people > 1) CardChip("$people here")
+                    CardChip(if (left >= 60) "${left / 60} h left" else "$left min left")
                 }
-                Text(primaryLabel, color = ViroColors.BlueAccent, style = MaterialTheme.typography.labelLarge)
+                Row(
+                    Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    MomentAvatar(m)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            m.displayName,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = androidx.compose.ui.graphics.Color.White,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            m.activity(),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.78f),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = ViroColors.BlueAccent,
+                        modifier = Modifier.clickable(onClick = onPrimary),
+                    ) {
+                        Text(
+                            primaryLabel,
+                            color = ViroColors.NavyBackground,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
+                        )
+                    }
+                }
             }
             MomentReactionRow(m, onReact)
         }
+    }
+}
+
+/** A small fact about a Moment, legible over any of the artwork. */
+@Composable
+private fun CardChip(text: String) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.38f),
+    ) {
+        Text(
+            text,
+            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.92f),
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+        )
     }
 }
 
@@ -318,7 +391,7 @@ private fun NowCard(
 @Composable
 private fun MomentReactionRow(m: MomentDto, onReact: (String?) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         for (emoji in momentReactions) {
@@ -326,7 +399,13 @@ private fun MomentReactionRow(m: MomentDto, onReact: (String?) -> Unit) {
             val mine = m.myReaction == emoji
             Surface(
                 shape = RoundedCornerShape(50),
-                color = if (mine) ViroColors.BlueAccent.copy(alpha = 0.18f) else ViroColors.surfaceRaised,
+                // The strip sits on the raised card now, so an unchosen
+                // reaction has to be lighter than it rather than the same.
+                color = if (mine) {
+                    ViroColors.BlueAccent.copy(alpha = 0.22f)
+                } else {
+                    androidx.compose.ui.graphics.Color.White.copy(alpha = 0.07f)
+                },
                 modifier = Modifier.padding(end = 6.dp).clickable { onReact(if (mine) null else emoji) },
             ) {
                 Text(
@@ -627,6 +706,7 @@ private fun KeepsakeChoice(
         }
     }
 }
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun RoomChat(
     room: MomentRoomState,
@@ -647,8 +727,20 @@ internal fun RoomChat(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)) {
             items(messages, key = { it.id }) { message ->
-                MessageBubble(message, mine = message.senderUserId == me,
-                    onReact = { reactTo = message })
+                // Arriving, rather than appearing. A message that pops into
+                // existence reads as a list refreshing; one that rises into
+                // place reads as somebody saying something.
+                MessageBubble(
+                    message,
+                    mine = message.senderUserId == me,
+                    onReact = { reactTo = message },
+                    modifier = Modifier.animateItemPlacement(
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioLowBouncy,
+                            stiffness = Spring.StiffnessMediumLow,
+                        ),
+                    ),
+                )
             }
         }
         if (actionError != null) Text(actionError, color = ViroColors.textMuted,
@@ -696,9 +788,32 @@ internal fun RoomChat(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageBubble(message: MomentMessageDto, mine: Boolean, onReact: () -> Unit) {
-    Column(Modifier.fillMaxWidth(),
-        horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
+private fun MessageBubble(
+    message: MomentMessageDto,
+    mine: Boolean,
+    onReact: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // Each bubble plays its entrance once, the first time it is composed.
+    val entered = remember { Animatable(0f) }
+    LaunchedEffect(message.id) {
+        entered.animateTo(1f, spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow))
+    }
+    Column(
+        modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                alpha = entered.value
+                // From the side it came from, and a touch small, so it settles
+                // into place rather than snapping there.
+                translationX = (if (mine) 28f else -28f) * (1f - entered.value)
+                translationY = 10f * (1f - entered.value)
+                scaleX = 0.94f + 0.06f * entered.value
+                scaleY = 0.94f + 0.06f * entered.value
+                transformOrigin = TransformOrigin(if (mine) 1f else 0f, 1f)
+            },
+        horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
+    ) {
         if (!mine) Text(message.senderName, color = ViroColors.textMuted,
             style = MaterialTheme.typography.labelSmall)
         Surface(shape = RoundedCornerShape(12.dp),
@@ -876,6 +991,115 @@ private fun MomentPage(title: String, onBack: () -> Unit, content: androidx.comp
     }
 }
 
+/**
+ * The person's own Moment, at the top of Now.
+ *
+ * Their card, in the same language as everyone else's — a Moment of your own
+ * is the same kind of thing as a Moment of Natasha's, and a plain settings row
+ * above a wall of cards said otherwise.
+ */
+@Composable
+private fun YourMomentCard(
+    own: MomentDto?,
+    photoUrl: String?,
+    displayName: String,
+    clock: Long,
+    onClick: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(22.dp),
+        color = ViroColors.surfaceRaised,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Box(Modifier.fillMaxWidth().height(if (own == null) 120.dp else 140.dp).clickable(onClick = onClick)) {
+            com.viroreach.app.moments.engine.MomentActivityArt(
+                own?.intent ?: "BE",
+                Modifier.fillMaxSize(),
+            )
+            Row(
+                Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.border(1.dp, ViroColors.BlueAccent, CircleShape).padding(3.dp)) {
+                    ViroAvatar(size = ViroAvatarSize.Small, imageUrl = photoUrl, displayName = displayName)
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (own == null) "What are you up to?" else "Your Moment",
+                        color = androidx.compose.ui.graphics.Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        own?.let { "${it.activity()} · ${remainingMinutes(it.endsAt(), clock)} min left" }
+                            ?: "Open a room and let your people in",
+                        color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.78f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                Surface(shape = RoundedCornerShape(50), color = ViroColors.BlueAccent) {
+                    Text(
+                        if (own == null) "Start" else "Manage",
+                        color = ViroColors.NavyBackground,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * One thing people can do together, as a picture rather than a row.
+ *
+ * The art is the room's own atmosphere, so choosing here already shows where
+ * you are about to be: the cinema tile is dark, the kitchen tile is warm, and
+ * walking into the room feels like the same place.
+ */
+@Composable
+private fun ActivityTile(
+    intentKey: String,
+    label: String,
+    chosen: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val border by animateDpAsState(if (chosen) 2.dp else 0.dp, label = "tileBorder")
+    val lift by animateFloatAsState(if (chosen) 1f else 0f, label = "tileLift")
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = ViroColors.surfaceRaised,
+        modifier = modifier
+            .height(112.dp)
+            .border(border, ViroColors.BlueAccent.copy(alpha = 0.9f), RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick),
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            com.viroreach.app.moments.engine.MomentActivityArt(intentKey, Modifier.fillMaxSize())
+            if (lift > 0f) {
+                Box(Modifier.fillMaxSize().background(ViroColors.BlueAccent.copy(alpha = 0.16f * lift)))
+            }
+            Text(
+                label,
+                color = androidx.compose.ui.graphics.Color.White,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.align(Alignment.BottomStart).padding(14.dp),
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody) -> Unit, busy: Boolean, error: String?) {
@@ -894,26 +1118,35 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
                 Text("What would you like to do together?", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
                 Text("A room opens around it. You can change it once you're in.", color = ViroColors.textMuted)
             }
-            items(intents, key = { it.key }) { intent ->
-                val chosen = !somethingElse && intentKey == intent.key
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = if (chosen) ViroColors.BlueAccent.copy(alpha = 0.22f) else ViroColors.surfaceRaised,
-                    modifier = Modifier.fillMaxWidth().clickable { intentKey = intent.key; somethingElse = false },
+            // Two to a row, each showing the room it opens. A column of
+            // identical rectangles told you nothing about the difference
+            // between cooking with someone and sitting quietly with them.
+            items(intents.chunked(2), key = { it.first().key }) { pair ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text(intent.label, color = ViroColors.textPrimary, style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+                    for (intent in pair) {
+                        ActivityTile(
+                            intentKey = intent.key,
+                            label = intent.label,
+                            chosen = !somethingElse && intentKey == intent.key,
+                            modifier = Modifier.weight(1f),
+                        ) { intentKey = intent.key; somethingElse = false }
+                    }
+                    // An odd one out keeps its half rather than stretching
+                    // across the row and looking like a different kind of thing.
+                    if (pair.size == 1) Spacer(Modifier.weight(1f))
                 }
             }
             item {
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = if (somethingElse) ViroColors.BlueAccent.copy(alpha = 0.22f) else ViroColors.surfaceRaised,
-                    modifier = Modifier.fillMaxWidth().clickable { somethingElse = true },
-                ) {
-                    Text("Something else", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
-                }
+                ActivityTile(
+                    intentKey = "OTHER",
+                    label = "Something else",
+                    chosen = somethingElse,
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { somethingElse = true },
+                )
                 if (somethingElse) {
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(value = text, onValueChange = { text = it.take(60) },

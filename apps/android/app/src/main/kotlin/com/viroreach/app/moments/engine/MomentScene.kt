@@ -2,6 +2,7 @@ package com.viroreach.app.moments.engine
 
 import android.provider.Settings
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -64,8 +65,18 @@ fun sceneLook(scene: String): MomentSceneLook = when (scene) {
  * transforms rather than cutting to another screen.
  */
 @Composable
-fun MomentScene(scene: String, modifier: Modifier = Modifier) {
+fun MomentScene(
+    scene: String,
+    modifier: Modifier = Modifier,
+    /**
+     * How alive the room is right now, 0..1 — music playing, a film running.
+     * The scene brightens and moves a little more with it, so a room with
+     * something going on in it does not look the same as an empty one.
+     */
+    energy: Float = 0f,
+) {
     val look = sceneLook(scene)
+    val lift by animateFloatAsState(energy.coerceIn(0f, 1f), tween(1200), label = "sceneEnergy")
     val base by animateColorAsState(look.base, tween(900), label = "sceneBase")
     val glow by animateColorAsState(look.glow, tween(900), label = "sceneGlow")
 
@@ -83,7 +94,7 @@ fun MomentScene(scene: String, modifier: Modifier = Modifier) {
         animationSpec = infiniteRepeatable(tween(14_000, easing = LinearEasing), RepeatMode.Reverse),
         label = "scenePhase",
     )
-    val sway = if (reducedMotion) 0f else look.motion * (phase - 0.5f)
+    val sway = if (reducedMotion) 0f else (look.motion + lift * 0.4f) * (phase - 0.5f)
 
     Box(modifier.fillMaxSize()) {
         Canvas(Modifier.fillMaxSize()) {
@@ -91,9 +102,9 @@ fun MomentScene(scene: String, modifier: Modifier = Modifier) {
             // The glow rises from low in the room, where people and hands are.
             drawRect(
                 Brush.radialGradient(
-                    colors = listOf(glow.copy(alpha = 0.85f), glow.copy(alpha = 0f)),
+                    colors = listOf(glow.copy(alpha = 0.85f + lift * 0.15f), glow.copy(alpha = 0f)),
                     center = Offset(size.width * (0.5f + sway * 0.4f), size.height * 0.62f),
-                    radius = size.maxDimension * 0.75f,
+                    radius = size.maxDimension * (0.75f + lift * 0.12f),
                 ),
             )
             // A second, fainter light keeps it from looking like a spotlight.
@@ -117,3 +128,37 @@ fun MomentScene(scene: String, modifier: Modifier = Modifier) {
         }
     }
 }
+
+/**
+ * A scene in miniature, for picking one.
+ *
+ * The same two colours the room uses, so what is chosen here is what arrives —
+ * no separate set of thumbnails to drift out of step with the rooms.
+ */
+@Composable
+fun SceneSwatch(scene: String, modifier: Modifier = Modifier) {
+    val look = sceneLook(scene)
+    Canvas(modifier) {
+        drawRect(look.base)
+        drawRect(
+            Brush.radialGradient(
+                colors = listOf(look.glow.copy(alpha = 0.9f), look.glow.copy(alpha = 0f)),
+                center = Offset(size.width * 0.5f, size.height * 0.72f),
+                radius = size.maxDimension * 0.8f,
+            ),
+        )
+    }
+}
+
+/** What each scene is called, in the words somebody choosing one would use. */
+val sceneNames: List<Pair<String, String>> = listOf(
+    "KITCHEN" to "Kitchen",
+    "CINEMA" to "Cinema",
+    "LISTENING" to "Late night",
+    "QUIET" to "Dusk",
+    "PLAY" to "Bright",
+    "FAMILY" to "Living room",
+    "CELEBRATION" to "Gold",
+    "OUTDOORS" to "Outdoors",
+    "NEUTRAL" to "Viro",
+)

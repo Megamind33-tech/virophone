@@ -27,6 +27,10 @@ import androidx.core.content.ContextCompat
 import com.viroreach.voice.webrtc.PresenceSnapshot
 import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -133,6 +137,7 @@ fun MomentRoomEngine(
     var timerOpen by remember { mutableStateOf(false) }
     var askOpen by remember { mutableStateOf(false) }
     var touchOpen by remember { mutableStateOf(false) }
+    var sceneOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
     var chatError by remember { mutableStateOf<String?>(null) }
@@ -189,8 +194,14 @@ fun MomentRoomEngine(
     val scene = shape?.scene ?: "NEUTRAL"
     LaunchedEffect(shape?.primary) { shape?.primary?.let { live?.onRoomShape(it) } }
 
+    // Something playing lifts the whole room: the light swells a little and
+    // moves a little more. A room with music in it should not look like an
+    // empty one.
+    val playing by room.playback.collectAsState()
+    val energy = if (playing?.status == "PLAYING") 1f else 0f
+
     Box(Modifier.fillMaxSize()) {
-        MomentScene(scene)
+        MomentScene(scene, energy = energy)
 
         Column(Modifier.fillMaxSize().safeDrawingPadding()) {
             RoomHeader(
@@ -308,6 +319,7 @@ fun MomentRoomEngine(
                 },
                 onTimer = { togetherOpen = false; timerOpen = true },
                 onAsk = { togetherOpen = false; askOpen = true },
+                onScene = { togetherOpen = false; sceneOpen = true },
                 onMusic = { add ->
                     togetherOpen = false
                     scope.launch {
@@ -343,6 +355,21 @@ fun MomentRoomEngine(
                     room.choice(MomentChoiceBody("ASK", question = question, options = options)).onFailure { notice = it.message }
                 }
             })
+        }
+    }
+    if (sceneOpen) {
+        ModalBottomSheet(onDismissRequest = { sceneOpen = false }, containerColor = ViroColors.surface) {
+            SceneSheet(
+                current = scene,
+                pinned = shape?.scenePinned == true,
+                onPick = { picked ->
+                    sceneOpen = false
+                    scope.launch {
+                        room.change(MomentRoomChangeBody(op = "SCENE", scene = picked))
+                            .onFailure { notice = it.message }
+                    }
+                },
+            )
         }
     }
     if (touchOpen) {
@@ -542,6 +569,7 @@ private fun DoSomethingTogether(
     onMusic: (add: Boolean) -> Unit,
     onTimer: () -> Unit,
     onAsk: () -> Unit,
+    onScene: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
         Text("Do something together", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
@@ -554,6 +582,7 @@ private fun DoSomethingTogether(
         Spacer(Modifier.height(16.dp))
         TogetherAction("Set a timer for everyone", onTimer)
         TogetherAction("Ask everyone something", onAsk)
+        TogetherAction("Change how the room looks", onScene)
         if (musicBeside != null) {
             TextButton(onClick = { onMusic(musicBeside) }, modifier = Modifier.fillMaxWidth()) {
                 Text(
@@ -574,6 +603,67 @@ private fun DoSomethingTogether(
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.Start,
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Choosing how the room looks.
+ *
+ * Every activity brings its own atmosphere, which is right most of the time
+ * and wrong the moment somebody wants their late-night cooking to feel like
+ * late night. Picking one holds it through the next transformation, and
+ * "Match the activity" hands it back.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SceneSheet(current: String, pinned: Boolean, onPick: (String?) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
+        Text("How the room looks", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "For everybody here, not just you.",
+            color = ViroColors.textMuted,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Spacer(Modifier.height(16.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            for ((key, label) in sceneNames) {
+                val chosen = pinned && key == current
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.width(72.dp).clickable { onPick(key) },
+                ) {
+                    Box(
+                        Modifier.size(72.dp, 54.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .border(
+                                if (chosen) 2.dp else 0.dp,
+                                if (chosen) ViroColors.BlueAccent else Color.Transparent,
+                                RoundedCornerShape(14.dp),
+                            ),
+                    ) {
+                        SceneSwatch(key, Modifier.fillMaxSize())
+                    }
+                    Spacer(Modifier.height(5.dp))
+                    Text(
+                        label,
+                        color = if (chosen) ViroColors.BlueAccent else ViroColors.textMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        if (pinned) {
+            Spacer(Modifier.height(12.dp))
+            TextButton(onClick = { onPick(null) }) {
+                Text("Match the activity again", color = ViroColors.BlueAccent)
             }
         }
     }

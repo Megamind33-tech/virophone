@@ -14,6 +14,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.getValue
+import com.viroreach.core.designsystem.ViroColors
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -145,10 +156,27 @@ private fun LiveStageWith(ctx: MomentRoomContext, video: MomentVideo, modifier: 
 private fun LiveTile(face: LiveFace, video: MomentVideo, modifier: Modifier, large: Boolean) {
     val peer = face.peer
     val speaking = peer?.speaking == true
+    // Somebody talking should be visible from across the room, not a hairline
+    // that appears and vanishes. The ring swells while they hold the floor and
+    // settles when they stop, so a glance tells you who is speaking.
+    val ring by animateDpAsState(
+        if (speaking) (if (large) 3.dp else 2.5.dp) else 0.dp,
+        tween(160), label = "speakRing",
+    )
+    val glow by animateFloatAsState(if (speaking) 1f else 0f, tween(220), label = "speakGlow")
+    val pulse = rememberInfiniteTransition(label = "speakPulse")
+    val beat by pulse.animateFloat(
+        initialValue = 0.55f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(680, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "speakBeat",
+    )
+    val corner = RoundedCornerShape(if (large) 24.dp else 18.dp)
     Box(
-        modifier.clip(RoundedCornerShape(if (large) 24.dp else 18.dp))
-            .border(if (speaking) 2.dp else 0.dp, if (speaking) Color.White.copy(alpha = 0.8f) else Color.Transparent,
-                RoundedCornerShape(if (large) 24.dp else 18.dp)),
+        modifier.clip(corner).border(
+            ring,
+            ViroColors.BlueAccent.copy(alpha = (0.55f + beat * 0.45f) * glow),
+            corner,
+        ),
     ) {
         Surface(color = Color.Black.copy(alpha = 0.25f), modifier = Modifier.fillMaxSize()) {}
         if (peer != null && peer.cameraOn && !peer.videoPaused) {
@@ -170,6 +198,21 @@ private fun LiveTile(face: LiveFace, video: MomentVideo, modifier: Modifier, lar
             Surface(shape = RoundedCornerShape(50), color = Color.Black.copy(alpha = 0.45f)) {
                 Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(face.name, color = Color.White, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    // Three bars keeping time. Colour alone would leave this
+                    // out for anyone who cannot see the ring.
+                    if (speaking) {
+                        Spacer(Modifier.width(7.dp))
+                        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            for (i in 0..2) {
+                                val h = 5.dp + (7.dp * ((beat + i * 0.28f) % 1f))
+                                Box(
+                                    Modifier.width(2.5.dp).height(h)
+                                        .clip(RoundedCornerShape(50))
+                                        .background(ViroColors.BlueAccent),
+                                )
+                            }
+                        }
+                    }
                     if (peer != null && !peer.micOn) {
                         Spacer(Modifier.width(4.dp))
                         Icon(Icons.Default.MicOff, "Microphone off", tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(14.dp))
