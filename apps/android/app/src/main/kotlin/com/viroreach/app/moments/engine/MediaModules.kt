@@ -12,6 +12,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -208,10 +213,42 @@ object MusicModule : MomentModule {
         if (media == null) {
             Unavailable(modifier)
         } else {
-            Column(modifier.fillMaxSize().padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            val artwork = rememberSongArtwork(media.exo, media.view.mediaId)
+            Box(modifier.fillMaxSize()) {
+                // The record's own cover, blurred, behind the whole room — then
+                // the scene's colours back over the top of it. The room still
+                // reads as the room it is; the song only tints it.
+                if (artwork != null) {
+                    Image(
+                        bitmap = artwork.blurred,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.matchParentSize(),
+                    )
+                    val look = sceneLook(ctx.runtime.scene)
+                    Canvas(Modifier.matchParentSize()) {
+                        drawRect(look.base.copy(alpha = 0.62f))
+                        drawRect(
+                            Brush.radialGradient(
+                                colors = listOf(look.glow.copy(alpha = 0.35f), Color.Transparent),
+                                center = Offset(size.width * 0.5f, size.height * 0.62f),
+                                radius = size.maxDimension * 0.75f,
+                            ),
+                        )
+                        // Keeps the words over it readable whatever the cover is.
+                        drawRect(
+                            Brush.verticalGradient(
+                                0f to Color.Black.copy(alpha = 0.35f),
+                                0.45f to Color.Transparent,
+                                1f to Color.Black.copy(alpha = 0.45f),
+                            ),
+                        )
+                    }
+                }
+            Column(Modifier.fillMaxSize().padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (media.view.mediaId != null && media.view.kind == "AUDIO") {
                     Spacer(Modifier.height(24.dp))
-                    Record(media.view.playing)
+                    Record(media.view.playing, artwork)
                     Spacer(Modifier.height(24.dp))
                     Text(media.view.title ?: "", color = Color.White, style = MaterialTheme.typography.headlineSmall,
                         maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
@@ -223,6 +260,7 @@ object MusicModule : MomentModule {
                     Transport(ctx, media, Modifier.fillMaxWidth())
                 }
                 Chooser(ctx, media, kind = "AUDIO", modifier = Modifier.weight(1f), compact = media.view.mediaId != null)
+            }
             }
         }
     }
@@ -262,16 +300,36 @@ object MusicModule : MomentModule {
         }
     }
 
+    /**
+     * The record, turning, with the song's own cover as its label.
+     *
+     * A cover on a spinning disc is the thing a record player actually looks
+     * like, and it is how somebody knows at a glance what is on. Without one
+     * it stays a black disc rather than a blank white square.
+     */
     @Composable
-    private fun Record(spinning: Boolean) {
+    private fun Record(spinning: Boolean, artwork: SongArtwork?) {
         val turn = rememberInfiniteTransition(label = "record")
         val angle by turn.animateFloat(0f, 360f, infiniteRepeatable(tween(6_000, easing = LinearEasing), RepeatMode.Restart), label = "recordAngle")
         Box(
             Modifier.size(180.dp).rotate(if (spinning) angle else 0f).clip(CircleShape).background(Color.Black.copy(alpha = 0.55f)),
             contentAlignment = Alignment.Center,
         ) {
-            Box(Modifier.size(56.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.85f)), contentAlignment = Alignment.Center) {
-                Text("♪", fontSize = 24.sp, color = Color.Black)
+            if (artwork != null) {
+                // Most of the disc, so it reads as a record rather than a photo
+                // in a circle, with the vinyl still showing round the edge.
+                Image(
+                    bitmap = artwork.full,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(126.dp).clip(CircleShape),
+                )
+                // The spindle hole, which is what stops it looking like a badge.
+                Box(Modifier.size(16.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.75f)))
+            } else {
+                Box(Modifier.size(56.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.85f)), contentAlignment = Alignment.Center) {
+                    Text("♪", fontSize = 24.sp, color = Color.Black)
+                }
             }
         }
     }

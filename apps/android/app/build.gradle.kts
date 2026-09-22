@@ -174,6 +174,9 @@ dependencies {
     // Watching and listening together in a Moment: the shared player.
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
+    // Player controls in the notification shade, so a Moment can keep playing
+    // while Viro is off screen.
+    implementation("androidx.media3:media3-session:1.4.1")
     // Chat lock and hidden chats.
     implementation("androidx.biometric:biometric:1.1.0")
 

@@ -27,6 +27,7 @@ import androidx.core.content.ContextCompat
 import com.viroreach.voice.webrtc.PresenceSnapshot
 import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -278,6 +279,42 @@ fun MomentRoomEngine(
                         }
                     }
                 }
+                // Chat belongs in the room. As a ModalBottomSheet it opened its
+                // own window on top of the Moment's, which put it visually
+                // outside the room — the scene, the header and whoever was on
+                // screen all disappeared behind a slab. Here it slides up over
+                // the stage, the room stays visible above it, and closing it
+                // puts you back where you already were.
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = chatOpen,
+                    enter = fadeIn(tween(180)) + slideInVertically(tween(260)) { it },
+                    exit = fadeOut(tween(160)) + slideOutVertically(tween(220)) { it },
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                        color = ViroColors.surface.copy(alpha = 0.97f),
+                        modifier = Modifier.fillMaxWidth().fillMaxHeight(0.62f),
+                    ) {
+                        Column(Modifier.fillMaxSize()) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    "In the room",
+                                    color = ViroColors.textMuted,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                IconButton(onClick = { chatOpen = false }) {
+                                    Icon(Icons.Default.Close, "Close chat", tint = ViroColors.textMuted)
+                                }
+                            }
+                            RoomChat(room, messages, me, chatError, onError = { chatError = it })
+                        }
+                    }
+                }
                 TouchArrivals(room)
                 androidx.compose.animation.AnimatedVisibility(
                     visible = arrival != null || notice != null,
@@ -316,6 +353,9 @@ fun MomentRoomEngine(
             )
         }
     }
+
+    // The back gesture closes the chat before it leaves the room.
+    androidx.activity.compose.BackHandler(enabled = chatOpen) { chatOpen = false }
 
     if (togetherOpen) {
         ModalBottomSheet(
@@ -412,16 +452,6 @@ fun MomentRoomEngine(
                 touchOpen = false
                 scope.launch { room.touch(kind, to).onFailure { notice = it.message } }
             })
-        }
-    }
-    if (chatOpen) {
-        ModalBottomSheet(
-            onDismissRequest = { chatOpen = false },
-            containerColor = ViroColors.surface,
-        ) {
-            Box(Modifier.fillMaxWidth().fillMaxHeight(0.7f)) {
-                RoomChat(room, messages, me, chatError, onError = { chatError = it })
-            }
         }
     }
     if (peopleOpen) {

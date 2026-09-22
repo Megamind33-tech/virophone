@@ -451,6 +451,13 @@ fun MomentRoomScreen(
     val playback = remember(room) {
         com.viroreach.app.moments.engine.SharedPlayback(room, exoPlayer, session::apiUrl).also { shared = it }
     }
+    // While this room is open, its player is the one the phone shows controls
+    // for. Attaching starts the foreground service; without it Android stops
+    // the audio as soon as Viro leaves the screen.
+    DisposableEffect(room) {
+        com.viroreach.app.moments.engine.MomentPlayerHolder.attach(appContext, exoPlayer.exo)
+        onDispose { com.viroreach.app.moments.engine.MomentPlayerHolder.detach(appContext) }
+    }
     val sharing = remember(room) { session.openMomentMedia(appContext, room, playback, scope) }
     LaunchedEffect(room) { room.playback.collect { playback.follow(it) } }
     // Remembered while the room is open, for the ending: who was here, and for how long.
@@ -479,11 +486,14 @@ fun MomentRoomScreen(
     val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle, live) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            // The camera stops when Viro is off screen — nobody expects to keep
+            // being filmed by an app they have put down. What the room is
+            // playing does not: the evening carries on for everyone else, and
+            // silencing it only for the person who glanced at a message is the
+            // thing that made the room feel like an app rather than a place.
             if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
-                playback.pauseHere()
                 scope.launch { live.onBackground() }
             }
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_START) playback.resumeHere()
         }
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
@@ -745,7 +755,9 @@ internal fun RoomChat(
         }
         if (actionError != null) Text(actionError, color = ViroColors.textMuted,
             style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp))
-        Row(Modifier.fillMaxWidth().imePadding().padding(horizontal = 12.dp, vertical = 8.dp),
+        // No imePadding here: this is drawn inside the room, whose own
+        // safeDrawingPadding already moves everything up for the keyboard.
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(value = draft, onValueChange = { draft = it.take(500) },
                 placeholder = { Text("Message the room", color = ViroColors.textMuted) },
