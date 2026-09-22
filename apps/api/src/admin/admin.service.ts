@@ -119,6 +119,144 @@ export class AdminService {
     return { sentTo: ids.length };
   }
 
+  // ------------------------------------------------------------- campaigns
+
+  /**
+   * Every campaign, with whether it is actually running right now.
+   *
+   * running is computed from the clock rather than read from a column, so a
+   * campaign cannot go on claiming to be live after its period has passed.
+   */
+  async campaigns() {
+    return this.db.query(`SELECT c.*,
+        (c.status = 'SCHEDULED'
+          AND (c.starts_at IS NULL OR c.starts_at <= now())
+          AND (c.ends_at IS NULL OR c.ends_at > now())) AS running,
+        (SELECT count(*)::int FROM promotions p WHERE p.campaign_id = c.id) AS promotions
+      FROM campaigns c ORDER BY c.created_at DESC`);
+  }
+
+  /** One campaign and what it says, in the order somebody arranged. */
+  async campaign(id: string) {
+    const [campaign] = await this.db.query(`SELECT c.*,
+        (c.status = 'SCHEDULED'
+          AND (c.starts_at IS NULL OR c.starts_at <= now())
+          AND (c.ends_at IS NULL OR c.ends_at > now())) AS running
+      FROM campaigns c WHERE c.id = $1`, [id]);
+    if (!campaign) {
+      throw new ViroException('NOT_FOUND', 'No campaign with that id.', HttpStatus.NOT_FOUND);
+    }
+    const promotions = await this.db.query(
+      `SELECT * FROM promotions WHERE campaign_id = $1 ORDER BY position, created_at`, [id]);
+    return { ...campaign, promotions };
+  }
+
+  async createCampaign(input: { name: string; audience?: string; startsAt?: string; endsAt?: string }) {
+    const [row] = await this.db.query(
+      `INSERT INTO campaigns (name, audience, starts_at, ends_at) VALUES ($1, $2, $3, $4) RETURNING *`,
+      [input.name.trim(), input.audience ?? 'EVERYONE', input.startsAt || null, input.endsAt || null],
+    );
+    return row;
+  }
+
+  /**
+   * Changes only what was sent. A campaign editor that blanks a period because
+   * the form did not include it is how scheduled things quietly become
+   * permanent.
+   */
+  async updateCampaign(id: string, patch: Record<string, unknown>) {
+    const columns: Record<string, string> = {
+      name: 'name', status: 'status', audience: 'audience',
+      startsAt: 'starts_at', endsAt: 'ends_at',
+    };
+    const sets: string[] = [];
+    const values: unknown[] = [id];
+    for (const [key, column] of Object.entries(columns)) {
+      if (patch[key] === undefined) continue;
+      values.push(patch[key] === '' ? null : patch[key]);
+      sets.push(`${column} = ${values.length}`);
+    }
+    if (sets.length === 0) return this.campaign(id);
+    const [rows] = await this.db.query(
+      `UPDATE campaigns SET ${sets.join(', ')}, updated_at = now() WHERE id = $1 RETURNING id`, values);
+    if (!rows || rows.length === 0) {
+      throw new ViroException('NOT_FOUND', 'No campaign with that id.', HttpStatus.NOT_FOUND);
+    }
+    return this.campaign(id);
+  }
+
+  async deleteCampaign(id: string) {
+    const [rows] = await this.db.query(`DELETE FROM campaigns WHERE id = $1 RETURNING id`, [id]);
+    if (!rows || rows.length === 0) {
+      throw new ViroException('NOT_FOUND', 'No campaign with that id.', HttpStatus.NOT_FOUND);
+    }
+    return { success: true };
+  }
+
+  /** Adds a promotion at the end of its campaign. */
+  async addPromotion(campaignId: string, input: { title: string; body?: string; action?: string }) {
+    const [last] = await this.db.query(
+      `SELECT coalesce(max(position), -1) + 1 AS next FROM promotions WHERE campaign_id = $1`, [campaignId]);
+    const [row] = await this.db.query(
+      `INSERT INTO promotions (campaign_id, title, body, action, position)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [campaignId, input.title.trim(), input.body?.trim() || null, input.action?.trim() || null, last?.next ?? 0],
+    ).catch((e: { code?: string }) => {
+      if (e.code === '23503') {
+        throw new ViroException('NOT_FOUND', 'No campaign with that id.', HttpStatus.NOT_FOUND);
+      }
+      throw e;
+    });
+    return row;
+  }
+
+  async updatePromotion(id: string, patch: { title?: string; body?: string; action?: string }) {
+    const columns: Record<string, string> = { title: 'title', body: 'body', action: 'action' };
+    const sets: string[] = [];
+    const values: unknown[] = [id];
+    for (const [key, column] of Object.entries(columns)) {
+      if (patch[key as keyof typeof patch] === undefined) continue;
+      const value = patch[key as keyof typeof patch];
+      values.push(value === '' ? null : value);
+      sets.push(`${column} = ${values.length}`);
+    }
+    if (sets.length === 0) return { success: true };
+    const [rows] = await this.db.query(
+      `UPDATE promotions SET ${sets.join(', ')} WHERE id = $1 RETURNING id`, values);
+    if (!rows || rows.length === 0) {
+      throw new ViroException('NOT_FOUND', 'No promotion with that id.', HttpStatus.NOT_FOUND);
+    }
+    return { success: true };
+  }
+
+  async deletePromotion(id: string) {
+    const [rows] = await this.db.query(`DELETE FROM promotions WHERE id = $1 RETURNING id`, [id]);
+    if (!rows || rows.length === 0) {
+      throw new ViroException('NOT_FOUND', 'No promotion with that id.', HttpStatus.NOT_FOUND);
+    }
+    return { success: true };
+  }
+
+  /**
+   * Writes down an order somebody arranged by hand.
+   *
+   * Every position is rewritten from the list that arrived, in one statement,
+   * so a drag that lands cannot leave two promotions claiming the same place.
+   * Ids belonging to another campaign are ignored rather than moved, which
+   * stops a stale page dragging somebody else's list about.
+   */
+  async reorderPromotions(campaignId: string, ids: string[]) {
+    if (ids.length === 0) return { success: true };
+    const values = ids.map((_, i) => `(${i + 2}::uuid, ${i})`).join(',');
+    await this.db.query(
+      `UPDATE promotions p SET position = v.position
+       FROM (VALUES ${values}) AS v(id, position)
+       WHERE p.id = v.id AND p.campaign_id = $1`,
+      [campaignId, ...ids],
+    );
+    return { success: true };
+  }
+
   /** Every admin action worth being able to ask "who did that?" about. */
   private async record(kind: string, by: string, detail: Record<string, unknown>) {
     await this.db
