@@ -130,7 +130,12 @@ fun MoodScreen(
     var attempt by remember { mutableStateOf(0) }
     var broken by remember { mutableStateOf<String?>(null) }
     val blocked = remember(attempt) { riveBlockedBecause(context) }
-    val reason = broken ?: blocked
+    // Which state machine to ask for — checked against the file rather than
+    // assumed. Asking for one that is not there is not a caught error in this
+    // runtime; it is a null pointer dereference in C++ that takes the whole
+    // process with it.
+    val machine = remember(attempt, blocked) { if (blocked == null) moodStateMachine(context) else null }
+    val reason = broken ?: blocked ?: if (machine == null) NO_MACHINE else null
     // The listener is built once and outlives recompositions, so the callback
     // it holds has to be the current one rather than the one from first frame.
     val pick by rememberUpdatedState(onPick)
@@ -144,6 +149,7 @@ fun MoodScreen(
     LaunchedEffect(reason, attempt) {
         if (reason == null) {
             delay(SETTLED_MS)
+            com.viroreach.app.diagnostics.Breadcrumbs.moment("animation-ready")
             moodArtworkSurvived(context)
         }
     }
@@ -152,9 +158,10 @@ fun MoodScreen(
         if (reason == null) {
             AndroidView(
                 factory = { ctx ->
+                    com.viroreach.app.diagnostics.Breadcrumbs.moment("animation-init")
                     runCatching {
                         RiveAnimationView(ctx).apply {
-                            setRiveResource(R.raw.mood_interaction, stateMachineName = STATE_MACHINE, autoplay = true)
+                            setRiveResource(R.raw.mood_interaction, stateMachineName = machine, autoplay = true)
                             registerListener(object : RiveFileController.Listener {
                                 override fun notifyStateChanged(stateMachineName: String, stateName: String) {
                                     MomentMood.fromState(stateName)?.let { pick(it) }
@@ -169,9 +176,20 @@ fun MoodScreen(
                     }.getOrElse { e ->
                         val why = "${e.javaClass.simpleName}: ${e.message ?: "no message"}"
                         Log.w(TAG, "mood artwork would not start: $why")
+                        com.viroreach.app.diagnostics.Breadcrumbs.moment("animation-failed")
                         noteMoodReason(ctx, why)
                         broken = why
                         android.view.View(ctx)
+                    }
+                },
+                onRelease = { view ->
+                    // The renderer owns a TextureView and native objects; it
+                    // must be stopped and let go when the screen goes, not
+                    // left for whenever the view happens to be collected.
+                    com.viroreach.app.diagnostics.Breadcrumbs.moment("animation-disposed")
+                    (view as? RiveAnimationView)?.let { rive ->
+                        runCatching { rive.stop() }
+                        runCatching { rive.reset() }
                     }
                 },
                 modifier = Modifier.fillMaxSize(),
@@ -195,11 +213,17 @@ fun MoodScreen(
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
-                    "Try again",
+                    if (attempt < MAX_RETRIES) "Try again" else "Using the plain version on this phone.",
                     color = ViroColors.BlueAccent,
                     style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier
-                        .clickable {
+                        .clickable(enabled = attempt < MAX_RETRIES) {
+                            // Deliberately limited. "Try again" rebuilds the
+                            // very thing suspected of killing the process, so
+                            // it is a couple of attempts a person asked for,
+                            // never a loop. The device flag is only cleared
+                            // once the artwork has actually drawn for a while
+                            // (see above), not merely because it was retried.
                             com.viroreach.app.diagnostics.CrashReporter.forget(context, RIVE_KEY)
                             broken = null
                             attempt++
@@ -278,6 +302,45 @@ private fun riveBlockedBecause(context: Context): String? {
     }
 }
 
+/**
+ * The name of the state machine to play, or null if there is not one to play.
+ *
+ * This exists because of a crash, and the crash is worth recording. Asking
+ * RiveAnimationView for a state machine by name goes to
+ * ArtboardInstance::stateMachineNamed, which in this runtime returns a null
+ * pointer when nothing matches and hands it straight to the StateMachineInstance
+ * constructor, which dereferences it:
+ *
+ *   signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0
+ *   rive::StateMachineInstance::StateMachineInstance(...)+384
+ *   rive::ArtboardInstance::stateMachineNamed(...)+232
+ *
+ * There is no exception to catch and no way to recover: the process is gone.
+ * The only defence is never to ask for a name that is not there, so the names
+ * are read first — by index, through getStateMachineNames, which cannot fail
+ * the same way — and only a name that came back is ever used.
+ */
+private fun moodStateMachine(context: Context): String? = runCatching {
+    val bytes = context.resources.openRawResource(R.raw.mood_interaction).use { it.readBytes() }
+    val file = app.rive.runtime.kotlin.core.File(bytes)
+    try {
+        val names = file.firstArtboard.stateMachineNames
+        Log.i(TAG, "mood artwork state machines: $names")
+        // Prefer the one the app was written against; otherwise whatever the
+        // file actually has, since a re-export may well have renamed it.
+        val chosen = names.firstOrNull { it == STATE_MACHINE } ?: names.firstOrNull()
+        if (chosen == null) noteMoodReason(context, "The artwork has no state machine to play ($names).")
+        chosen
+    } finally {
+        runCatching { file.release() }
+    }
+}.getOrElse { e ->
+    val why = "Couldn't read the artwork: ${e.javaClass.simpleName}"
+    Log.w(TAG, why)
+    noteMoodReason(context, why)
+    null
+}
+
 /** Writes down why the artwork is not being shown, for the next person to read. */
 private fun noteMoodReason(context: Context, why: String) {
     com.viroreach.app.diagnostics.CrashReporter.noteReason(context.applicationContext, RIVE_KEY, why)
@@ -294,3 +357,7 @@ private const val STATE_MACHINE = "State Machine 1"
 private const val RIVE_KEY = "mood-artwork"
 /** Up, drawing and still alive this long means the artwork is fine here. */
 private const val SETTLED_MS = 4_000L
+/** How many times a person may ask for the artwork again before it rests. */
+private const val MAX_RETRIES = 2
+/** Shown when the file has nothing playable in it. */
+private const val NO_MACHINE = "The artwork has no animation this app can play."

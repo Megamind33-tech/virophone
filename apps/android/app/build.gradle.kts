@@ -44,6 +44,7 @@ android {
         // Carries the commit it was built from, so a bug report identifies the
         // exact source state rather than a name that never changes.
         versionName = "0.4.$gitCommitCount-$gitCommitAbbrev"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "API_BASE_URL", "\"https://reach.viro3.online\"")
         buildConfigField("String", "WSS_URL", "\"wss://reach.viro3.online/api/v1/signaling/ws\"")
         buildConfigField("boolean", "FORCE_TURN_RELAY", "false")
@@ -211,6 +212,11 @@ dependencies {
     // The Moments fakes simulate HTTP statuses (a vanished Moment must close
     // the room); retrofit types are otherwise internal to core:network.
     testImplementation(libs.retrofit)
+    // On-device tests. The fifty-cycle reliability check cannot run off a
+    // phone: what it measures is native memory and native teardown, which a
+    // JVM test with fakes cannot see.
     androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation("androidx.test:runner:1.5.2")
+    androidTestImplementation("androidx.test:rules:1.5.0")
     debugImplementation(libs.androidx.ui.tooling)
 }

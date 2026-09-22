@@ -89,6 +89,19 @@ fun NowScreen(
     val scope = rememberCoroutineScope()
     var clock by remember { mutableLongStateOf(repo.now()) }
     var create by rememberSaveable { mutableStateOf(false) }
+    // Starting a Moment, guarded. A second tap while the sheet is already
+    // coming up must not open a second one, and nothing may be built while a
+    // previous room is still being released — that overlap is what took the
+    // process down.
+    val gatePhase by com.viroreach.app.moments.engine.MomentSessionGate.phase.collectAsState()
+    val startMoment: () -> Unit = {
+        if (!create && com.viroreach.app.moments.engine.MomentSessionGate.idle()) {
+            com.viroreach.app.diagnostics.Breadcrumbs.moment("create-sheet-requested")
+            create = true
+        } else {
+            com.viroreach.app.diagnostics.Breadcrumbs.moment("create-sheet-ignored phase=$gatePhase")
+        }
+    }
     var manage by rememberSaveable { mutableStateOf<String?>(null) }
     var roomId by rememberSaveable { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -209,7 +222,7 @@ fun NowScreen(
                                 )
                                 if (own == null) {
                                     Spacer(Modifier.height(20.dp))
-                                    Button(onClick = { create = true }) { Text("Start a Moment") }
+                                    Button(onClick = { startMoment() }) { Text("Start a Moment") }
                                 }
                             }
                         } else {
@@ -239,7 +252,7 @@ fun NowScreen(
         // active it disappeared and there was no way to start your own.
         if (own == null) {
             ExtendedFloatingActionButton(
-                onClick = { create = true },
+                onClick = { startMoment() },
                 containerColor = ViroColors.BlueAccent,
                 contentColor = ViroColors.NavyBackground,
                 modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
@@ -250,9 +263,14 @@ fun NowScreen(
       }
 
         if (create) {
-            com.viroreach.app.diagnostics.Breadcrumbs.moment("create-sheet")
             val ctx = androidx.compose.ui.platform.LocalContext.current
+            // Inside the effect, not the composable body. In the body it ran
+            // on every recomposition, which is why one tap left three
+            // "create-sheet" crumbs in the report and made it look as though
+            // the screen was being opened three times. It was not; the trail
+            // was lying about the thing it existed to explain.
             DisposableEffect(Unit) {
+                com.viroreach.app.diagnostics.Breadcrumbs.moment("create-sheet-visible")
                 com.viroreach.app.diagnostics.CrashReporter.enter(ctx, "starting a Moment")
                 onDispose { com.viroreach.app.diagnostics.CrashReporter.left(ctx) }
             }
@@ -522,7 +540,10 @@ fun MomentRoomScreen(
     // the audio as soon as Viro leaves the screen.
     DisposableEffect(room) {
         com.viroreach.app.moments.engine.MomentPlayerHolder.attach(exoPlayer.exo)
-        onDispose { com.viroreach.app.moments.engine.MomentPlayerHolder.detach(appContext) }
+        // Detaching belongs to the ordered teardown below, not here: it has to
+        // happen before the player is released, and two independent effects
+        // disposing in whatever order Compose chooses cannot promise that.
+        onDispose {}
     }
     val sharing = remember(room) { session.openMomentMedia(appContext, room, playback, scope) }
     LaunchedEffect(room) {
@@ -543,8 +564,14 @@ fun MomentRoomScreen(
         onDispose { com.viroreach.app.diagnostics.CrashReporter.left(appContext) }
     }
     LaunchedEffect(room) {
+        // Nothing is built until the previous room has genuinely finished
+        // being taken apart.
+        com.viroreach.app.moments.engine.MomentSessionGate.awaitReleased()
+        com.viroreach.app.moments.engine.MomentSessionGate.entering(room.momentId)
         com.viroreach.app.diagnostics.Breadcrumbs.moment("room-enter")
+        com.viroreach.app.diagnostics.Breadcrumbs.moment("room-connect-start")
         if (room.enter().isSuccess) live.start()
+        com.viroreach.app.moments.engine.MomentSessionGate.active()
         com.viroreach.app.diagnostics.Breadcrumbs.moment("room-entered")
         var tick = 0
         while (true) {
@@ -581,13 +608,30 @@ fun MomentRoomScreen(
     }
     DisposableEffect(room) {
         onDispose {
-            // The screen's own scope ends with it; releasing the camera and
-            // microphone must not depend on that, so it runs on its own.
-            @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
-            kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.Main) { live.stop() }
-            playback.release()
-            exoPlayer.release()
-            scope.launch { room.leave() }
+            // Leaving is handed to the gate rather than to GlobalScope, and in
+            // a fixed order. It used to be fire-and-forget, which meant the
+            // next room could begin building its own PeerConnectionFactory,
+            // EglBase and microphone while these were still being dismantled
+            // on native threads. Two of those overlapping does not fail in
+            // Kotlin — the process disappears underneath it.
+            //
+            // The screen's own scope dies with the screen, so none of this may
+            // depend on it.
+            com.viroreach.app.moments.engine.MomentSessionGate.leaving {
+                // The shade's controls stop pointing at this player before it
+                // is released; a MediaSession left holding a released player
+                // is a native crash of its own.
+                com.viroreach.app.moments.engine.MomentPlayerHolder.detach(appContext)
+                com.viroreach.app.diagnostics.Breadcrumbs.moment("mic-stop-start")
+                live.stop()
+                com.viroreach.app.diagnostics.Breadcrumbs.moment("mic-stopped")
+                com.viroreach.app.diagnostics.Breadcrumbs.moment("room-disconnect-start")
+                runCatching { playback.release() }
+                runCatching { exoPlayer.release() }
+                com.viroreach.app.diagnostics.Breadcrumbs.moment("room-disconnected")
+                com.viroreach.app.diagnostics.Breadcrumbs.moment("room-release-start")
+                runCatching { room.leave() }
+            }
         }
     }
 
