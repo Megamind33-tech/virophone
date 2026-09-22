@@ -88,18 +88,33 @@ fun NowScreen(
     val profile by session.profileRepository.profile.collectAsState(initial = UserProfile())
     val scope = rememberCoroutineScope()
     var clock by remember { mutableLongStateOf(repo.now()) }
-    var create by rememberSaveable { mutableStateOf(false) }
+    // Deliberately not rememberSaveable. It was, and that is a bug with a
+    // clear shape: leaving Now saved "the sheet is open" and coming back
+    // restored it, so the Moment sheet reopened itself with nobody touching
+    // it — a second sheet lifecycle that no tap asked for, on top of whatever
+    // the first one had already built. Leaving Now closes the sheet.
+    var create by remember { mutableStateOf(false) }
     // Starting a Moment, guarded. A second tap while the sheet is already
     // coming up must not open a second one, and nothing may be built while a
     // previous room is still being released — that overlap is what took the
     // process down.
     val gatePhase by com.viroreach.app.moments.engine.MomentSessionGate.phase.collectAsState()
+    var sheetInstance by remember { mutableIntStateOf(0) }
     val startMoment: () -> Unit = {
         if (!create && com.viroreach.app.moments.engine.MomentSessionGate.idle()) {
-            com.viroreach.app.diagnostics.Breadcrumbs.moment("create-sheet-requested")
+            sheetInstance += 1
+            com.viroreach.app.diagnostics.Breadcrumbs.moment(
+                "create-sheet-requested instance=$sheetInstance route=Now state=CLOSED",
+            )
             create = true
         } else {
-            com.viroreach.app.diagnostics.Breadcrumbs.moment("create-sheet-ignored phase=$gatePhase")
+            // Rejections are recorded as loudly as acceptances. A tap that
+            // does nothing is exactly the thing that is impossible to explain
+            // afterwards from a trail that only mentions what worked.
+            com.viroreach.app.diagnostics.Breadcrumbs.moment(
+                "create-sheet-rejected reason=" +
+                    (if (create) "already-open" else "releasing") + " phase=$gatePhase",
+            )
         }
     }
     var manage by rememberSaveable { mutableStateOf<String?>(null) }
@@ -270,9 +285,16 @@ fun NowScreen(
             // the screen was being opened three times. It was not; the trail
             // was lying about the thing it existed to explain.
             DisposableEffect(Unit) {
-                com.viroreach.app.diagnostics.Breadcrumbs.moment("create-sheet-visible")
+                com.viroreach.app.diagnostics.Breadcrumbs.moment(
+                    "create-sheet-visible instance=$sheetInstance state=VISIBLE",
+                )
                 com.viroreach.app.diagnostics.CrashReporter.enter(ctx, "starting a Moment")
-                onDispose { com.viroreach.app.diagnostics.CrashReporter.left(ctx) }
+                onDispose {
+                    com.viroreach.app.diagnostics.Breadcrumbs.moment(
+                        "create-sheet-disposed instance=$sheetInstance",
+                    )
+                    com.viroreach.app.diagnostics.CrashReporter.left(ctx)
+                }
             }
         }
         if (create) CreateMomentSheet(onDismiss = { create = false }, onStart = { body ->

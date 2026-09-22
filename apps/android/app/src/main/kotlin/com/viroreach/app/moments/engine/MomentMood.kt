@@ -176,72 +176,64 @@ fun MoodScreen(
 
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         if (reason == null) {
-            // The card, and only the card: its own proportions, so nothing is
-            // stretched, and the app's background everywhere around it.
-            BoxWithConstraints(
+            // Back to filling the screen and centred, which is how it
+            // looked before an attempt to crop the card out of the artboard
+            // pushed it off to one side. A TextureView does not reliably obey
+            // a Compose clip, so the crop did not crop — it just moved the
+            // artwork. The artboard's own margins stay visible; removing them
+            // needs the .riv re-exported, not more geometry here.
+            AndroidView(
+                factory = { ctx ->
+                    com.viroreach.app.diagnostics.Breadcrumbs.moment("animation-init")
+                    runCatching {
+                        RiveAnimationView(ctx).also { view = it }.apply {
+                            setRiveResource(
+                                R.raw.mood_interaction,
+                                animationName = animation,
+                                autoplay = true,
+                                fit = app.rive.runtime.kotlin.core.Fit.COVER,
+                            )
+                        }
+                    }.getOrElse { e ->
+                        val why = e.javaClass.simpleName + ": " + (e.message ?: "no message")
+                        Log.w(TAG, "mood artwork would not start: " + why)
+                        com.viroreach.app.diagnostics.Breadcrumbs.moment("animation-failed")
+                        noteMoodReason(ctx, why)
+                        broken = why
+                        android.view.View(ctx)
+                    }
+                },
+                onRelease = { released ->
+                    // The renderer owns a TextureView and native objects; it
+                    // is stopped and let go when the screen goes rather than
+                    // whenever the view happens to be collected.
+                    com.viroreach.app.diagnostics.Breadcrumbs.moment("animation-disposed")
+                    (released as? RiveAnimationView)?.let { rive ->
+                        runCatching { rive.stop() }
+                        runCatching { rive.reset() }
+                    }
+                    view = null
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+            // Above the artwork, because RiveAnimationView overrides
+            // onTouchEvent and swallows the press before Compose can see it.
+            // That is why tapping a face did nothing whatsoever, and it is the
+            // one thing that needed changing.
+            Box(
                 Modifier
-                    .fillMaxWidth(0.92f)
-                    .aspectRatio(CARD_ASPECT)
-                    .clip(RoundedCornerShape(28.dp)),
-            ) {
-                // The artboard, sized so its card lands exactly on this box
-                // and everything else hangs off the edges to be clipped.
-                val artW = maxWidth / CARD_W
-                val artH = maxHeight / CARD_H
-                AndroidView(
-                    factory = { ctx ->
-                        com.viroreach.app.diagnostics.Breadcrumbs.moment("animation-init")
-                        runCatching {
-                            RiveAnimationView(ctx).also { view = it }.apply {
-                                setRiveResource(
-                                    R.raw.mood_interaction,
-                                    animationName = animation,
-                                    autoplay = true,
-                                    fit = app.rive.runtime.kotlin.core.Fit.FILL,
-                                )
+                    .matchParentSize()
+                    .pointerInput(animation) {
+                        detectTapGestures { tap ->
+                            val tapped = moodAt(tap.x, tap.y, size.width, size.height)
+                            if (tapped != null) {
+                                com.viroreach.app.diagnostics.Breadcrumbs.moment("mood-picked " + tapped.key)
+                                runCatching { view?.play(tapped.animation, loop = Loop.ONESHOT) }
+                                pick(tapped)
                             }
-                        }.getOrElse { e ->
-                            val why = e.javaClass.simpleName + ": " + (e.message ?: "no message")
-                            Log.w(TAG, "mood artwork would not start: " + why)
-                            com.viroreach.app.diagnostics.Breadcrumbs.moment("animation-failed")
-                            noteMoodReason(ctx, why)
-                            broken = why
-                            android.view.View(ctx)
                         }
                     },
-                    onRelease = { released ->
-                        // The renderer owns a TextureView and native objects;
-                        // it is stopped and let go when the screen goes rather
-                        // than whenever the view happens to be collected.
-                        com.viroreach.app.diagnostics.Breadcrumbs.moment("animation-disposed")
-                        (released as? RiveAnimationView)?.let { rive ->
-                            runCatching { rive.stop() }
-                            runCatching { rive.reset() }
-                        }
-                        view = null
-                    },
-                    modifier = Modifier
-                        .size(artW, artH)
-                        .offset(x = -(artW * CARD_LEFT), y = -(artH * CARD_TOP)),
-                )
-                // Above the artwork, because RiveAnimationView overrides
-                // onTouchEvent and swallows the press before Compose can see
-                // it. That is why tapping a face did nothing whatsoever.
-                Box(
-                    Modifier
-                        .matchParentSize()
-                        .pointerInput(animation) {
-                            detectTapGestures { tap ->
-                                val tapped = moodAt(tap.x, tap.y, size.width, size.height)
-                                if (tapped != null) {
-                                    com.viroreach.app.diagnostics.Breadcrumbs.moment("mood-picked " + tapped.key)
-                                    runCatching { view?.play(tapped.animation, loop = Loop.ONESHOT) }
-                                    pick(tapped)
-                                }
-                            }
-                        },
-                )
-            }
+            )
         } else {
             // Only when the artwork cannot run at all. Deliberately plain: it
             // is a way through, not a second design — but it says why it is
@@ -403,21 +395,22 @@ private fun moodAnimation(context: Context): String? = runCatching {
  * press through its state machine; that state machine cannot be instantiated,
  * so the geometry is done here instead.
  *
- * The numbers are measured, not guessed. The file was rendered in Rive's web
- * runtime and read off: the card occupies [CARD_LEFT]..[CARD_RIGHT] across the
- * artboard and [CARD_TOP]..[CARD_BOTTOM] down it, and the four button centres
- * came out at 0.339, 0.447, 0.553 and 0.665 of the artboard's width — an even
- * split of the band between [ROW_LEFT] and [ROW_RIGHT].
+ * The numbers are measured, not guessed: rendering the file in Rive's web
+ * runtime put the four button centres at 0.339, 0.447, 0.553 and 0.665 across
+ * the artboard, an even split of the band between [ROW_LEFT] and [ROW_RIGHT].
  *
- * [x] and [y] arrive in the cropped card's own coordinates, so they are put
- * back into the artboard's before anything is decided. A press outside the
- * button band chooses nothing rather than the nearest face: the big face above
- * must not quietly claim a mood nobody picked.
+ * A press outside that band chooses nothing rather than the nearest face — the
+ * big face above must not quietly claim a mood nobody picked.
  */
 private fun moodAt(x: Float, y: Float, width: Int, height: Int): MomentMood? {
     if (width <= 0 || height <= 0) return null
-    val u = CARD_LEFT + (x / width) * CARD_W
-    val v = CARD_TOP + (y / height) * CARD_H
+    // COVER scales the artboard to fill and centres the overflow, so the same
+    // sum is repeated here to know where the artwork actually sits.
+    val scale = maxOf(width / ART_W, height / ART_H)
+    val drawnW = ART_W * scale
+    val drawnH = ART_H * scale
+    val u = (x - (width - drawnW) / 2f) / drawnW
+    val v = (y - (height - drawnH) / 2f) / drawnH
     if (v < ROW_TOP || v > ROW_BOTTOM || u < ROW_LEFT || u > ROW_RIGHT) return null
     val across = (u - ROW_LEFT) / (ROW_RIGHT - ROW_LEFT)
     val order = listOf(MomentMood.HAPPY, MomentMood.SAD, MomentMood.ANGRY, MomentMood.CRAZY)
@@ -442,22 +435,9 @@ private const val SETTLED_MS = 4_000L
 private const val MAX_RETRIES = 2
 /** Shown when the file has nothing playable in it. */
 private const val NO_ANIMATION = "The artwork has no animation this app can play."
-/**
- * Where the card sits on the artboard, as fractions of it.
- *
- * The artboard is 1741x1751 and the card is drawn inside it with wide grey
- * margins, which is why the artwork looked like a small picture: contained in
- * a tall screen it was letterboxed to the width and the card kept only the
- * middle. These crop it back out.
- */
-private const val CARD_LEFT = 0.233f
-private const val CARD_RIGHT = 0.767f
-private const val CARD_TOP = 0.129f
-private const val CARD_BOTTOM = 0.860f
-private const val CARD_W = CARD_RIGHT - CARD_LEFT
-private const val CARD_H = CARD_BOTTOM - CARD_TOP
-/** The card's own shape, so cropping it never stretches it. */
-private const val CARD_ASPECT = (CARD_W * 1741f) / (CARD_H * 1751f)
+/** The artboard's own size, which its buttons are positioned against. */
+private const val ART_W = 1741f
+private const val ART_H = 1751f
 /** The band the four drawn buttons sit in, as fractions of the artboard. */
 private const val ROW_LEFT = 0.28f
 private const val ROW_RIGHT = 0.72f
