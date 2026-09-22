@@ -30,8 +30,10 @@ const MAX_MEDIA_PER_MOMENT = 20;
 
 export const MOMENT_TYPES = ['FREE', 'BREAK', 'LISTENING', 'WATCHING', 'GAMING', 'WORKING', 'CUSTOM'];
 export const MOMENT_AUDIENCES = ['CONNECTIONS', 'CONTACTS'];
+/** How the host is, in the four an artwork can draw and a person can answer. */
+export const MOMENT_MOODS = ['HAPPY', 'SAD', 'ANGRY', 'CRAZY'];
 export const MOMENT_REACTIONS = ['❤️', '😂', '🔥', '👏', '👍'];
-export interface CreateMoment { type: string; text?: string; visibility: string; durationMinutes: number; intent?: MomentIntent; invitationText?: string }
+export interface CreateMoment { type: string; text?: string; visibility: string; durationMinutes: number; intent?: MomentIntent; invitationText?: string; mood?: string }
 /** One sealed copy of a room message, addressed to one device. */
 export interface MomentEnvelope { deviceId: string; ciphertext: string; type?: number }
 /** A room message as the sender offers it: readable text, or sealed copies. */
@@ -77,7 +79,29 @@ export class MomentsService {
       (SELECT json_agg(t) FROM (SELECT mc.emoji, count(*)::int AS count FROM moment_cheers mc
         WHERE mc.moment_id = m.id GROUP BY mc.emoji
         ORDER BY count(*) DESC, MIN(mc.created_at), mc.emoji) t) AS cheers,
-      (SELECT mc.emoji FROM moment_cheers mc WHERE mc.moment_id = m.id AND mc.user_id = $1) AS my_cheer
+      (SELECT mc.emoji FROM moment_cheers mc WHERE mc.moment_id = m.id AND mc.user_id = $1) AS my_cheer,
+      -- Who is already inside, by name and face, so a card can show people
+      -- rather than a number. Capped at three: this is "who is here", not a
+      -- guest list, and a room with twenty people in it still only needs to
+      -- show that it is busy.
+      --
+      -- Each face is subject to that person's own photo setting, the same rule
+      -- the host's avatar above follows. Somebody who has restricted their
+      -- photo does not lose that because they walked into a room.
+      (SELECT json_agg(h) FROM (
+        SELECT pp.display_name,
+          CASE WHEN pp.photo_visibility = 'EVERYONE' OR
+            (pp.photo_visibility = 'CONTACTS' AND (EXISTS (SELECT 1 FROM contact_matches c
+                WHERE c.user_id = $1 AND c.matched_user_id = mp2.user_id AND c.expires_at > now())
+              OR EXISTS (SELECT 1 FROM viro_connections c WHERE c.status = 'ACCEPTED' AND
+                ((c.requester_user_id = $1 AND c.recipient_user_id = mp2.user_id) OR
+                 (c.recipient_user_id = $1 AND c.requester_user_id = mp2.user_id)))))
+          THEN pp.avatar_url ELSE NULL END AS avatar_url
+        FROM moment_participants mp2
+        LEFT JOIN profiles pp ON pp.user_id = mp2.user_id
+        WHERE mp2.moment_id = m.id AND mp2.user_id <> $1
+        ORDER BY mp2.joined_at LIMIT 3
+      ) h) AS here
       FROM moments m LEFT JOIN profiles p ON p.user_id = m.creator_user_id
       WHERE m.status = 'ACTIVE' AND m.expires_at > now() AND ${VISIBLE}
       ORDER BY m.created_at DESC`, [userId]);
@@ -95,10 +119,10 @@ export class MomentsService {
     await this.sweep();
     let row: any;
     try {
-      [row] = await this.db.query(`INSERT INTO moments (creator_user_id,type,text,visibility,intent,invitation_text,expires_at)
-        VALUES ($1,$2,$3,$4,$6,$7,now() + $5 * interval '1 minute') RETURNING *`,
+      [row] = await this.db.query(`INSERT INTO moments (creator_user_id,type,text,visibility,intent,invitation_text,mood,expires_at)
+        VALUES ($1,$2,$3,$4,$6,$7,$8,now() + $5 * interval '1 minute') RETURNING *`,
       [userId, body.type, body.text?.trim() || null, body.visibility, body.durationMinutes, body.intent ?? null,
-        body.invitationText?.trim() || null]);
+        body.invitationText?.trim() || null, body.mood ?? null]);
     } catch (e) {
       if ((e as { code?: string }).code === '23505') throw new ConflictException('You already have an active Moment.');
       throw e;
@@ -1179,6 +1203,14 @@ export class MomentsService {
       // What they said when they opened it, if they said anything. Never
       // invented: the app says something plain when this is null.
       invitationText: r.invitation_text ?? null,
+      // How they are. Null is an answer too, and is not filled in for them.
+      mood: r.mood ?? null,
+      // Names, never ids, and only the handful the card can show.
+      here: ((r.here ?? []) as { display_name: string | null; avatar_url: string | null }[])
+        .map((h) => ({
+          displayName: (h.display_name || '').trim() || 'Viro user',
+          avatarUrl: publicAvatarUrl(h.avatar_url),
+        })),
       // Ranked highest first by the query; myReaction is what this viewer
       // chose, so the button can show as already pressed.
       reactions: (r.cheers ?? []) as { emoji: string; count: number }[],

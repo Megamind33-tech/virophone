@@ -1185,6 +1185,20 @@ private fun FeaturedMoment(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                com.viroreach.app.moments.engine.MomentMood.of(m.mood)?.let { mood ->
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            m.displayName.substringBefore(' ') + " is ",
+                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.72f),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        com.viroreach.app.moments.engine.MoodTag(
+                            mood,
+                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.88f),
+                        )
+                    }
+                }
                 WhoIsHere(m, androidx.compose.ui.graphics.Color.White.copy(alpha = 0.72f))
                 Spacer(Modifier.height(14.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1249,6 +1263,11 @@ private fun SecondaryMoment(m: MomentDto, clock: Long, onOpen: () -> Unit) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                com.viroreach.app.moments.engine.MomentMood.of(m.mood)?.let { mood ->
+                    Spacer(Modifier.height(3.dp))
+                    com.viroreach.app.moments.engine.MoodTag(mood)
+                }
+                WhoIsHere(m, ViroColors.textMuted)
             }
         }
     }
@@ -1287,25 +1306,47 @@ private fun InvitationRow(moment: MomentDto, onOpen: () -> Unit, onDismiss: () -
 }
 
 /**
- * Who is already inside.
+ * Who is already inside, as people rather than a number.
  *
- * The host is always there, and their face is the one the card already has —
- * so this is true without asking the server for a guest list. Anyone else is a
- * count, because inventing names or faces for them would be worse than
- * counting them.
+ * Faces where the server sent them — it only sends a face when that person's
+ * own photo setting allows this viewer to see it — and a name beside them. A
+ * room with more people than the card can show says how many more, because at
+ * that point the number is the useful part.
  */
 @Composable
 private fun WhoIsHere(m: MomentDto, color: androidx.compose.ui.graphics.Color) {
-    val others = (m.participantCount ?: 0) - 1
-    if (others > 0) {
-        Spacer(Modifier.height(4.dp))
-        Text(
-            m.displayName.substringBefore(' ') + " + " + others + (if (others == 1) " other is here" else " others are here"),
-            color = color,
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+    val here = m.here
+    val total = (m.participantCount ?: 0) - 1
+    if (total > 0) {
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // Overlapped slightly, the way people stand together.
+            here.forEachIndexed { index, person ->
+                Box(Modifier.padding(start = if (index == 0) 0.dp else 0.dp)) {
+                    ViroAvatar(
+                        size = ViroAvatarSize.Small,
+                        imageUrl = person.avatarUrl,
+                        displayName = person.displayName,
+                    )
+                }
+                Spacer(Modifier.width(4.dp))
+            }
+            val names = here.map { it.displayName.substringBefore(' ') }
+            val unseen = total - here.size
+            val said = when {
+                names.isEmpty() -> total.toString() + (if (total == 1) " person is here" else " people are here")
+                unseen > 0 -> names.joinToString(", ") + " + " + unseen + " are here"
+                names.size == 1 -> names[0] + " is here"
+                else -> names.dropLast(1).joinToString(", ") + " and " + names.last() + " are here"
+            }
+            Text(
+                said,
+                color = color,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -1424,6 +1465,7 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
     var audience by rememberSaveable { mutableStateOf("CONNECTIONS") }
     var text by rememberSaveable { mutableStateOf("") }
     var invitation by rememberSaveable { mutableStateOf("") }
+    var moodKey by rememberSaveable { mutableStateOf<String?>(null) }
     ModalBottomSheet(onDismissRequest = { if (!busy) onDismiss() }, containerColor = ViroColors.surface,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         LazyColumn(Modifier.fillMaxWidth().imePadding(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1471,6 +1513,15 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
                 // What they say is the reason anyone walks in, so it is asked
                 // for here rather than buried. Optional: somebody who says
                 // nothing gets a plain line, not a sentence invented for them.
+                // How they are, before what they will say. Optional, and the
+                // artwork answers back as it is chosen.
+                Text("How are you today?", color = ViroColors.textPrimary)
+                Spacer(Modifier.height(8.dp))
+                com.viroreach.app.moments.engine.MoodPicker(
+                    selected = com.viroreach.app.moments.engine.MomentMood.of(moodKey),
+                    onPick = { moodKey = it?.key },
+                )
+                Spacer(Modifier.height(20.dp))
                 Text("Say something to bring them in", color = ViroColors.textPrimary)
                 OutlinedTextField(
                     value = invitation,
@@ -1511,11 +1562,13 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
                                 CreateMomentBody(
                                     "CUSTOM", text.trim(), audience, duration, intent = "BE",
                                     invitationText = invitation.trim().ifBlank { null },
+                                    mood = moodKey,
                                 )
                             } else {
                                 CreateMomentBody(
                                     intent?.legacyType ?: "FREE", null, audience, duration, intent = intentKey,
                                     invitationText = invitation.trim().ifBlank { null },
+                                    mood = moodKey,
                                 )
                             },
                         )

@@ -74,11 +74,23 @@ fun MomentScene(
      * something going on in it does not look the same as an empty one.
      */
     energy: Float = 0f,
+    /**
+     * How the host said they are. The room leans a little towards it — enough
+     * that walking in tells you something before anyone speaks, not enough to
+     * stop a kitchen looking like a kitchen.
+     */
+    moodTint: Color? = null,
 ) {
     val look = sceneLook(scene)
     val lift by animateFloatAsState(energy.coerceIn(0f, 1f), tween(1200), label = "sceneEnergy")
     val base by animateColorAsState(look.base, tween(900), label = "sceneBase")
-    val glow by animateColorAsState(look.glow, tween(900), label = "sceneGlow")
+    val glow by animateColorAsState(
+        // A quarter of the way, so the mood colours the light rather than
+        // replacing it.
+        if (moodTint == null) look.glow else blend(look.glow, moodTint, 0.25f),
+        tween(900),
+        label = "sceneGlow",
+    )
 
     // Someone who has turned animations off on their phone gets a still room.
     val context = LocalContext.current
@@ -161,4 +173,12 @@ val sceneNames: List<Pair<String, String>> = listOf(
     "CELEBRATION" to "Gold",
     "OUTDOORS" to "Outdoors",
     "NEUTRAL" to "Viro",
+)
+
+/** Mixes two colours, [amount] of the way from [from] to [to]. */
+private fun blend(from: Color, to: Color, amount: Float): Color = Color(
+    red = from.red + (to.red - from.red) * amount,
+    green = from.green + (to.green - from.green) * amount,
+    blue = from.blue + (to.blue - from.blue) * amount,
+    alpha = from.alpha,
 )

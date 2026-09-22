@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto';
 import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsNumberString, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { MOMENT_AUDIENCES, MOMENT_REACTIONS, MOMENT_TYPES, MomentsService } from './moments.service';
+import { MOMENT_AUDIENCES, MOMENT_MOODS, MOMENT_REACTIONS, MOMENT_TYPES, MomentsService } from './moments.service';
 import { MOMENT_INTENTS, MOMENT_MODULES, MOMENT_SCENES, RoomChange } from './room-engine';
 import { PLAYBACK_OPS, PlaybackOp } from './playback';
 import { CHOICE_OPS, ChoiceOp, TIMER_OPS, TimerOp, TOUCH_KINDS, TouchKind } from './room-tools';
@@ -18,6 +18,8 @@ class CreateMomentDto {
   @IsInt() @Min(1) @Max(120) durationMinutes!: number;
   /** One line in the host's own words: "Come keep me company." Optional. */
   @IsOptional() @IsString() @MaxLength(80) invitationText?: string;
+  /** How the host is right now. Optional; a Moment need not declare one. */
+  @IsOptional() @IsIn(MOMENT_MOODS) mood?: string;
   /** What people are coming together to do; shapes the room it opens into. */
   @IsOptional() @IsIn(MOMENT_INTENTS as unknown as string[]) intent?: (typeof MOMENT_INTENTS)[number];
 }

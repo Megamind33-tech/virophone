@@ -223,7 +223,7 @@ fun MomentRoomEngine(
     val energy = if (playing?.status == "PLAYING") 1f else 0f
 
     Box(Modifier.fillMaxSize()) {
-        MomentScene(scene, energy = energy)
+        MomentScene(scene, energy = energy, moodTint = MomentMood.of(moment?.mood)?.tint)
 
         Column(Modifier.fillMaxSize().safeDrawingPadding()) {
             RoomHeader(

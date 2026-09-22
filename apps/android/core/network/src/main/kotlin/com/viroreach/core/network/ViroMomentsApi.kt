@@ -22,7 +22,20 @@ data class MomentDto(
     val invitationText: String? = null,
     /** Why people came together — shapes the room. Derived for Moments older than intents. */
     val intent: String? = null,
+    /**
+     * How the host is: HAPPY, SAD, ANGRY, CRAZY, or null if they did not say.
+     * Cooking while happy and cooking while flat are different rooms to walk
+     * into, and this is how somebody knows which before they do.
+     */
+    val mood: String? = null,
+    /**
+     * Who is already inside, up to three, excluding you. A face is present
+     * only where that person's own photo setting allows this viewer to see it.
+     */
+    val here: List<MomentPersonDto> = emptyList(),
 )
+/** Somebody in a Moment, as a card shows them: a name and maybe a face. */
+data class MomentPersonDto(val displayName: String, val avatarUrl: String? = null)
 data class MomentCheerDto(val emoji: String, val count: Int)
 data class MomentsNowDto(val serverTime: String, val moments: List<MomentDto>)
 data class CreateMomentBody(
@@ -34,6 +47,8 @@ data class CreateMomentBody(
     val intent: String? = null,
     /** One line in the host's own words. Optional, and never written for them. */
     val invitationText: String? = null,
+    /** How the host is: HAPPY, SAD, ANGRY, CRAZY, or null if they did not say. */
+    val mood: String? = null,
 )
 data class ExtendMomentBody(val minutes: Int)
 

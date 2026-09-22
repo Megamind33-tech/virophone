@@ -177,6 +177,11 @@ dependencies {
     // Player controls in the notification shade, so a Moment can keep playing
     // while Viro is off screen.
     implementation("androidx.media3:media3-session:1.4.1")
+
+    // The mood a Moment opens with, drawn by Rive. Pinned to 9.x on purpose:
+    // 10 and later require Kotlin 2 and a newer Compose, and this app is
+    // deliberately on compiler 1.5.8.
+    implementation("app.rive:rive-android:9.6.5")
     // Chat lock and hidden chats.
     implementation("androidx.biometric:biometric:1.1.0")
 
