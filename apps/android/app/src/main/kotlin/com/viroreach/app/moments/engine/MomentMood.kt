@@ -126,8 +126,11 @@ fun MoodScreen(
     onPick: (MomentMood?) -> Unit,
 ) {
     val context = LocalContext.current
-    var broken by remember { mutableStateOf(false) }
-    val trusted = remember { riveTrusted(context) }
+    // Bumping this re-runs the check, which is what "Try again" does.
+    var attempt by remember { mutableStateOf(0) }
+    var broken by remember { mutableStateOf<String?>(null) }
+    val blocked = remember(attempt) { riveBlockedBecause(context) }
+    val reason = broken ?: blocked
     // The listener is built once and outlives recompositions, so the callback
     // it holds has to be the current one rather than the one from first frame.
     val pick by rememberUpdatedState(onPick)
@@ -138,15 +141,15 @@ fun MoodScreen(
     // The wait is the whole point. Clearing it the moment the view is built
     // would clear it before the dangerous part — loading the file, making the
     // surface, drawing the first frames — has had time to happen.
-    LaunchedEffect(trusted) {
-        if (trusted) {
+    LaunchedEffect(reason, attempt) {
+        if (reason == null) {
             delay(SETTLED_MS)
             moodArtworkSurvived(context)
         }
     }
 
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        if (trusted && !broken) {
+        if (reason == null) {
             AndroidView(
                 factory = { ctx ->
                     runCatching {
@@ -163,9 +166,11 @@ fun MoodScreen(
                                 override fun notifyAdvance(elapsed: Float) {}
                             })
                         }
-                    }.getOrElse {
-                        Log.w(TAG, "mood artwork would not start: ${it.javaClass.simpleName}")
-                        broken = true
+                    }.getOrElse { e ->
+                        val why = "${e.javaClass.simpleName}: ${e.message ?: "no message"}"
+                        Log.w(TAG, "mood artwork would not start: $why")
+                        noteMoodReason(ctx, why)
+                        broken = why
                         android.view.View(ctx)
                     }
                 },
@@ -173,8 +178,35 @@ fun MoodScreen(
             )
         } else {
             // Only when the artwork cannot run at all. Deliberately plain: it
-            // is a way through, not a second design.
-            PlainMoodChoices(selected, onPick)
+            // is a way through, not a second design — but it says why it is
+            // here and offers the way back, because silently looking cheaper
+            // than intended is how this went unnoticed for a whole build.
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                PlainMoodChoices(selected, onPick)
+                Spacer(Modifier.padding(6.dp))
+                Text(
+                    "The animated face didn't load on this phone.",
+                    color = ViroColors.textMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    reason,
+                    color = ViroColors.textMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "Try again",
+                    color = ViroColors.BlueAccent,
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier
+                        .clickable {
+                            com.viroreach.app.diagnostics.CrashReporter.forget(context, RIVE_KEY)
+                            broken = null
+                            attempt++
+                        }
+                        .padding(12.dp),
+                )
+            }
         }
     }
 }
@@ -223,21 +255,32 @@ private fun PlainMoodChoices(selected: MomentMood?, onPick: (MomentMood?) -> Uni
  * screen has survived — a note still there means the last attempt did not, and
  * this phone stops trying.
  */
-private fun riveTrusted(context: Context): Boolean {
+private fun riveBlockedBecause(context: Context): String? {
     val app = context.applicationContext
     if (com.viroreach.app.diagnostics.CrashReporter.isUnsafe(app, RIVE_KEY)) {
-        Log.w(TAG, "mood artwork disabled on this phone after a previous crash")
-        return false
+        val why = com.viroreach.app.diagnostics.CrashReporter.reason(app, RIVE_KEY)
+            ?: "It closed the app last time it was opened."
+        Log.w(TAG, "mood artwork disabled on this phone: $why")
+        return why
     }
     return runCatching {
         com.viroreach.app.diagnostics.CrashReporter.attempting(app, RIVE_KEY)
         Rive.init(app)
-        true
-    }.getOrElse {
-        Log.w(TAG, "mood artwork unavailable on this device: ${it.javaClass.simpleName}")
+        null
+    }.getOrElse { e ->
+        val why = "${e.javaClass.simpleName}: ${e.message ?: "no message"}"
+        Log.w(TAG, "mood artwork unavailable on this device: $why")
+        // A caught failure is not a crash, so the guard is stood down; only
+        // the explanation is kept.
         com.viroreach.app.diagnostics.CrashReporter.survived(app, RIVE_KEY)
-        false
+        noteMoodReason(app, why)
+        why
     }
+}
+
+/** Writes down why the artwork is not being shown, for the next person to read. */
+private fun noteMoodReason(context: Context, why: String) {
+    com.viroreach.app.diagnostics.CrashReporter.noteReason(context.applicationContext, RIVE_KEY, why)
 }
 
 /** The screen came up and stayed up: the attempt is called good. */

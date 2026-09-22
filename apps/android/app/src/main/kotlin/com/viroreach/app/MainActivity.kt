@@ -68,6 +68,19 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    /**
+     * Off screen: whatever step Viro was inside no longer counts as unfinished.
+     *
+     * Android reclaims backgrounded apps to get memory back, which on a phone
+     * with little of it is normal housekeeping. Treating that as a crash
+     * produced reports blaming whichever screen was open at the time, for a
+     * death that never happened.
+     */
+    override fun onStop() {
+        super.onStop()
+        com.viroreach.app.diagnostics.CrashReporter.backgrounded(this)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)

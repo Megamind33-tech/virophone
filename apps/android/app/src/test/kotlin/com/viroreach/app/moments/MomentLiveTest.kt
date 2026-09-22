@@ -176,7 +176,9 @@ class MomentLiveTest {
         assertFalse(policy.observe(PresenceQuality.UNKNOWN, cameraOn = true, now = 30_000))
     }
 
-    private object Unused : ViroMomentsApi {
+    // Shared with the other Moments tests rather than copied into each: it is
+    // twenty-five methods of "not this one".
+    internal object Unused : ViroMomentsApi {
         override suspend fun now() = error("unused")
         override suspend fun invitations() = error("unused")
         override suspend fun declineInvitation(id: String) = error("unused")

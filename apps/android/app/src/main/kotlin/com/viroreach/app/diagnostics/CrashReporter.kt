@@ -102,6 +102,44 @@ object CrashReporter {
     fun isUnsafe(context: Context, key: String): Boolean =
         runCatching { File(context.applicationContext.filesDir, "try_$key").exists() }.getOrDefault(false)
 
+    /**
+     * Viro is no longer on screen, so any step it is "inside" stops counting.
+     *
+     * Android reclaims backgrounded apps whenever it wants the memory, and on
+     * a phone with little of it that is routine rather than a fault. Without
+     * this, every such reclaim left a note behind and came back next launch
+     * claiming the app had died inside whatever screen happened to be open —
+     * a crash report for something that never crashed. A real native crash
+     * happens while the app is in front, where this has not run.
+     */
+    fun backgrounded(context: Context) {
+        runCatching { File(context.applicationContext.filesDir, STEP).delete() }
+    }
+
+    /**
+     * Why something fell back to its plain version.
+     *
+     * Kept next to the crash notes because it answers the same question and
+     * gets read at the same time. Without it a fallback is invisible: the
+     * screen just quietly looks cheaper than it should and nobody can say why.
+     */
+    fun noteReason(context: Context, key: String, reason: String) {
+        runCatching { File(context.applicationContext.filesDir, "why_$key").writeText(reason) }
+    }
+
+    /** What was written down last time [key] fell back, if anything. */
+    fun reason(context: Context, key: String): String? =
+        runCatching {
+            File(context.applicationContext.filesDir, "why_$key").takeIf { it.exists() }?.readText()
+        }.getOrNull()
+
+    /** Forget that [key] ever failed, so it is tried from scratch. */
+    fun forget(context: Context, key: String) {
+        val dir = context.applicationContext.filesDir
+        runCatching { File(dir, "try_$key").delete() }
+        runCatching { File(dir, "why_$key").delete() }
+    }
+
     /** A step the app went into and never came out of. */
     fun unfinished(context: Context): String? =
         runCatching { File(context.filesDir, STEP).takeIf { it.exists() }?.readText() }.getOrNull()
