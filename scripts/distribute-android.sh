@@ -13,7 +13,12 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="$ROOT/apps/android"
-APK="$ANDROID_DIR/app/build/outputs/apk/debug/app-debug.apk"
+# The build now produces one APK per architecture rather than one holding
+# both, so the file to upload has an ABI in its name. arm64 is every phone
+# made for roughly the last decade; VIRO_ABI=armeabi-v7a builds and ships the
+# older one for a tester who needs it.
+VIRO_ABI="${VIRO_ABI:-arm64-v8a}"
+APK="$ANDROID_DIR/app/build/outputs/apk/debug/app-${VIRO_ABI}-debug.apk"
 
 # From apps/android/app/google-services.json (mobilesdk_app_id). That file is
 # gitignored, so the id is kept here rather than read out of it.

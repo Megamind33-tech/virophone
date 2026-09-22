@@ -49,10 +49,30 @@ android {
         buildConfigField("boolean", "FORCE_TURN_RELAY", "false")
         buildConfigField("String", "GIT_COMMIT", "\"$gitCommitAbbrev\"")
 
-        // Encryption and calling both ship native code, and each architecture
-        // costs tens of megabytes on a download people here pay for by the
-        // megabyte. Real phones are ARM; the x86 builds exist for emulators.
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+    }
+
+    /**
+     * One APK per architecture, rather than one carrying both.
+     *
+     * The native code is nearly all of this app's size — libsignal alone is
+     * 60 MB uncompressed per architecture, and the two call engines add
+     * another 20 — and every phone runs exactly one of them. Shipping both
+     * means every install pays twice for code it cannot execute, on
+     * connections people buy by the megabyte.
+     *
+     * Real phones are ARM, so the x86 builds that exist for emulators are
+     * excluded by simply not being included here.
+     *
+     * No universal APK: it would be the thing we are trying to stop building,
+     * and anything that needs one can still be assembled from these.
+     */
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = false
+        }
     }
 
     buildTypes {
