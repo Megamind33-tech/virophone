@@ -12,6 +12,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import com.viroreach.app.R
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -87,18 +88,36 @@ fun activityArt(key: String): ActivityArt = when (key) {
 }
 
 /**
- * A photograph for an activity, once one has been bundled for it.
+ * A photograph for an activity, where one says the thing better than a drawing
+ * does.
  *
- * Empty until real artwork is commissioned: adding a picture is one line here
- * and one file in the drawable folders, and nothing else changes. Named
- * resource ids rather than a lookup by string so resource shrinking cannot
- * quietly remove them from a release build.
+ * Adding or replacing a picture is one line here and one file in the drawable
+ * folders, and nothing else changes. Named resource ids rather than a lookup
+ * by string, so resource shrinking cannot quietly remove them from a release
+ * build.
  *
  * Anything without an entry keeps the drawn artwork, which is why this can
  * fill up one activity at a time instead of all at once — and why a new
  * activity always looks like something the day it is added.
  */
-private val activityPhotos: Map<String, Int> = emptyMap()
+private val activityPhotos: Map<String, Int> = mapOf(
+    // All CC0 — public domain, no attribution required — from StockSnap and
+    // rawpixel via Openverse. Credited here anyway, because where a thing came
+    // from should not have to be rediscovered later.
+    "TALK" to R.drawable.activity_talk, // "Teapot Cup", StockSnap
+    "WATCH" to R.drawable.activity_watch, // "Theatre seats rows", rawpixel
+    "COOK" to R.drawable.activity_cook, // "Stove Pot", StockSnap
+    "WALK" to R.drawable.activity_walk, // "Road Path", StockSnap
+    "LEARN" to R.drawable.activity_learn, // "Tools Workshop", StockSnap
+    "CELEBRATE" to R.drawable.activity_celebrate, // "Fireworks Lights", StockSnap
+    "REMEMBER" to R.drawable.activity_remember, // "Old Photo", StockSnap
+    "STAY" to R.drawable.activity_stay, // "Window Rain", StockSnap
+    // BE, LISTEN and CHOOSE keep their drawings on purpose. Nothing in the
+    // public-domain catalogue said the right thing: a holiday terrace for
+    // being with someone, a record stall with a drinks brand across it, and
+    // for choosing, nothing at all. A weak photograph is worse than a good
+    // drawing, and the drawing is already there.
+)
 
 @Composable
 fun MomentActivityArt(intentKey: String, modifier: Modifier = Modifier) {
