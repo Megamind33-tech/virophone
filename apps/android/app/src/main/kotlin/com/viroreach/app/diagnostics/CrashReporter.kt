@@ -27,6 +27,7 @@ import java.util.Locale
  */
 object CrashReporter {
     private const val FILE = "last_crash.txt"
+    private const val STEP = "last_step.txt"
 
     fun install(context: Context) {
         val app = context.applicationContext
@@ -42,7 +43,44 @@ object CrashReporter {
 
     fun clear(context: Context) {
         runCatching { File(context.filesDir, FILE).delete() }
+        runCatching { File(context.filesDir, STEP).delete() }
     }
+
+    /**
+     * Marks that the app is inside something risky, on disk.
+     *
+     * The breadcrumbs above live in memory and die with the process, which is
+     * no help at all for a crash below the JVM — a native one takes the
+     * handler with it and leaves nothing. This is written before entering and
+     * deleted on the way out, so a note still sitting there at the next launch
+     * means the app never came out of that step.
+     */
+    fun enter(context: Context, step: String) {
+        val app = context.applicationContext
+        runCatching {
+            File(app.filesDir, STEP).writeText(
+                buildString {
+                    appendLine("Viro ${BuildConfig.VERSION_NAME} closed inside: $step")
+                    appendLine(SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date()))
+                    appendLine("${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+                    appendLine()
+                    appendLine("No Java stack trace, which means the process died below the JVM —")
+                    appendLine("usually a native library. The step above is where it was.")
+                    appendLine()
+                    append(runCatching { Breadcrumbs.dump() }.getOrDefault("(no breadcrumbs)"))
+                },
+            )
+        }
+    }
+
+    /** Came out the other side. */
+    fun left(context: Context) {
+        runCatching { File(context.applicationContext.filesDir, STEP).delete() }
+    }
+
+    /** A step the app went into and never came out of. */
+    fun unfinished(context: Context): String? =
+        runCatching { File(context.filesDir, STEP).takeIf { it.exists() }?.readText() }.getOrNull()
 
     private fun report(thread: Thread, error: Throwable): String {
         val trace = StringWriter().also { error.printStackTrace(PrintWriter(it)) }.toString()
@@ -65,7 +103,11 @@ object CrashReporter {
 @Composable
 fun CrashReportPrompt() {
     val context = LocalContext.current
-    var report by remember { mutableStateOf(CrashReporter.pending(context)) }
+    // A Java crash if there is one, otherwise a step the app never came out
+    // of — which is what a native crash leaves behind.
+    var report by remember {
+        mutableStateOf(CrashReporter.pending(context) ?: CrashReporter.unfinished(context))
+    }
     val text = report ?: return
     AlertDialog(
         onDismissRequest = {

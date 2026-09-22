@@ -251,6 +251,11 @@ fun NowScreen(
 
         if (create) {
             com.viroreach.app.diagnostics.Breadcrumbs.moment("create-sheet")
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            DisposableEffect(Unit) {
+                com.viroreach.app.diagnostics.CrashReporter.enter(ctx, "starting a Moment")
+                onDispose { com.viroreach.app.diagnostics.CrashReporter.left(ctx) }
+            }
         }
         if (create) CreateMomentSheet(onDismiss = { create = false }, onStart = { body ->
             busy = true
@@ -533,6 +538,10 @@ fun MomentRoomScreen(
     // Remembered while the room is open, for the ending: who was here, and for how long.
     var lastPeople by remember { mutableStateOf(participants) }
     LaunchedEffect(participants) { if (participants.isNotEmpty()) lastPeople = participants }
+    DisposableEffect(room) {
+        com.viroreach.app.diagnostics.CrashReporter.enter(appContext, "a Moment room")
+        onDispose { com.viroreach.app.diagnostics.CrashReporter.left(appContext) }
+    }
     LaunchedEffect(room) {
         com.viroreach.app.diagnostics.Breadcrumbs.moment("room-enter")
         if (room.enter().isSuccess) live.start()

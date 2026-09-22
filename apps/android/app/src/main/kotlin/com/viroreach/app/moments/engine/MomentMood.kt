@@ -153,7 +153,7 @@ private fun MoodStage(selected: MomentMood?, modifier: Modifier = Modifier) {
     // not an acceptable way for choosing a mood to fail.
     com.viroreach.app.diagnostics.Breadcrumbs.moment("mood-stage")
     var broken by remember { mutableStateOf(false) }
-    val usable = remember { riveAvailable(context) } && !broken
+    val usable = RIVE_STAGE && remember { riveAvailable(context) } && !broken
     if (usable) {
         AndroidView(
             factory = { ctx ->
@@ -220,3 +220,20 @@ private fun riveAvailable(context: android.content.Context): Boolean = runCatchi
 private const val TAG = "ViroMood"
 /** The one state machine in the mood file. */
 private const val STATE_MACHINE = "State Machine 1"
+
+/**
+ * Whether the Rive artwork is drawn at all. Off.
+ *
+ * Creating a Moment was killing the app with no crash report, which means the
+ * process died below the JVM — a Java exception would have been caught and
+ * written down. The only native code newly on that screen is Rive, and
+ * RiveAnimationView is a TextureView being attached and detached inside a lazy
+ * list as the choices above it recompose, which is exactly where a renderer
+ * gets torn down underneath itself.
+ *
+ * The mood itself is unaffected: the four buttons were always the mechanism
+ * and the artwork only ever the expression, so choosing how you are still
+ * works and still travels to the card and the room. This is one constant away
+ * from being on again once it can be watched on a device with a log attached.
+ */
+private const val RIVE_STAGE = false
