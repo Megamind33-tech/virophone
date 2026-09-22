@@ -1,4 +1,4 @@
-import { Controller, Get, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
@@ -42,6 +42,9 @@ export class CampaignsController {
                  SELECT 1 FROM subscriptions s
                  WHERE s.user_id = $1 AND s.status = 'ACTIVE'))
          )
+         AND NOT EXISTS (
+               SELECT 1 FROM promotion_dismissals d
+               WHERE d.promotion_id = p.id AND d.user_id = $1)
        ORDER BY c.starts_at DESC NULLS LAST, p.position, p.created_at
        LIMIT 20`,
       [req.user.sub],
@@ -56,5 +59,23 @@ export class CampaignsController {
         action: r.action ?? null,
       })),
     };
+  }
+
+  /**
+   * Waves one away, for good.
+   *
+   * Idempotent: a second tap, or the same tap arriving twice on a bad
+   * connection, is the same dismissal rather than an error. Nothing is
+   * returned but success — the list simply no longer contains it next time.
+   */
+  @Post(':id/dismiss')
+  @HttpCode(200)
+  async dismiss(@Req() req: Authed, @Param('id', ParseUUIDPipe) id: string) {
+    await this.db.query(
+      `INSERT INTO promotion_dismissals (promotion_id, user_id) VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [id, req.user.sub],
+    );
+    return { success: true };
   }
 }

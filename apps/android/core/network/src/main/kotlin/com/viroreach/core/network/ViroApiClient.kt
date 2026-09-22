@@ -74,6 +74,7 @@ class ViroApiClient(
     /** The encrypted backup of this person's chats. */
     val backup: ViroBackupApi = retrofit.create(ViroBackupApi::class.java)
     val moments: ViroMomentsApi = retrofit.create(ViroMomentsApi::class.java)
+    val promotions: ViroPromotionsApi = retrofit.create(ViroPromotionsApi::class.java)
 
     private fun String.ensureTrailingSlash(): String =
         if (endsWith("/")) this else "$this/"

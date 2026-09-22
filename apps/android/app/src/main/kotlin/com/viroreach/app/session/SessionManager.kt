@@ -65,6 +65,8 @@ class SessionManager private constructor(context: Context) {
     )
     val relationships: RelationshipRepository = RelationshipRepository(appContext, messagingApi)
     val moments = com.viroreach.app.moments.MomentsRepository(viroApiClient.moments) { tokenStore.getUserId() }
+    /** What the platform is saying, which is usually nothing. */
+    val promotions = com.viroreach.app.moments.PromotionsRepository(viroApiClient.promotions) { tokenStore.getUserId() }
 
     /**
      * The room's end of encryption: the same engine ordinary chats use, so a
@@ -463,6 +465,7 @@ class SessionManager private constructor(context: Context) {
         moments.clear()
         android.util.Log.i("ViroSession", "CLEARING_LOCAL_USER_DATA reason=$reason")
         runCatching { messaging.clearLocal() }
+        runCatching { promotions.clear() }
         runCatching { contactsRepository.clearCache() }
         runCatching { callHistoryStore.clearAll() }
         runCatching { profileRepository.clearCachedProfile() }

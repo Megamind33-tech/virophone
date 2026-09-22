@@ -82,6 +82,7 @@ fun NowScreen(
     val repo = session.moments
     val moments by repo.moments.collectAsState()
     val invitations by repo.invitations.collectAsState()
+    val promos by session.promotions.promotions.collectAsState()
     val loaded by repo.loaded.collectAsState()
     val error by repo.error.collectAsState()
     val profile by session.profileRepository.profile.collectAsState(initial = UserProfile())
@@ -93,13 +94,16 @@ fun NowScreen(
     var busy by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(repo) {
-        repo.refresh(); repo.refreshInvitations()
+        repo.refresh(); repo.refreshInvitations(); session.promotions.refresh()
         var ticks = 0
         while (true) {
             delay(1000)
             repo.prune()
             clock = repo.now()
             if (++ticks % 30 == 0) { repo.refresh(); repo.refreshInvitations() }
+            // Rarely: what the platform is saying changes on the scale of
+            // days, and asking every half minute would be asking for nothing.
+            if (ticks % 600 == 0) session.promotions.refresh()
         }
     }
     val me = session.tokenStore.getUserId()
@@ -157,6 +161,17 @@ fun NowScreen(
                                 busy = true
                                 scope.launch { repo.knock(featured.id).onFailure { actionError = it.message }; busy = false }
                             },
+                        )
+                    }
+                }
+
+                // After whoever is asking for you, never above them. One at a
+                // time, because two would be a feed of advertisements.
+                promos.firstOrNull()?.let { promo ->
+                    item(key = "promo-" + promo.id) {
+                        PromotionStrip(
+                            promo = promo,
+                            onDismiss = { scope.launch { session.promotions.dismiss(promo.id) } },
                         )
                     }
                 }
@@ -1115,6 +1130,70 @@ private fun FeaturedMoment(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Something the platform is saying, in the feed without pretending to be a
+ * person.
+ *
+ * Deliberately the quietest thing on the screen: flat surface rather than a
+ * raised card, no picture, no button, no colour of its own beyond one small
+ * mark. A Moment is somebody holding a door open and this is not — so it sits
+ * below the person asking for you, it never appears more than one at a time,
+ * and the cross is always there.
+ *
+ * Dismissing is permanent and reaches every device. That is the whole bargain:
+ * something shown in a feed about people has to be possible to end for good,
+ * or it is an advertisement that keeps coming back.
+ */
+@Composable
+private fun PromotionStrip(
+    promo: com.viroreach.core.network.PromotionDto,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = ViroColors.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            Modifier.padding(start = 14.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(6.dp).clip(CircleShape)
+                    .background(ViroColors.BlueAccent.copy(alpha = 0.7f)),
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    promo.title,
+                    color = ViroColors.textPrimary,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                promo.body?.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        it,
+                        color = ViroColors.textMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            IconButton(onClick = onDismiss, modifier = Modifier.size(44.dp)) {
+                Icon(
+                    Icons.Default.Close,
+                    "Dismiss this for good",
+                    tint = ViroColors.textMuted,
+                    modifier = Modifier.size(16.dp),
+                )
             }
         }
     }
