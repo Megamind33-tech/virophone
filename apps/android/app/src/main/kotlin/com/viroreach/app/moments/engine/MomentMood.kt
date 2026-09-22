@@ -130,12 +130,12 @@ fun MoodScreen(
     var attempt by remember { mutableStateOf(0) }
     var broken by remember { mutableStateOf<String?>(null) }
     val blocked = remember(attempt) { riveBlockedBecause(context) }
-    // Which state machine to ask for — checked against the file rather than
-    // assumed. Asking for one that is not there is not a caught error in this
-    // runtime; it is a null pointer dereference in C++ that takes the whole
-    // process with it.
-    val machine = remember(attempt, blocked) { if (blocked == null) moodStateMachine(context) else null }
-    val reason = broken ?: blocked ?: if (machine == null) NO_MACHINE else null
+    // Which animation to play — read back from the file rather than assumed.
+    // Naming something the artboard does not have is not a caught error in
+    // this runtime; it is a null pointer dereference in C++ that takes the
+    // whole process with it.
+    val animation = remember(attempt, blocked) { if (blocked == null) moodAnimation(context) else null }
+    val reason = broken ?: blocked ?: if (animation == null) NO_ANIMATION else null
     // The listener is built once and outlives recompositions, so the callback
     // it holds has to be the current one rather than the one from first frame.
     val pick by rememberUpdatedState(onPick)
@@ -161,7 +161,14 @@ fun MoodScreen(
                     com.viroreach.app.diagnostics.Breadcrumbs.moment("animation-init")
                     runCatching {
                         RiveAnimationView(ctx).apply {
-                            setRiveResource(R.raw.mood_interaction, stateMachineName = machine, autoplay = true)
+                            setRiveResource(R.raw.mood_interaction, animationName = animation, autoplay = true)
+                            // Kept, and currently silent. notifyStateChanged
+                            // only ever fires for a state machine, and this
+                            // file's cannot be instantiated — so the faces
+                            // animate but a tap on one reports nothing. The
+                            // wiring stays because it is correct and costs
+                            // nothing; it starts working the day the .riv is
+                            // re-exported with a state machine that loads.
                             registerListener(object : RiveFileController.Listener {
                                 override fun notifyStateChanged(stateMachineName: String, stateName: String) {
                                     MomentMood.fromState(stateName)?.let { pick(it) }
@@ -303,33 +310,39 @@ private fun riveBlockedBecause(context: Context): String? {
 }
 
 /**
- * The name of the state machine to play, or null if there is not one to play.
+ * The animation to play, read back from the file rather than assumed.
  *
- * This exists because of a crash, and the crash is worth recording. Asking
- * RiveAnimationView for a state machine by name goes to
- * ArtboardInstance::stateMachineNamed, which in this runtime returns a null
- * pointer when nothing matches and hands it straight to the StateMachineInstance
- * constructor, which dereferences it:
+ * This is deliberately an animation and not the state machine, and the reason
+ * is worth writing down because it cost several builds to find.
+ *
+ * The crash was this, from the phone:
  *
  *   signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0
  *   rive::StateMachineInstance::StateMachineInstance(...)+384
  *   rive::ArtboardInstance::stateMachineNamed(...)+232
  *
- * There is no exception to catch and no way to recover: the process is gone.
- * The only defence is never to ask for a name that is not there, so the names
- * are read first — by index, through getStateMachineNames, which cannot fail
- * the same way — and only a name that came back is ever used.
+ * The obvious reading — that "State Machine 1" is the wrong name — is wrong.
+ * The name is right: loading this exact file in Rive's own web runtime lists
+ * the artboard's state machines as ["State Machine 1"]. But asking that
+ * runtime to *instantiate* it fails too, with "Problem loading file; may be
+ * corrupt!", while every animation in the same file — Timeline 2, Happy, Sad,
+ * Angry, Crazy — loads and plays. So the state machine inside this .riv is
+ * unusable, in two independent runtimes; on Android that shows up as a null
+ * returned into a constructor that does not check it, and the process dies.
+ *
+ * Nothing here can repair the file. What it can do is never ask for the part
+ * that does not work, and check the part it does ask for against what the
+ * artboard actually reports. getAnimationNames works by index and cannot fail
+ * the way the lookup by name does.
  */
-private fun moodStateMachine(context: Context): String? = runCatching {
+private fun moodAnimation(context: Context): String? = runCatching {
     val bytes = context.resources.openRawResource(R.raw.mood_interaction).use { it.readBytes() }
     val file = app.rive.runtime.kotlin.core.File(bytes)
     try {
-        val names = file.firstArtboard.stateMachineNames
-        Log.i(TAG, "mood artwork state machines: $names")
-        // Prefer the one the app was written against; otherwise whatever the
-        // file actually has, since a re-export may well have renamed it.
-        val chosen = names.firstOrNull { it == STATE_MACHINE } ?: names.firstOrNull()
-        if (chosen == null) noteMoodReason(context, "The artwork has no state machine to play ($names).")
+        val names = file.firstArtboard.animationNames
+        Log.i(TAG, "mood artwork animations: $names")
+        val chosen = names.firstOrNull()
+        if (chosen == null) noteMoodReason(context, "The artwork has no animation to play.")
         chosen
     } finally {
         runCatching { file.release() }
@@ -352,12 +365,10 @@ private fun moodArtworkSurvived(context: Context) {
 }
 
 private const val TAG = "ViroMood"
-/** The one state machine in the mood file. */
-private const val STATE_MACHINE = "State Machine 1"
 private const val RIVE_KEY = "mood-artwork"
 /** Up, drawing and still alive this long means the artwork is fine here. */
 private const val SETTLED_MS = 4_000L
 /** How many times a person may ask for the artwork again before it rests. */
 private const val MAX_RETRIES = 2
 /** Shown when the file has nothing playable in it. */
-private const val NO_MACHINE = "The artwork has no animation this app can play."
+private const val NO_ANIMATION = "The artwork has no animation this app can play."
