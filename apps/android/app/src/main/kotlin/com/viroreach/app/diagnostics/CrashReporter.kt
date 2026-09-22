@@ -78,6 +78,30 @@ object CrashReporter {
         runCatching { File(context.applicationContext.filesDir, STEP).delete() }
     }
 
+    /**
+     * About to try something that has taken the app down before.
+     *
+     * A native crash runs no handler, so nothing can be caught and nothing is
+     * written on the way out. The only way to learn from one is to write the
+     * intention down *first*: if this file is still here next time, the last
+     * attempt did not survive.
+     */
+    fun attempting(context: Context, key: String) {
+        runCatching { File(context.applicationContext.filesDir, "try_$key").writeText("1") }
+    }
+
+    /** It worked. The next launch is free to try again. */
+    fun survived(context: Context, key: String) {
+        runCatching { File(context.applicationContext.filesDir, "try_$key").delete() }
+    }
+
+    /**
+     * True when a previous attempt was started and never finished, which for
+     * something with native code means it is what killed the app.
+     */
+    fun isUnsafe(context: Context, key: String): Boolean =
+        runCatching { File(context.applicationContext.filesDir, "try_$key").exists() }.getOrDefault(false)
+
     /** A step the app went into and never came out of. */
     fun unfinished(context: Context): String? =
         runCatching { File(context.filesDir, STEP).takeIf { it.exists() }?.readText() }.getOrNull()

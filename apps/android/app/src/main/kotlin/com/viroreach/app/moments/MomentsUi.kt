@@ -1453,6 +1453,65 @@ private fun ActivityTile(
     }
 }
 
+/**
+ * The first thing asked when opening a Moment: how you are.
+ *
+ * A screen rather than a row in a form. It is the one part of creating a
+ * Moment that is about the person instead of the arrangements, and the artwork
+ * needs the room — squeezed into a list it was both unreadable and, being a
+ * TextureView among recomposing siblings, the thing that crashed.
+ *
+ * Skippable in one tap. A Moment with no mood is perfectly ordinary and this
+ * must never feel like a gate.
+ */
+@Composable
+private fun MoodStep(
+    selected: com.viroreach.app.moments.engine.MomentMood?,
+    onPick: (com.viroreach.app.moments.engine.MomentMood?) -> Unit,
+    onBack: () -> Unit,
+    onNext: () -> Unit,
+) {
+    Dialog(onDismissRequest = onBack, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize(), color = ViroColors.background) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, "Back", tint = ViroColors.textPrimary)
+                    }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onNext) {
+                        Text(
+                            if (selected == null) "Skip" else "Next",
+                            color = ViroColors.BlueAccent,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+                com.viroreach.app.moments.engine.MoodScreen(
+                    selected = selected,
+                    onPick = onPick,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                )
+                // Nothing is drawn over the artwork; this only says what the
+                // tap meant, underneath it.
+                Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                    if (selected != null) {
+                        Button(onClick = onNext, modifier = Modifier.fillMaxWidth()) {
+                            Text("That's me", fontWeight = FontWeight.SemiBold)
+                        }
+                    } else {
+                        Text(
+                            "Tap how you are, or skip.",
+                            color = ViroColors.textMuted,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody) -> Unit, busy: Boolean, error: String?) {
@@ -1466,6 +1525,16 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
     var text by rememberSaveable { mutableStateOf("") }
     var invitation by rememberSaveable { mutableStateOf("") }
     var moodKey by rememberSaveable { mutableStateOf<String?>(null) }
+    // Asked once, first, and reachable again from the form afterwards.
+    var showMood by rememberSaveable { mutableStateOf(true) }
+    if (showMood) {
+        MoodStep(
+            selected = com.viroreach.app.moments.engine.MomentMood.of(moodKey),
+            onPick = { moodKey = it?.key },
+            onBack = onDismiss,
+            onNext = { showMood = false },
+        )
+    } else
     ModalBottomSheet(onDismissRequest = { if (!busy) onDismiss() }, containerColor = ViroColors.surface,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         LazyColumn(Modifier.fillMaxWidth().imePadding(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1510,18 +1579,22 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
                 }
             }
             item {
-                // What they say is the reason anyone walks in, so it is asked
-                // for here rather than buried. Optional: somebody who says
-                // nothing gets a plain line, not a sentence invented for them.
-                // How they are, before what they will say. Optional, and the
-                // artwork answers back as it is chosen.
-                Text("How are you today?", color = ViroColors.textPrimary)
-                Spacer(Modifier.height(8.dp))
-                com.viroreach.app.moments.engine.MoodPicker(
-                    selected = com.viroreach.app.moments.engine.MomentMood.of(moodKey),
-                    onPick = { moodKey = it?.key },
-                )
-                Spacer(Modifier.height(20.dp))
+                // How they are is asked on a screen of its own, before this
+                // one. What they say is asked here, because it is the reason
+                // anyone walks in and does not belong buried under the
+                // arrangements. Optional: somebody who says nothing gets a
+                // plain line, not a sentence invented for them.
+                com.viroreach.app.moments.engine.MomentMood.of(moodKey)?.let { mood ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("You're ", color = ViroColors.textMuted)
+                        com.viroreach.app.moments.engine.MoodTag(mood)
+                        Spacer(Modifier.width(8.dp))
+                        TextButton(onClick = { showMood = true }) {
+                            Text("Change", color = ViroColors.BlueAccent)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 Text("Say something to bring them in", color = ViroColors.textPrimary)
                 OutlinedTextField(
                     value = invitation,
