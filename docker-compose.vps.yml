@@ -104,6 +104,9 @@ services:
       # gone encrypted never goes back, so switching this off later does not
       # unencrypt anything — it only stops new chats from starting.
       E2EE_ENABLED: ${E2EE_ENABLED:-false}
+      # Opens the admin console. Unset means key sign-in is off entirely and
+      # only an admin account's own token is accepted, which fails closed.
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
       MEDIA_UPLOAD_DIR: /app/uploads/media
       # Videos and songs people share into a Moment; deleted when it ends.
       MOMENT_MEDIA_DIR: /app/uploads/moment-media
