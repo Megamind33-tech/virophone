@@ -151,11 +151,29 @@ export class AdminService {
     return { ...campaign, promotions };
   }
 
+  /**
+   * A period that ends before it starts is refused by the table, and that
+   * refusal should read as "you typed the dates the wrong way round" rather
+   * than as the server falling over. Postgres raises 23514 for a failed CHECK.
+   */
+  private periodError(e: unknown): never {
+    if ((e as { code?: string }).code === '23514') {
+      throw new ViroException(
+        'VALIDATION_ERROR',
+        'A campaign has to end after it starts.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    throw e;
+  }
+
   async createCampaign(input: { name: string; audience?: string; startsAt?: string; endsAt?: string }) {
-    const [row] = await this.db.query(
-      `INSERT INTO campaigns (name, audience, starts_at, ends_at) VALUES ($1, $2, $3, $4) RETURNING *`,
-      [input.name.trim(), input.audience ?? 'EVERYONE', input.startsAt || null, input.endsAt || null],
-    );
+    const [row] = await this.db
+      .query(
+        `INSERT INTO campaigns (name, audience, starts_at, ends_at) VALUES ($1, $2, $3, $4) RETURNING *`,
+        [input.name.trim(), input.audience ?? 'EVERYONE', input.startsAt || null, input.endsAt || null],
+      )
+      .catch((e: unknown) => this.periodError(e));
     return row;
   }
 
@@ -174,11 +192,12 @@ export class AdminService {
     for (const [key, column] of Object.entries(columns)) {
       if (patch[key] === undefined) continue;
       values.push(patch[key] === '' ? null : patch[key]);
-      sets.push(`${column} = ${values.length}`);
+      sets.push(`${column} = $${values.length}`);
     }
     if (sets.length === 0) return this.campaign(id);
-    const [rows] = await this.db.query(
-      `UPDATE campaigns SET ${sets.join(', ')}, updated_at = now() WHERE id = $1 RETURNING id`, values);
+    const [rows] = await this.db
+      .query(`UPDATE campaigns SET ${sets.join(', ')}, updated_at = now() WHERE id = $1 RETURNING id`, values)
+      .catch((e: unknown) => this.periodError(e));
     if (!rows || rows.length === 0) {
       throw new ViroException('NOT_FOUND', 'No campaign with that id.', HttpStatus.NOT_FOUND);
     }
@@ -218,7 +237,7 @@ export class AdminService {
       if (patch[key as keyof typeof patch] === undefined) continue;
       const value = patch[key as keyof typeof patch];
       values.push(value === '' ? null : value);
-      sets.push(`${column} = ${values.length}`);
+      sets.push(`${column} = $${values.length}`);
     }
     if (sets.length === 0) return { success: true };
     const [rows] = await this.db.query(
@@ -247,7 +266,7 @@ export class AdminService {
    */
   async reorderPromotions(campaignId: string, ids: string[]) {
     if (ids.length === 0) return { success: true };
-    const values = ids.map((_, i) => `(${i + 2}::uuid, ${i})`).join(',');
+    const values = ids.map((_, i) => `($${i + 2}::uuid, ${i})`).join(',');
     await this.db.query(
       `UPDATE promotions p SET position = v.position
        FROM (VALUES ${values}) AS v(id, position)
