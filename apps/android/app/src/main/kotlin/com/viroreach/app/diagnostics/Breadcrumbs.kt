@@ -38,6 +38,13 @@ object Breadcrumbs {
         add("route=$newRoute${subjectId?.let { " id=$it" }.orEmpty()}")
     }
 
+    /**
+     * A step inside Moments, which is where the harder crashes have been.
+     * Unlike the others this does not dedupe: the same step happening twice
+     * is itself worth seeing in a report.
+     */
+    fun moment(step: String) = add("moment=$step")
+
     fun call(state: String) {
         if (state == callState) return
         callState = state

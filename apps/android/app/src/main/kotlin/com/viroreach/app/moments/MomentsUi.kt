@@ -249,6 +249,9 @@ fun NowScreen(
         }
       }
 
+        if (create) {
+            com.viroreach.app.diagnostics.Breadcrumbs.moment("create-sheet")
+        }
         if (create) CreateMomentSheet(onDismiss = { create = false }, onStart = { body ->
             busy = true
             scope.launch {
@@ -513,16 +516,27 @@ fun MomentRoomScreen(
     // for. Attaching starts the foreground service; without it Android stops
     // the audio as soon as Viro leaves the screen.
     DisposableEffect(room) {
-        com.viroreach.app.moments.engine.MomentPlayerHolder.attach(appContext, exoPlayer.exo)
+        com.viroreach.app.moments.engine.MomentPlayerHolder.attach(exoPlayer.exo)
         onDispose { com.viroreach.app.moments.engine.MomentPlayerHolder.detach(appContext) }
     }
     val sharing = remember(room) { session.openMomentMedia(appContext, room, playback, scope) }
-    LaunchedEffect(room) { room.playback.collect { playback.follow(it) } }
+    LaunchedEffect(room) {
+        room.playback.collect {
+            playback.follow(it)
+            // Controls in the shade exist while the room is playing something
+            // and not otherwise, which is also the only time Android permits
+            // the service that keeps the sound alive off screen.
+            com.viroreach.app.moments.engine.MomentPlayerHolder
+                .playing(appContext, it?.status == "PLAYING")
+        }
+    }
     // Remembered while the room is open, for the ending: who was here, and for how long.
     var lastPeople by remember { mutableStateOf(participants) }
     LaunchedEffect(participants) { if (participants.isNotEmpty()) lastPeople = participants }
     LaunchedEffect(room) {
+        com.viroreach.app.diagnostics.Breadcrumbs.moment("room-enter")
         if (room.enter().isSuccess) live.start()
+        com.viroreach.app.diagnostics.Breadcrumbs.moment("room-entered")
         var tick = 0
         while (true) {
             delay(1000)

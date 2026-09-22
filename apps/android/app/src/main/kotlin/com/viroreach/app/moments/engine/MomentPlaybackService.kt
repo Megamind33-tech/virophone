@@ -2,6 +2,7 @@ package com.viroreach.app.moments.engine
 
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import androidx.media3.common.Player
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -27,18 +28,32 @@ class MomentPlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
-        val player = MomentPlayerHolder.player ?: return
-        session = MediaSession.Builder(this, player).build()
+        session = build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
         // Null when the room has already gone: there is nothing to control, and
         // handing back a session for a released player would crash the caller.
-        if (MomentPlayerHolder.player == null) return null
-        if (session == null) {
-            MomentPlayerHolder.player?.let { session = MediaSession.Builder(this, it).build() }
-        }
+        if (session == null) session = build()
         return session
+    }
+
+    /**
+     * One session, with an id of its own.
+     *
+     * Two sessions built with the default id in the same process throw, which
+     * is reachable by leaving a room and opening another before the old
+     * service has finished being destroyed. Building it is also allowed to
+     * fail: a media session is a convenience, and nothing about being in a
+     * room should end because the notification could not be made.
+     */
+    private fun build(): MediaSession? {
+        val player = MomentPlayerHolder.player ?: return null
+        return runCatching { MediaSession.Builder(this, player).setId(SESSION_ID).build() }
+            .getOrElse {
+                Log.w(TAG, "no media controls this time: ${it.javaClass.simpleName}")
+                null
+            }
     }
 
     /**
@@ -49,6 +64,12 @@ class MomentPlaybackService : MediaSessionService() {
     override fun onTaskRemoved(rootIntent: Intent?) {
         MomentPlayerHolder.player?.pause()
         stopSelf()
+    }
+
+    private companion object {
+        const val TAG = "ViroPlayback"
+        /** Distinct, so a second session cannot collide with one being torn down. */
+        const val SESSION_ID = "viro-moment"
     }
 
     override fun onDestroy() {
@@ -73,21 +94,48 @@ object MomentPlayerHolder {
     var player: Player? = null
         private set
 
-    /** The room is open: publish its player and start showing controls. */
-    fun attach(context: Context, player: Player) {
+    /** Whether the service has been asked to run, so it is not asked twice. */
+    @Volatile
+    private var running = false
+
+    /**
+     * The room is open: this is the player its controls would describe.
+     *
+     * Publishing it does NOT start the service. A mediaPlayback foreground
+     * service may only be started when media is genuinely playing — from
+     * Android 14 starting one otherwise throws
+     * ForegroundServiceStartNotAllowedException and takes the app down, which
+     * is what opening a Moment was doing. The service is started later, by
+     * [playing], and only once there is something for it to be about.
+     */
+    fun attach(player: Player) {
         this.player = player
+    }
+
+    /**
+     * Playback started or stopped.
+     *
+     * Starting is the only moment a mediaPlayback service is allowed to begin,
+     * and stopping is when it should go away rather than sit in the shade
+     * describing silence.
+     */
+    fun playing(context: Context, isPlaying: Boolean) {
+        if (isPlaying == running) return
+        running = isPlaying
+        val app = context.applicationContext
+        val intent = Intent(app, MomentPlaybackService::class.java)
         runCatching {
-            val app = context.applicationContext
-            app.startService(Intent(app, MomentPlaybackService::class.java))
+            if (isPlaying) app.startService(intent) else app.stopService(intent)
+        }.onFailure {
+            // Refused — a locked-down OEM build, or a state Android would not
+            // allow. The room carries on; only the controls are missing.
+            running = false
         }
     }
 
     /** The room has gone. */
     fun detach(context: Context) {
         player = null
-        runCatching {
-            val app = context.applicationContext
-            app.stopService(Intent(app, MomentPlaybackService::class.java))
-        }
+        playing(context, false)
     }
 }

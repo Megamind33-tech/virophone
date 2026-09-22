@@ -19,6 +19,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -143,25 +146,40 @@ fun MoodPicker(
 @Composable
 private fun MoodStage(selected: MomentMood?, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val usable = remember { riveAvailable(context) }
+    // Both halves have to work before the artwork is used at all: the native
+    // library has to load, and a view has to be constructible. Constructing it
+    // is the part that reaches hardware — RiveAnimationView is a TextureView —
+    // and a factory that throws takes the whole screen down with it, which is
+    // not an acceptable way for choosing a mood to fail.
+    com.viroreach.app.diagnostics.Breadcrumbs.moment("mood-stage")
+    var broken by remember { mutableStateOf(false) }
+    val usable = remember { riveAvailable(context) } && !broken
     if (usable) {
         AndroidView(
             factory = { ctx ->
-                RiveAnimationView(ctx).apply {
-                    runCatching { setRiveResource(R.raw.mood_interaction, stateMachineName = STATE_MACHINE, autoplay = true) }
-                        .onFailure { Log.w(TAG, "mood artwork would not load: ${it.javaClass.simpleName}") }
+                runCatching {
+                    RiveAnimationView(ctx).apply {
+                        setRiveResource(R.raw.mood_interaction, stateMachineName = STATE_MACHINE, autoplay = true)
+                    }
+                }.getOrElse {
+                    Log.w(TAG, "mood artwork would not start: ${it.javaClass.simpleName}")
+                    broken = true
+                    android.view.View(ctx)
                 }
             },
             update = { view ->
-                val mood = selected ?: return@AndroidView
-                // Named after the mood in the file: Happy, Sad, Angry, Crazy.
-                val input = mood.key.lowercase().replaceFirstChar { it.uppercase() }
-                runCatching { view.fireState(STATE_MACHINE, input) }
-                    .recoverCatching { view.setBooleanState(STATE_MACHINE, input, true) }
-                    .onFailure { e ->
-                        if (e is RiveException) Log.w(TAG, "no mood input named $input")
-                        else Log.w(TAG, "could not set mood: ${e.javaClass.simpleName}")
-                    }
+                val rive = view as? RiveAnimationView
+                val mood = selected
+                if (rive != null && mood != null) {
+                    // Named after the mood in the file: Happy, Sad, Angry, Crazy.
+                    val input = mood.key.lowercase().replaceFirstChar { it.uppercase() }
+                    runCatching { rive.fireState(STATE_MACHINE, input) }
+                        .recoverCatching { rive.setBooleanState(STATE_MACHINE, input, true) }
+                        .onFailure { e ->
+                            if (e is RiveException) Log.w(TAG, "no mood input named $input")
+                            else Log.w(TAG, "could not set mood: ${e.javaClass.simpleName}")
+                        }
+                }
             },
             modifier = modifier,
         )
