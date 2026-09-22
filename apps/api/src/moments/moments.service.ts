@@ -31,7 +31,7 @@ const MAX_MEDIA_PER_MOMENT = 20;
 export const MOMENT_TYPES = ['FREE', 'BREAK', 'LISTENING', 'WATCHING', 'GAMING', 'WORKING', 'CUSTOM'];
 export const MOMENT_AUDIENCES = ['CONNECTIONS', 'CONTACTS'];
 export const MOMENT_REACTIONS = ['❤️', '😂', '🔥', '👏', '👍'];
-export interface CreateMoment { type: string; text?: string; visibility: string; durationMinutes: number; intent?: MomentIntent }
+export interface CreateMoment { type: string; text?: string; visibility: string; durationMinutes: number; intent?: MomentIntent; invitationText?: string }
 /** One sealed copy of a room message, addressed to one device. */
 export interface MomentEnvelope { deviceId: string; ciphertext: string; type?: number }
 /** A room message as the sender offers it: readable text, or sealed copies. */
@@ -95,9 +95,10 @@ export class MomentsService {
     await this.sweep();
     let row: any;
     try {
-      [row] = await this.db.query(`INSERT INTO moments (creator_user_id,type,text,visibility,intent,expires_at)
-        VALUES ($1,$2,$3,$4,$6,now() + $5 * interval '1 minute') RETURNING *`,
-      [userId, body.type, body.text?.trim() || null, body.visibility, body.durationMinutes, body.intent ?? null]);
+      [row] = await this.db.query(`INSERT INTO moments (creator_user_id,type,text,visibility,intent,invitation_text,expires_at)
+        VALUES ($1,$2,$3,$4,$6,$7,now() + $5 * interval '1 minute') RETURNING *`,
+      [userId, body.type, body.text?.trim() || null, body.visibility, body.durationMinutes, body.intent ?? null,
+        body.invitationText?.trim() || null]);
     } catch (e) {
       if ((e as { code?: string }).code === '23505') throw new ConflictException('You already have an active Moment.');
       throw e;
@@ -1175,6 +1176,9 @@ export class MomentsService {
       allowVoice: r.type === 'FREE', participantCount: r.participant_count ?? 0,
       // Why people came together; older Moments derive one from their type.
       intent: r.intent ?? intentForLegacyType(r.type),
+      // What they said when they opened it, if they said anything. Never
+      // invented: the app says something plain when this is null.
+      invitationText: r.invitation_text ?? null,
       // Ranked highest first by the query; myReaction is what this viewer
       // chose, so the button can show as already pressed.
       reactions: (r.cheers ?? []) as { emoji: string; count: number }[],

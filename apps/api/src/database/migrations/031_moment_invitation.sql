@@ -1,0 +1,14 @@
+-- 031: what somebody actually says when they open a Moment.
+--
+-- A Moment already records what the person is doing — cooking, walking,
+-- listening. That is a fact about them, not an invitation, and a room offered
+-- as "Cooking · 28 min" reads like a listing rather than somebody holding a
+-- door open. This is the sentence they say in their own words:
+--
+--   "Come keep me company. I'm making dinner."
+--
+-- Optional, and short on purpose. It is one line said across a room, not a
+-- caption, and anything longer starts being a post. Where it is absent the app
+-- says something plain derived from the activity rather than inventing
+-- feelings on the person's behalf.
+ALTER TABLE moments ADD COLUMN IF NOT EXISTS invitation_text varchar(80);

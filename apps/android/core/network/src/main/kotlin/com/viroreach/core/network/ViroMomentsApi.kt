@@ -15,6 +15,11 @@ data class MomentDto(
     /** What this viewer chose, so the button reads as already pressed. */
     val myReaction: String? = null,
     val visibilityChangedAt: String? = null,
+    /**
+     * What the host said when they opened it, in their own words. Null when
+     * they said nothing, and never filled in on their behalf.
+     */
+    val invitationText: String? = null,
     /** Why people came together — shapes the room. Derived for Moments older than intents. */
     val intent: String? = null,
 )
@@ -27,6 +32,8 @@ data class CreateMomentBody(
     val durationMinutes: Int,
     /** What people are coming together to do: COOK, WATCH, LISTEN, STAY… */
     val intent: String? = null,
+    /** One line in the host's own words. Optional, and never written for them. */
+    val invitationText: String? = null,
 )
 data class ExtendMomentBody(val minutes: Int)
 

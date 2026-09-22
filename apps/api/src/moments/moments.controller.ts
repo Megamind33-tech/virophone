@@ -16,6 +16,8 @@ class CreateMomentDto {
   @IsOptional() @IsString() @MaxLength(60) text?: string;
   @IsIn(MOMENT_AUDIENCES) visibility!: string;
   @IsInt() @Min(1) @Max(120) durationMinutes!: number;
+  /** One line in the host's own words: "Come keep me company." Optional. */
+  @IsOptional() @IsString() @MaxLength(80) invitationText?: string;
   /** What people are coming together to do; shapes the room it opens into. */
   @IsOptional() @IsIn(MOMENT_INTENTS as unknown as string[]) intent?: (typeof MOMENT_INTENTS)[number];
 }

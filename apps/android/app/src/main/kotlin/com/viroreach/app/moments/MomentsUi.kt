@@ -1,5 +1,9 @@
 package com.viroreach.app.moments
 
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -102,88 +106,109 @@ fun NowScreen(
     val own = moments.firstOrNull { it.creatorUserId == me }
     val peers = moments.filter { it.creatorUserId != me }
 
+    // Who is holding a door open for this person specifically. That Moment
+    // leads, because being asked outranks being available.
+    val invitedIds = remember(invitations) { invitations.map { it.moment.id }.toSet() }
+    val featured = peers.firstOrNull { it.id in invitedIds } ?: peers.firstOrNull()
+    val secondary = peers.filter { it.id != featured?.id && it.id !in invitedIds }
+    val pendingInvites = invitations.filter { it.moment.id != featured?.id }
+
     MomentsTheme {
         Column(Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp)) {
                 Text("Now", color = ViroColors.textPrimary, style = MaterialTheme.typography.headlineMedium)
+                Text(
+                    if (peers.isEmpty() && own == null) "Nobody's around just now" else "Your people are around",
+                    color = ViroColors.textMuted,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             }
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                item(key = "mine") {
-                    YourMomentCard(
-                        own = own,
-                        photoUrl = profile.effectivePhotoUrl,
-                        displayName = profile.displayName,
-                        clock = clock,
-                        onClick = { if (own == null) create = true else manage = own.id },
-                    )
-                }
-                if (invitations.isNotEmpty()) {
-                    item(key = "invitations-title") {
-                        Text("Invitations", color = ViroColors.textPrimary, fontWeight = FontWeight.SemiBold,
-                            style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
-                    }
-                    items(invitations, key = { it.invitationId }) { invitation ->
-                        val m = invitation.moment
-                        Surface(shape = RoundedCornerShape(18.dp), color = ViroColors.surfaceRaised, modifier = Modifier.fillMaxWidth()) {
-                            Row(Modifier.height(78.dp), verticalAlignment = Alignment.CenterVertically) {
-                                // A glimpse of the room they are holding open.
-                                Box(Modifier.width(78.dp).fillMaxHeight().clickable { roomId = m.id }) {
-                                    com.viroreach.app.moments.engine.MomentActivityArt(m.intent ?: "BE", Modifier.fillMaxSize())
-                                    Box(Modifier.align(Alignment.Center)) { MomentAvatar(m) }
-                                }
-                                Spacer(Modifier.width(12.dp))
-                                Column(Modifier.weight(1f).clickable { roomId = m.id }) {
-                                    Text("${m.displayName} invited you", color = ViroColors.textMuted, style = MaterialTheme.typography.labelMedium)
-                                    Text(m.activity(), color = ViroColors.textPrimary, fontWeight = FontWeight.Medium,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                                TextButton(onClick = { roomId = m.id }) { Text("Join", color = ViroColors.BlueAccent) }
-                                IconButton(onClick = { scope.launch { repo.declineInvitation(invitation.invitationId) } },
-                                    modifier = Modifier.size(32.dp)) {
-                                    Icon(Icons.Default.Close, "Dismiss invitation", tint = ViroColors.textMuted,
-                                        modifier = Modifier.size(16.dp))
-                                }
-                            }
-                        }
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                // Your own Moment is a live state, not an invitation. It stays
+                // small so it cannot outshout somebody asking for you.
+                if (own != null) {
+                    item(key = "mine") {
+                        YourMomentStrip(
+                            own = own,
+                            photoUrl = profile.effectivePhotoUrl,
+                            displayName = profile.displayName,
+                            clock = clock,
+                            onReturn = { roomId = own.id },
+                            onManage = { manage = own.id },
+                        )
                     }
                 }
-                item(key = "active-title") {
-                    Text("Active now", color = ViroColors.textPrimary, fontWeight = FontWeight.SemiBold,
-                        style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+
+                if (featured != null) {
+                    item(key = "featured-" + featured.id) {
+                        FeaturedMoment(
+                            m = featured,
+                            clock = clock,
+                            invited = featured.id in invitedIds,
+                            busy = busy,
+                            onStepIn = { actionError = null; roomId = featured.id },
+                            onKnock = {
+                                actionError = null
+                                busy = true
+                                scope.launch { repo.knock(featured.id).onFailure { actionError = it.message }; busy = false }
+                            },
+                        )
+                    }
                 }
-                if (peers.isEmpty()) {
+
+                items(secondary, key = { it.id }) { m ->
+                    SecondaryMoment(m = m, clock = clock, onOpen = { actionError = null; roomId = m.id })
+                }
+
+                if (pendingInvites.isNotEmpty()) {
+                    items(pendingInvites, key = { it.invitationId }) { invitation ->
+                        InvitationRow(
+                            moment = invitation.moment,
+                            onOpen = { roomId = invitation.moment.id },
+                            onDismiss = { scope.launch { repo.declineInvitation(invitation.invitationId) } },
+                        )
+                    }
+                }
+
+                // Nothing is manufactured to fill the screen. A quiet evening
+                // is allowed to look like one.
+                if (featured == null && secondary.isEmpty() && pendingInvites.isEmpty()) {
                     item(key = "empty") {
                         if (loaded) {
-                            Surface(shape = RoundedCornerShape(12.dp), color = ViroColors.surface, modifier = Modifier.fillMaxWidth()) {
-                                Column(Modifier.padding(16.dp)) {
-                                    Text("It's quiet right now.", color = ViroColors.textPrimary, fontWeight = FontWeight.Medium)
-                                    Text("Start a Moment and give your people something to join.",
-                                        color = ViroColors.textMuted, style = MaterialTheme.typography.bodySmall)
+                            Column(Modifier.fillMaxWidth().padding(top = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    "Your people are quiet right now.",
+                                    color = ViroColors.textPrimary,
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    "Open a Moment for them.",
+                                    color = ViroColors.textMuted,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                if (own == null) {
+                                    Spacer(Modifier.height(20.dp))
+                                    Button(onClick = { create = true }) { Text("Start a Moment") }
                                 }
                             }
                         } else {
-                            Text("Checking what's happening…", color = ViroColors.textMuted, style = MaterialTheme.typography.bodySmall)
+                            Text("Checking who's around…", color = ViroColors.textMuted, style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
-                items(peers, key = { it.id }) { m ->
-                    NowCard(m, clock, primaryLabel = if (m.allowVoice) "Knock" else "Join",
-                        onPrimary = {
-                            actionError = null
-                            if (m.allowVoice) {
-                                busy = true
-                                scope.launch { repo.knock(m.id).onFailure { actionError = it.message }; busy = false }
-                            } else {
-                                roomId = m.id
-                            }
-                        },
-                        onReact = { emoji ->
-                            scope.launch { repo.cheer(m.id, emoji).onFailure { actionError = it.message } }
-                        })
-                }
+
+                // A failed refresh keeps whatever is already on screen: losing
+                // the room somebody opened because a request timed out is worse
+                // than showing it a minute stale.
                 if (error != null) item(key = "error") {
-                    TextButton(onClick = { scope.launch { repo.refresh() } }) { Text("Couldn't refresh · Retry", color = ViroColors.textMuted) }
+                    TextButton(onClick = { scope.launch { repo.refresh() } }) {
+                        Text("Couldn't refresh right now · Try again", color = ViroColors.textMuted)
+                    }
                 }
                 if (actionError != null) item(key = "action-error") {
                     Text(actionError!!, color = ViroColors.textMuted, style = MaterialTheme.typography.bodySmall)
@@ -1003,70 +1028,345 @@ private fun MomentPage(title: String, onBack: () -> Unit, content: androidx.comp
     }
 }
 
+/** What the host said, or a plain line when they said nothing. */
+private fun MomentDto.invitation(): String = invitationText?.takeIf { it.isNotBlank() } ?: "Come join me"
+
+/** "Cooking dinner · 28 min left", rather than a timer pill off on its own. */
+private fun MomentDto.line(clock: Long): String {
+    val left = remainingMinutes(endsAt(), clock)
+    return activity() + " · " + (if (left >= 60) "another " + (left / 60) + " h" else "another " + left + " min")
+}
+
 /**
- * The person's own Moment, at the top of Now.
+ * The person's own Moment: a live state, kept deliberately small.
  *
- * Their card, in the same language as everyone else's — a Moment of your own
- * is the same kind of thing as a Moment of Natasha's, and a plain settings row
- * above a wall of cards said otherwise.
+ * It used to be the largest thing on the screen, which put what you are
+ * already doing above everyone asking for you. This says the same facts in a
+ * strip and gets out of the way.
  */
 @Composable
-private fun YourMomentCard(
-    own: MomentDto?,
+private fun YourMomentStrip(
+    own: MomentDto,
     photoUrl: String?,
     displayName: String,
     clock: Long,
-    onClick: () -> Unit,
+    onReturn: () -> Unit,
+    onManage: () -> Unit,
 ) {
     Surface(
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(18.dp),
         color = ViroColors.surfaceRaised,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Box(Modifier.fillMaxWidth().height(if (own == null) 120.dp else 140.dp).clickable(onClick = onClick)) {
-            com.viroreach.app.moments.engine.MomentActivityArt(
-                own?.intent ?: "BE",
-                Modifier.fillMaxSize(),
-            )
-            Row(
-                Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.border(1.dp, ViroColors.BlueAccent, CircleShape).padding(3.dp)) {
-                    ViroAvatar(size = ViroAvatarSize.Small, imageUrl = photoUrl, displayName = displayName)
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.clickable(onClick = onManage)) {
+                ViroAvatar(size = ViroAvatarSize.Small, imageUrl = photoUrl, displayName = displayName)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f).clickable(onClick = onManage)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LiveDot()
+                    Spacer(Modifier.width(6.dp))
                     Text(
-                        if (own == null) "What are you up to?" else "Your Moment",
+                        "YOUR MOMENT",
+                        color = ViroColors.textMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                Text(
+                    own.activity(),
+                    color = ViroColors.textPrimary,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    remainingMinutes(own.endsAt(), clock).toString() + " min left",
+                    color = ViroColors.textMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            TextButton(onClick = onReturn) {
+                Text("Return", color = ViroColors.BlueAccent, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+/**
+ * The strongest invitation on the screen, as a doorway rather than a post.
+ *
+ * What the person said comes first and largest, because "come keep me company"
+ * is the reason to walk in and "Cooking" is only the label on the door. Their
+ * face sits with their name rather than in a ring in the corner, and the one
+ * thing to do is Step in.
+ */
+@Composable
+private fun FeaturedMoment(
+    m: MomentDto,
+    clock: Long,
+    invited: Boolean,
+    busy: Boolean,
+    onStepIn: () -> Unit,
+    onKnock: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(24.dp),
+        color = ViroColors.surfaceRaised,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Box(Modifier.fillMaxWidth().height(320.dp).clickable(onClick = onStepIn)) {
+            com.viroreach.app.moments.engine.MomentActivityArt(m.intent ?: "BE", Modifier.fillMaxSize())
+            // Only behind the words, so the scene keeps its own light.
+            Box(
+                Modifier.align(Alignment.BottomStart).fillMaxWidth().fillMaxHeight(0.72f)
+                    .background(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            0f to androidx.compose.ui.graphics.Color.Transparent,
+                            0.55f to androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f),
+                            1f to androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.85f),
+                        ),
+                    ),
+            )
+            MomentPresenceEdge(
+                intent = m.intent ?: "BE",
+                modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(),
+            )
+            if (invited) {
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.45f),
+                    modifier = Modifier.align(Alignment.TopStart).padding(14.dp),
+                ) {
+                    Text(
+                        m.displayName.substringBefore(' ') + " asked for you",
+                        color = androidx.compose.ui.graphics.Color.White,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    )
+                }
+            }
+
+            Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(18.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    MomentAvatar(m)
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        m.displayName,
                         color = androidx.compose.ui.graphics.Color.White,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                }
+                Spacer(Modifier.height(10.dp))
+                // The loudest thing on the card: what they actually said.
+                Text(
+                    m.invitation(),
+                    color = androidx.compose.ui.graphics.Color.White,
+                    style = MaterialTheme.typography.headlineSmall,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LiveDot()
+                    Spacer(Modifier.width(6.dp))
                     Text(
-                        own?.let { "${it.activity()} · ${remainingMinutes(it.endsAt(), clock)} min left" }
-                            ?: "Open a room and let your people in",
-                        color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.78f),
+                        m.line(clock),
+                        color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.72f),
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Spacer(Modifier.width(10.dp))
-                Surface(shape = RoundedCornerShape(50), color = ViroColors.BlueAccent) {
-                    Text(
-                        if (own == null) "Start" else "Manage",
-                        color = ViroColors.NavyBackground,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
-                    )
+                WhoIsHere(m, androidx.compose.ui.graphics.Color.White.copy(alpha = 0.72f))
+                Spacer(Modifier.height(14.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        onClick = onStepIn,
+                        enabled = !busy,
+                        modifier = Modifier.heightIn(min = 46.dp),
+                    ) {
+                        Text("Step in", fontWeight = FontWeight.SemiBold)
+                    }
+                    // Only where the room actually takes a knock.
+                    if (m.allowVoice) {
+                        Spacer(Modifier.width(8.dp))
+                        TextButton(onClick = onKnock, enabled = !busy, modifier = Modifier.heightIn(min = 46.dp)) {
+                            Text("Knock", color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f))
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+/** A smaller doorway: enough to recognise the person and what they said. */
+@Composable
+private fun SecondaryMoment(m: MomentDto, clock: Long, onOpen: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = ViroColors.surfaceRaised,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.height(108.dp).clickable(onClick = onOpen), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(108.dp).fillMaxHeight()) {
+                com.viroreach.app.moments.engine.MomentActivityArt(m.intent ?: "BE", Modifier.fillMaxSize())
+                MomentPresenceEdge(
+                    intent = m.intent ?: "BE",
+                    modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(),
+                )
+                Box(Modifier.align(Alignment.Center)) { MomentAvatar(m) }
+            }
+            Column(Modifier.weight(1f).padding(horizontal = 14.dp, vertical = 12.dp)) {
+                Text(
+                    m.displayName,
+                    color = ViroColors.textPrimary,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    m.invitation(),
+                    color = ViroColors.textPrimary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    m.line(clock),
+                    color = ViroColors.textMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** An invitation still waiting on an answer, with a way to say no. */
+@Composable
+private fun InvitationRow(moment: MomentDto, onOpen: () -> Unit, onDismiss: () -> Unit) {
+    Surface(shape = RoundedCornerShape(18.dp), color = ViroColors.surface, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.height(78.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(78.dp).fillMaxHeight().clickable(onClick = onOpen)) {
+                com.viroreach.app.moments.engine.MomentActivityArt(moment.intent ?: "BE", Modifier.fillMaxSize())
+                Box(Modifier.align(Alignment.Center)) { MomentAvatar(moment) }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f).clickable(onClick = onOpen)) {
+                Text(
+                    moment.displayName.substringBefore(' ') + " asked for you",
+                    color = ViroColors.textMuted,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Text(
+                    moment.invitation(),
+                    color = ViroColors.textPrimary,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            TextButton(onClick = onOpen) { Text("Step in", color = ViroColors.BlueAccent) }
+            IconButton(onClick = onDismiss, modifier = Modifier.size(40.dp)) {
+                Icon(Icons.Default.Close, "Dismiss invitation", tint = ViroColors.textMuted, modifier = Modifier.size(16.dp))
+            }
+        }
+    }
+}
+
+/**
+ * Who is already inside.
+ *
+ * The host is always there, and their face is the one the card already has —
+ * so this is true without asking the server for a guest list. Anyone else is a
+ * count, because inventing names or faces for them would be worse than
+ * counting them.
+ */
+@Composable
+private fun WhoIsHere(m: MomentDto, color: androidx.compose.ui.graphics.Color) {
+    val others = (m.participantCount ?: 0) - 1
+    if (others > 0) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            m.displayName.substringBefore(' ') + " + " + others + (if (others == 1) " other is here" else " others are here"),
+            color = color,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** Live, said with a shape as well as a colour. */
+@Composable
+private fun LiveDot() {
+    Box(
+        Modifier.size(7.dp).clip(CircleShape)
+            .background(ViroColors.GreenAvailable),
+    )
+}
+
+/**
+ * The one mark that says a Moment is alive.
+ *
+ * A hairline along the top of the card that breathes at the pace of whatever
+ * is happening — slow for a quiet room, a little quicker where there is music.
+ * Deliberately not a ring around an avatar: that is somebody else's product,
+ * and it turns a person into a story to be watched.
+ */
+@Composable
+private fun MomentPresenceEdge(intent: String, modifier: Modifier = Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val still = remember {
+        runCatching {
+            android.provider.Settings.Global.getFloat(
+                context.contentResolver,
+                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f,
+            ) == 0f
+        }.getOrDefault(false)
+    }
+    val period = when (intent) {
+        "LISTEN" -> 1600
+        "CELEBRATE" -> 1800
+        "COOK" -> 2600
+        "WALK" -> 3000
+        "WATCH" -> 4200
+        "STAY" -> 5200
+        else -> 3400
+    }
+    val breath = rememberInfiniteTransition(label = "presence")
+    val raw by breath.animateFloat(
+        initialValue = 0.28f,
+        targetValue = 0.85f,
+        animationSpec = infiniteRepeatable(
+            androidx.compose.animation.core.tween(period, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+            androidx.compose.animation.core.RepeatMode.Reverse,
+        ),
+        label = "presenceBreath",
+    )
+    val alpha = if (still) 0.6f else raw
+    Box(
+        modifier.height(2.dp).background(
+            androidx.compose.ui.graphics.Brush.horizontalGradient(
+                0f to androidx.compose.ui.graphics.Color.Transparent,
+                0.5f to ViroColors.BlueAccent.copy(alpha = alpha),
+                1f to androidx.compose.ui.graphics.Color.Transparent,
+            ),
+        ),
+    )
 }
 
 /**
@@ -1123,6 +1423,7 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
     var duration by rememberSaveable { mutableIntStateOf(30) }
     var audience by rememberSaveable { mutableStateOf("CONNECTIONS") }
     var text by rememberSaveable { mutableStateOf("") }
+    var invitation by rememberSaveable { mutableStateOf("") }
     ModalBottomSheet(onDismissRequest = { if (!busy) onDismiss() }, containerColor = ViroColors.surface,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         LazyColumn(Modifier.fillMaxWidth().imePadding(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1167,6 +1468,20 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
                 }
             }
             item {
+                // What they say is the reason anyone walks in, so it is asked
+                // for here rather than buried. Optional: somebody who says
+                // nothing gets a plain line, not a sentence invented for them.
+                Text("Say something to bring them in", color = ViroColors.textPrimary)
+                OutlinedTextField(
+                    value = invitation,
+                    onValueChange = { invitation = it.take(80) },
+                    placeholder = { Text("Come keep me company", color = ViroColors.textMuted) },
+                    supportingText = { Text(invitation.length.toString() + "/80 · optional") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 2,
+                )
+            }
+            item {
                 Text("For how long", color = ViroColors.textPrimary)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(listOf(15, 30, 60, 120), key = { it }) { minutes ->
@@ -1193,9 +1508,15 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
                         onStart(
                             if (somethingElse) {
                                 // Their own words, in a room shaped for being together.
-                                CreateMomentBody("CUSTOM", text.trim(), audience, duration, intent = "BE")
+                                CreateMomentBody(
+                                    "CUSTOM", text.trim(), audience, duration, intent = "BE",
+                                    invitationText = invitation.trim().ifBlank { null },
+                                )
                             } else {
-                                CreateMomentBody(intent?.legacyType ?: "FREE", null, audience, duration, intent = intentKey)
+                                CreateMomentBody(
+                                    intent?.legacyType ?: "FREE", null, audience, duration, intent = intentKey,
+                                    invitationText = invitation.trim().ifBlank { null },
+                                )
                             },
                         )
                     },
