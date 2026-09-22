@@ -28,6 +28,9 @@ import com.viroreach.voice.webrtc.PresenceSnapshot
 import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -78,7 +81,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.viroreach.app.moments.InviteSheet
 import com.viroreach.app.moments.MomentRoomState
-import com.viroreach.app.moments.RoomChat
 import com.viroreach.app.moments.RoomPeople
 import com.viroreach.app.moments.activity
 import com.viroreach.app.moments.endsAt
@@ -279,42 +281,18 @@ fun MomentRoomEngine(
                         }
                     }
                 }
-                // Chat belongs in the room. As a ModalBottomSheet it opened its
-                // own window on top of the Moment's, which put it visually
-                // outside the room — the scene, the header and whoever was on
-                // screen all disappeared behind a slab. Here it slides up over
-                // the stage, the room stays visible above it, and closing it
-                // puts you back where you already were.
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = chatOpen,
-                    enter = fadeIn(tween(180)) + slideInVertically(tween(260)) { it },
-                    exit = fadeOut(tween(160)) + slideOutVertically(tween(220)) { it },
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                        color = ViroColors.surface.copy(alpha = 0.97f),
-                        modifier = Modifier.fillMaxWidth().fillMaxHeight(0.62f),
-                    ) {
-                        Column(Modifier.fillMaxSize()) {
-                            Row(
-                                Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    "In the room",
-                                    color = ViroColors.textMuted,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                IconButton(onClick = { chatOpen = false }) {
-                                    Icon(Icons.Default.Close, "Close chat", tint = ViroColors.textMuted)
-                                }
-                            }
-                            RoomChat(room, messages, me, chatError, onError = { chatError = it })
-                        }
-                    }
-                }
+                // What people say belongs in the room, over what is happening,
+                // the way remarks belong to the thing they are about. The
+                // sliding panel was still a separate place: opening it covered
+                // the room, and reading meant leaving. These sit on the scene,
+                // the newest few, and fade out of the way.
+                RoomComments(
+                    messages = messages,
+                    me = me,
+                    modifier = Modifier.align(Alignment.BottomStart)
+                        .fillMaxWidth(0.82f)
+                        .padding(start = 16.dp, end = 8.dp, bottom = 8.dp),
+                )
                 TouchArrivals(room)
                 androidx.compose.animation.AnimatedVisibility(
                     visible = arrival != null || notice != null,
@@ -331,6 +309,28 @@ fun MomentRoomEngine(
                         )
                     }
                 }
+            }
+
+            // Saying something does not take the room away either: the box
+            // appears above the controls and the scene stays where it is.
+            androidx.compose.animation.AnimatedVisibility(
+                visible = chatOpen,
+                enter = fadeIn(tween(160)) + slideInVertically(tween(220)) { it },
+                exit = fadeOut(tween(140)) + slideOutVertically(tween(200)) { it },
+            ) {
+                RoomComposer(
+                    room = room,
+                    onError = { chatError = it },
+                    onDone = { chatOpen = false },
+                )
+            }
+            if (chatError != null) {
+                Text(
+                    chatError ?: "",
+                    color = Color.White.copy(alpha = 0.75f),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
+                )
             }
 
             RoomControls(
@@ -733,6 +733,100 @@ private fun SceneSheet(current: String, pinned: Boolean, onPick: (String?) -> Un
             TextButton(onClick = { onPick(null) }) {
                 Text("Match the activity again", color = ViroColors.BlueAccent)
             }
+        }
+    }
+}
+
+/**
+ * The last few things said, over the room itself.
+ *
+ * Only a handful, and only for a while: a remark in a room is not a transcript
+ * to scroll, and anything older than the conversation has moved on from is
+ * noise on top of what people came to do. Nothing has a solid background — the
+ * scene shows through, which is what keeps it part of the room rather than a
+ * window onto somewhere else.
+ */
+@Composable
+private fun RoomComments(
+    messages: List<com.viroreach.core.network.MomentMessageDto>,
+    me: String?,
+    modifier: Modifier = Modifier,
+) {
+    val recent = messages.takeLast(4)
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        for ((index, message) in recent.withIndex()) {
+            // The oldest of the few is on its way out, so the eye goes to the
+            // newest without anything having to move.
+            val fade = 0.45f + 0.55f * ((index + 1).toFloat() / recent.size)
+            Row(verticalAlignment = Alignment.Top) {
+                Text(
+                    if (message.senderUserId == me) "You" else message.senderName.substringBefore(' '),
+                    color = ViroColors.BlueAccent.copy(alpha = fade),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    message.body ?: com.viroreach.app.moments.SEALED_UNREADABLE,
+                    color = Color.White.copy(alpha = fade),
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** One line to say something, and nothing else taken off the screen for it. */
+@Composable
+private fun RoomComposer(
+    room: com.viroreach.app.moments.MomentRoomState,
+    onError: (String) -> Unit,
+    onDone: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var draft by remember { mutableStateOf("") }
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    fun send() {
+        val text = draft.trim()
+        if (text.isEmpty()) {
+            onDone()
+        } else {
+            draft = ""
+            scope.launch { room.send(text).onFailure { onError(it.message ?: "Couldn't send.") } }
+        }
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it.take(500) },
+            placeholder = { Text("Say something", color = Color.White.copy(alpha = 0.5f)) },
+            modifier = Modifier.weight(1f).focusRequester(focus),
+            maxLines = 3,
+            shape = RoundedCornerShape(24.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedContainerColor = Color.Black.copy(alpha = 0.35f),
+                unfocusedContainerColor = Color.Black.copy(alpha = 0.35f),
+                focusedBorderColor = ViroColors.BlueAccent.copy(alpha = 0.7f),
+                unfocusedBorderColor = Color.White.copy(alpha = 0.18f),
+                cursorColor = ViroColors.BlueAccent,
+            ),
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                imeAction = androidx.compose.ui.text.input.ImeAction.Send,
+            ),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = { send() }),
+        )
+        Spacer(Modifier.width(8.dp))
+        TextButton(onClick = { send() }) {
+            Text("Send", color = ViroColors.BlueAccent, fontWeight = FontWeight.SemiBold)
         }
     }
 }

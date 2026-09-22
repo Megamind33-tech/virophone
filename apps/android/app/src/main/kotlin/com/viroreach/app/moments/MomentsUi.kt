@@ -114,6 +114,7 @@ fun NowScreen(
     val pendingInvites = invitations.filter { it.moment.id != featured?.id }
 
     MomentsTheme {
+      ViroScreenBackground {
         Column(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp)) {
                 Text("Now", color = ViroColors.textPrimary, style = MaterialTheme.typography.headlineMedium)
@@ -213,8 +214,25 @@ fun NowScreen(
                 if (actionError != null) item(key = "action-error") {
                     Text(actionError!!, color = ViroColors.textMuted, style = MaterialTheme.typography.bodySmall)
                 }
+                // Room for the button that floats over the end of the list.
+                if (own == null) item(key = "fab-room") { Spacer(Modifier.height(72.dp)) }
             }
         }
+
+        // Opening a Moment cannot depend on nobody else having one. This used
+        // to live only in the empty state, so the moment anybody else was
+        // active it disappeared and there was no way to start your own.
+        if (own == null) {
+            ExtendedFloatingActionButton(
+                onClick = { create = true },
+                containerColor = ViroColors.BlueAccent,
+                contentColor = ViroColors.NavyBackground,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
+            ) {
+                Text("Open a Moment", fontWeight = FontWeight.SemiBold)
+            }
+        }
+      }
 
         if (create) CreateMomentSheet(onDismiss = { create = false }, onStart = { body ->
             busy = true
@@ -741,134 +759,14 @@ private fun KeepsakeChoice(
         }
     }
 }
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-internal fun RoomChat(
-    room: MomentRoomState,
-    messages: List<MomentMessageDto>,
-    me: String?,
-    actionError: String?,
-    onError: (String) -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    var draft by remember { mutableStateOf("") }
-    var reactTo by remember { mutableStateOf<MomentMessageDto?>(null) }
-    val listState = rememberLazyListState()
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
-    }
-    Column(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState,
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(messages, key = { it.id }) { message ->
-                // Arriving, rather than appearing. A message that pops into
-                // existence reads as a list refreshing; one that rises into
-                // place reads as somebody saying something.
-                MessageBubble(
-                    message,
-                    mine = message.senderUserId == me,
-                    onReact = { reactTo = message },
-                    modifier = Modifier.animateItemPlacement(
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioLowBouncy,
-                            stiffness = Spring.StiffnessMediumLow,
-                        ),
-                    ),
-                )
-            }
-        }
-        if (actionError != null) Text(actionError, color = ViroColors.textMuted,
-            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp))
-        // No imePadding here: this is drawn inside the room, whose own
-        // safeDrawingPadding already moves everything up for the keyboard.
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(value = draft, onValueChange = { draft = it.take(500) },
-                placeholder = { Text("Message the room", color = ViroColors.textMuted) },
-                modifier = Modifier.weight(1f), maxLines = 3,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = ViroColors.textPrimary,
-                    unfocusedTextColor = ViroColors.textPrimary,
-                    focusedBorderColor = ViroColors.BlueAccent,
-                    unfocusedBorderColor = ViroColors.textMuted))
-            Spacer(Modifier.width(8.dp))
-            Button(enabled = draft.isNotBlank(), onClick = {
-                val text = draft; draft = ""
-                scope.launch { room.send(text).onFailure { onError(it.message ?: "Couldn't send.") } }
-            }) { Text("Send") }
-        }
-    }
-    reactTo?.let { message ->
-        AlertDialog(onDismissRequest = { reactTo = null }, containerColor = ViroColors.surface,
-            title = { Text("React", color = ViroColors.textPrimary) },
-            text = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    momentReactions.forEach { emoji ->
-                        TextButton(onClick = {
-                            reactTo = null
-                            scope.launch { room.react(message.id, emoji) }
-                        }) { Text(emoji, style = MaterialTheme.typography.headlineMedium) }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = {
-                    val mine = message.reactions.any { r -> me in r.userIds }
-                    reactTo = null
-                    if (mine) scope.launch { room.react(message.id, null) }
-                }) { Text("Remove mine", color = ViroColors.textMuted) }
-            })
-    }
-}
+/*
+ * RoomChat and MessageBubble lived here: a full scrolling transcript with
+ * long-press reactions. The room shows the last few remarks over the scene
+ * instead, so nothing reached them any more. Message reactions still exist
+ * server-side and in the realtime frames; there is simply no control for them
+ * while chat reads as comments.
+ */
 
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun MessageBubble(
-    message: MomentMessageDto,
-    mine: Boolean,
-    onReact: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    // Each bubble plays its entrance once, the first time it is composed.
-    val entered = remember { Animatable(0f) }
-    LaunchedEffect(message.id) {
-        entered.animateTo(1f, spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow))
-    }
-    Column(
-        modifier
-            .fillMaxWidth()
-            .graphicsLayer {
-                alpha = entered.value
-                // From the side it came from, and a touch small, so it settles
-                // into place rather than snapping there.
-                translationX = (if (mine) 28f else -28f) * (1f - entered.value)
-                translationY = 10f * (1f - entered.value)
-                scaleX = 0.94f + 0.06f * entered.value
-                scaleY = 0.94f + 0.06f * entered.value
-                transformOrigin = TransformOrigin(if (mine) 1f else 0f, 1f)
-            },
-        horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
-    ) {
-        if (!mine) Text(message.senderName, color = ViroColors.textMuted,
-            style = MaterialTheme.typography.labelSmall)
-        Surface(shape = RoundedCornerShape(12.dp),
-            color = if (mine) ViroColors.BlueAccent else ViroColors.surfaceRaised,
-            modifier = Modifier.combinedClickable(onClick = {}, onLongClick = onReact)) {
-            // A sealed message this device could not open still has its place
-            // in the room; the placeholder says so rather than showing a blank.
-            Text(message.body ?: SEALED_UNREADABLE,
-                color = if (mine) ViroColors.NavyBackground else ViroColors.textPrimary,
-                style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(10.dp))
-        }
-        if (message.reactions.isNotEmpty()) {
-            Text(message.reactions.joinToString("  ") { r -> "${r.emoji}${if (r.userIds.size > 1) r.userIds.size else ""}" },
-                color = ViroColors.textMuted, style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(top = 2.dp))
-        }
-    }
-}
 
 @Composable
 internal fun RoomPeople(
