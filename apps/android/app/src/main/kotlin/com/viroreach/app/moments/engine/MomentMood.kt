@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -37,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import app.rive.runtime.kotlin.RiveAnimationView
 import app.rive.runtime.kotlin.controllers.RiveFileController
+import app.rive.runtime.kotlin.core.Loop
 import app.rive.runtime.kotlin.core.PlayableInstance
 import app.rive.runtime.kotlin.core.Rive
 import com.viroreach.app.R
@@ -61,11 +64,13 @@ enum class MomentMood(
     /** How it reads when choosing it about yourself. */
     val aboutMe: String,
     val tint: Color,
+    /** The animation in the artwork that shows this face. */
+    val animation: String,
 ) {
-    HAPPY("HAPPY", "in good spirits", "Good", Color(0xFF4CD964)),
-    SAD("SAD", "a bit low", "Low", Color(0xFF7FA6D6)),
-    ANGRY("ANGRY", "wound up", "Wound up", Color(0xFFFF6B4A)),
-    CRAZY("CRAZY", "all over the place", "Wired", Color(0xFFD9A8FF)),
+    HAPPY("HAPPY", "in good spirits", "Good", Color(0xFF4CD964), "Happy"),
+    SAD("SAD", "a bit low", "Low", Color(0xFF7FA6D6), "Sad"),
+    ANGRY("ANGRY", "wound up", "Wound up", Color(0xFFFF6B4A), "Angry"),
+    CRAZY("CRAZY", "all over the place", "Wired", Color(0xFFD9A8FF), "Crazy"),
     ;
 
     companion object {
@@ -139,6 +144,10 @@ fun MoodScreen(
     // The listener is built once and outlives recompositions, so the callback
     // it holds has to be the current one rather than the one from first frame.
     val pick by rememberUpdatedState(onPick)
+    // The artwork draws its own Happy / Sad / Angry / Crazy buttons, but the
+    // state machine that would notice a press cannot be loaded, so the
+    // presses are noticed here instead and the matching face is played.
+    var view by remember { mutableStateOf<RiveAnimationView?>(null) }
 
     // Long enough on screen without dying counts as proof the artwork is safe
     // on this phone, and the note that would have disabled it is cleared.
@@ -154,14 +163,34 @@ fun MoodScreen(
         }
     }
 
-    Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+    Box(
+        modifier
+            .fillMaxWidth()
+            .pointerInput(animation) {
+                detectTapGestures { tap ->
+                    val tapped = moodAt(tap.x, tap.y, size.width, size.height)
+                    if (tapped != null) {
+                        runCatching {
+                            view?.play(tapped.animation, loop = Loop.ONESHOT)
+                        }
+                        pick(tapped)
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
         if (reason == null) {
             AndroidView(
                 factory = { ctx ->
                     com.viroreach.app.diagnostics.Breadcrumbs.moment("animation-init")
                     runCatching {
-                        RiveAnimationView(ctx).apply {
-                            setRiveResource(R.raw.mood_interaction, animationName = animation, autoplay = true)
+                        RiveAnimationView(ctx).also { view = it }.apply {
+                            setRiveResource(
+                                R.raw.mood_interaction,
+                                animationName = animation,
+                                autoplay = true,
+                                fit = app.rive.runtime.kotlin.core.Fit.COVER,
+                            )
                             // Kept, and currently silent. notifyStateChanged
                             // only ever fires for a state machine, and this
                             // file's cannot be instantiated — so the faces
@@ -354,6 +383,35 @@ private fun moodAnimation(context: Context): String? = runCatching {
     null
 }
 
+/**
+ * Which of the artwork's own buttons a tap landed on, if any.
+ *
+ * The artboard draws the four choices itself and would normally handle the
+ * press through its state machine; that state machine cannot be instantiated,
+ * so the geometry is done here. The numbers are measured, not guessed: the
+ * file was rendered in Rive's web runtime and the button centres came out at
+ * 0.339, 0.447, 0.553 and 0.665 across the artboard, which is an even split of
+ * the band below between [ROW_LEFT] and [ROW_RIGHT].
+ *
+ * Anything outside that band is ignored rather than rounded to the nearest
+ * face — a tap on the big face above must not quietly claim a mood nobody
+ * chose.
+ */
+private fun moodAt(x: Float, y: Float, width: Int, height: Int): MomentMood? {
+    if (width <= 0 || height <= 0) return null
+    // COVER: the artboard is scaled to fill and the overflow is centred, so
+    // the same sum has to be done here to know where the artwork really is.
+    val scale = maxOf(width / ART_W, height / ART_H)
+    val drawnW = ART_W * scale
+    val drawnH = ART_H * scale
+    val u = (x - (width - drawnW) / 2f) / drawnW
+    val v = (y - (height - drawnH) / 2f) / drawnH
+    if (v < ROW_TOP || v > ROW_BOTTOM || u < ROW_LEFT || u > ROW_RIGHT) return null
+    val across = (u - ROW_LEFT) / (ROW_RIGHT - ROW_LEFT)
+    val order = listOf(MomentMood.HAPPY, MomentMood.SAD, MomentMood.ANGRY, MomentMood.CRAZY)
+    return order[(across * order.size).toInt().coerceIn(0, order.size - 1)]
+}
+
 /** Writes down why the artwork is not being shown, for the next person to read. */
 private fun noteMoodReason(context: Context, why: String) {
     com.viroreach.app.diagnostics.CrashReporter.noteReason(context.applicationContext, RIVE_KEY, why)
@@ -372,3 +430,11 @@ private const val SETTLED_MS = 4_000L
 private const val MAX_RETRIES = 2
 /** Shown when the file has nothing playable in it. */
 private const val NO_ANIMATION = "The artwork has no animation this app can play."
+/** The artboard's own size, which its buttons are positioned against. */
+private const val ART_W = 1741f
+private const val ART_H = 1751f
+/** The band the four drawn buttons sit in, as fractions of the artboard. */
+private const val ROW_LEFT = 0.28f
+private const val ROW_RIGHT = 0.72f
+private const val ROW_TOP = 0.70f
+private const val ROW_BOTTOM = 0.83f
