@@ -1,5 +1,10 @@
 package com.viroreach.app.moments.engine
+import com.viroreach.core.designsystem.ViroColors
 
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.FastForward
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -505,6 +510,127 @@ private fun SkipButton(seconds: Int, onClick: () -> Unit) {
 }
 
 /**
+ * One track in the list.
+ *
+ * A row rather than a card. Chunky cards with a text button on the end read as
+ * a settings list; a list of music is rows — a cover, the title, who it came
+ * from and how long it is, and nothing else competing for the eye. The
+ * playing one says so with bars rather than by being a different colour,
+ * because colour has to carry the whole thing when it is the only signal.
+ */
+@Composable
+private fun TrackRow(
+    item: com.viroreach.core.network.MomentMediaDto,
+    current: Boolean,
+    playing: Boolean,
+    mine: Boolean,
+    onPlay: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onPlay)
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // No per-track cover exists — the artwork comes out of whatever is
+        // loaded in the player — so this is a plate rather than a fake one.
+        Box(
+            Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(
+                    Brush.linearGradient(
+                        listOf(Color.White.copy(alpha = 0.18f), Color.White.copy(alpha = 0.06f)),
+                    ),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (playing) EqualizerBars() else Text(
+                if (item.kind == "VIDEO") "▶" else "♪",
+                color = Color.White.copy(alpha = 0.75f),
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                item.title,
+                color = if (current) ViroColors.BlueAccent else Color.White,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                if (mine) "You" else item.ownerName.substringBefore(' '),
+                color = Color.White.copy(alpha = 0.55f),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        item.durationMs?.let {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                clock(it),
+                color = Color.White.copy(alpha = 0.45f),
+                style = MaterialTheme.typography.labelMedium,
+            )
+        }
+        if (mine) {
+            Box {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "More",
+                    tint = Color.White.copy(alpha = 0.55f),
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .clickable { menu = true }
+                        .padding(6.dp),
+                )
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Remove from the room") },
+                        onClick = { menu = false; onRemove() },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Three bars, moving, because that is what a playing track looks like. */
+@Composable
+private fun EqualizerBars() {
+    val beat = rememberInfiniteTransition(label = "bars")
+    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        for (i in 0 until 3) {
+            val height by beat.animateFloat(
+                initialValue = 6f,
+                targetValue = 18f,
+                animationSpec = infiniteRepeatable(
+                    tween(durationMillis = 520 + i * 160, easing = LinearEasing),
+                    RepeatMode.Reverse,
+                ),
+                label = "bar$i",
+            )
+            Box(
+                Modifier
+                    .width(3.dp)
+                    .height(height.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(ViroColors.BlueAccent),
+            )
+        }
+    }
+}
+
+/**
  * What has been shared, to pick from, and a way to share something from this
  * phone. What people may share is said plainly, once.
  */
@@ -533,29 +659,14 @@ private fun Chooser(ctx: MomentRoomContext, media: MomentMediaContext, kind: Str
         items(items.size, key = { items[it].id }) { i ->
             val item = items[i]
             val current = item.id == media.view.mediaId
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = Color.White.copy(alpha = if (current) 0.22f else 0.1f),
-                modifier = Modifier.fillMaxWidth().clickable(enabled = !current) { scope.launch { media.share.playback.load(item.id) } },
-            ) {
-                Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(item.title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            listOfNotNull(
-                                if (item.ownerUserId == ctx.me) "from you" else "from ${item.ownerName.substringBefore(' ')}",
-                                item.durationMs?.let { clock(it) },
-                            ).joinToString(" · "),
-                            color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    if (item.ownerUserId == ctx.me) {
-                        TextButton(onClick = { scope.launch { ctx.room.unshare(item.id) } }) {
-                            Text("Remove", color = Color.White.copy(alpha = 0.7f))
-                        }
-                    }
-                }
-            }
+            TrackRow(
+                item = item,
+                current = current,
+                playing = current && media.view.playing,
+                mine = item.ownerUserId == ctx.me,
+                onPlay = { if (!current) scope.launch { media.share.playback.load(item.id) } },
+                onRemove = { scope.launch { ctx.room.unshare(item.id) } },
+            )
         }
         item {
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {

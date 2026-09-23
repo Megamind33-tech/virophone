@@ -278,39 +278,42 @@ fun MomentRoomEngine(
                             UnsupportedHere()
                         }
                     }
-                    // Whatever sits beside the room, compact, above the controls.
-                    val besides = besideKeys.mapNotNull { MomentModules.find(it) }
-                    if (besides.isNotEmpty()) {
-                        Column(
-                            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 16.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            besides.forEach { it.Secondary(ctx, Modifier.fillMaxWidth()) }
+                    // Everything that sits over the room sits in one column
+                    // at the bottom of it. Two overlays both anchored to the
+                    // bottom of the same box is how the remarks ended up
+                    // printed through the music bar: neither knew the other
+                    // was there. One column, in order, and they cannot.
+                    Column(
+                        Modifier.align(Alignment.BottomStart).fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        RoomTimeline(
+                            messages = messages,
+                            shared = sharedItems,
+                            me = me,
+                            onReact = { messageId, emoji ->
+                                scope.launch {
+                                    room.react(messageId, emoji)
+                                        .onFailure { failure -> chatError = failure.message ?: "Couldn't react." }
+                                }
+                            },
+                            onReply = { message ->
+                                replyingTo = message
+                                chatOpen = true
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp),
+                        )
+                        val besides = besideKeys.mapNotNull { MomentModules.find(it) }
+                        if (besides.isNotEmpty()) {
+                            Column(
+                                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                besides.forEach { it.Secondary(ctx, Modifier.fillMaxWidth()) }
+                            }
                         }
                     }
                 }
-                // What people say belongs in the room, over what is happening,
-                // the way remarks belong to the thing they are about. The
-                // sliding panel was still a separate place: opening it covered
-                // the room, and reading meant leaving. These sit on the scene,
-                // the newest few, and fade out of the way.
-                RoomComments(
-                    messages = messages,
-                    me = me,
-                    onReact = { messageId, emoji ->
-                        scope.launch {
-                            room.react(messageId, emoji)
-                                .onFailure { failure -> chatError = failure.message ?: "Couldn't react." }
-                        }
-                    },
-                    onReply = { message ->
-                        replyingTo = message
-                        chatOpen = true
-                    },
-                    modifier = Modifier.align(Alignment.BottomStart)
-                        .fillMaxWidth(0.82f)
-                        .padding(start = 16.dp, end = 8.dp, bottom = 8.dp),
-                )
                 TouchArrivals(room)
                 androidx.compose.animation.AnimatedVisibility(
                     visible = arrival != null || notice != null,
@@ -759,64 +762,140 @@ private fun SceneSheet(current: String, pinned: Boolean, onPick: (String?) -> Un
 }
 
 /**
- * The last few things said, over the room itself.
+ * One thread of what has happened in the room.
  *
- * Only a handful, and only for a while: a remark in a room is not a transcript
- * to scroll, and anything older than the conversation has moved on from is
- * noise on top of what people came to do.
+ * What somebody said and what somebody put on are the same kind of event —
+ * both are people doing something in front of each other — and they were being
+ * kept in two places that knew nothing about each other. Worse, both were
+ * drawn at the bottom of the same box, so the remarks were printed straight
+ * through the music bar.
  *
- * They are bubbles now rather than bare lines. A line of text floating on a
- * scene reads as a caption on the room; a bubble reads as somebody speaking in
- * it, and which side it sits on says who without a name having to be repeated.
- * The backgrounds stay translucent so the scene still shows through — the
- * remarks are part of the room, not a window onto somewhere else.
- *
- * Press and hold to react. Reactions already existed on the server and in the
- * realtime frames and had simply lost their control when the transcript went
- * away; this gives it back without bringing the transcript with it.
+ * So there is one column, in the order things happened. A remark is a bubble;
+ * bringing a song is a quiet line, because it is an event rather than
+ * something said, and giving it a bubble would put words in somebody's mouth.
  */
 @Composable
-private fun RoomComments(
+private fun RoomTimeline(
     messages: List<com.viroreach.core.network.MomentMessageDto>,
+    shared: List<com.viroreach.core.network.MomentMediaDto>,
     me: String?,
     onReact: (messageId: String, emoji: String?) -> Unit,
     onReply: (com.viroreach.core.network.MomentMessageDto) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val recent = messages.takeLast(4)
-    // Which bubble is offering its reactions. Only ever one, because two open
-    // at once is a menu, and a menu is the thing this is trying not to be.
+    // Only a handful, and only the newest: a room is not a transcript to
+    // scroll, and anything the conversation has moved on from is noise on top
+    // of what people came here to do.
+    val entries = remember(messages, shared) { roomEntries(messages, shared).takeLast(5) }
     var reacting by remember { mutableStateOf<String?>(null) }
-    // Anything that changes the tail closes it: the remark it belonged to has
-    // moved on, and a row of faces hanging over a different bubble is worse
-    // than no row at all.
-    LaunchedEffect(recent.lastOrNull()?.id) { reacting = null }
+    LaunchedEffect(entries.lastOrNull()?.at) { reacting = null }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        for ((index, message) in recent.withIndex()) {
+        for ((index, entry) in entries.withIndex()) {
             // The oldest of the few is on its way out, so the eye goes to the
             // newest without anything having to move.
-            val fade = 0.45f + 0.55f * ((index + 1).toFloat() / recent.size)
-            val mine = message.senderUserId == me
-            RoomComment(
-                message = message,
-                // What it answers, resolved here from what this phone holds.
-                // The server only ever sent the id, on purpose.
-                answering = message.replyToId?.let { id -> messages.firstOrNull { it.id == id } },
-                mine = mine,
-                fade = fade,
-                open = reacting == message.id,
-                onOpen = { reacting = if (reacting == message.id) null else message.id },
-                onReact = { emoji ->
-                    reacting = null
-                    onReact(message.id, emoji)
-                },
-                onReply = {
-                    reacting = null
-                    onReply(message)
-                },
-                me = me,
-            )
+            val fade = 0.45f + 0.55f * ((index + 1).toFloat() / entries.size)
+            when (entry) {
+                is RoomEntry.Said -> RoomComment(
+                    message = entry.message,
+                    // What it answers, resolved here from what this phone
+                    // holds. The server only ever sent the id, on purpose.
+                    answering = entry.message.replyToId?.let { id -> messages.firstOrNull { it.id == id } },
+                    mine = entry.message.senderUserId == me,
+                    fade = fade,
+                    open = reacting == entry.message.id,
+                    onOpen = { reacting = if (reacting == entry.message.id) null else entry.message.id },
+                    onReact = { emoji ->
+                        reacting = null
+                        onReact(entry.message.id, emoji)
+                    },
+                    onReply = {
+                        reacting = null
+                        onReply(entry.message)
+                    },
+                    me = me,
+                )
+                is RoomEntry.Brought -> RoomArrival(entry.media, me, fade)
+            }
+        }
+    }
+}
+
+/** Something that happened in the room, whoever did it. */
+private sealed interface RoomEntry {
+    /** When, on the server's clock, so the two kinds sort against each other. */
+    val at: Long
+
+    data class Said(val message: com.viroreach.core.network.MomentMessageDto, override val at: Long) : RoomEntry
+    data class Brought(val media: com.viroreach.core.network.MomentMediaDto, override val at: Long) : RoomEntry
+}
+
+/**
+ * The two kinds of event, in the order they happened.
+ *
+ * Anything without a time goes last rather than first: a media item from a
+ * server that does not send one is almost certainly recent, and burying it at
+ * the top of the room would be the wrong guess in the more annoying direction.
+ */
+private fun roomEntries(
+    messages: List<com.viroreach.core.network.MomentMessageDto>,
+    shared: List<com.viroreach.core.network.MomentMediaDto>,
+): List<RoomEntry> {
+    val said = messages.map { RoomEntry.Said(it, instantOf(it.createdAt) ?: 0L) }
+    val brought = shared.map { RoomEntry.Brought(it, instantOf(it.createdAt) ?: Long.MAX_VALUE) }
+    return (said + brought).sortedBy { it.at }
+}
+
+private fun instantOf(raw: String?): Long? =
+    raw?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }
+
+/**
+ * Somebody put something on.
+ *
+ * A line rather than a bubble, and centred rather than sided, because nobody
+ * said it — the room did. It reads as part of the thread without pretending to
+ * be a remark.
+ */
+@Composable
+private fun RoomArrival(
+    media: com.viroreach.core.network.MomentMediaDto,
+    me: String?,
+    fade: Float,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            color = Color.Black.copy(alpha = 0.38f * fade),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Row(
+                Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (media.kind == "VIDEO") "▶" else "♪",
+                    color = ViroColors.BlueAccent.copy(alpha = fade),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    (if (media.ownerUserId == me) "You" else media.ownerName.substringBefore(' ')) + " brought",
+                    color = Color.White.copy(alpha = 0.62f * fade),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    media.title,
+                    color = Color.White.copy(alpha = 0.92f * fade),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
