@@ -14,6 +14,9 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -289,6 +292,12 @@ fun MomentRoomEngine(
                 RoomComments(
                     messages = messages,
                     me = me,
+                    onReact = { messageId, emoji ->
+                        scope.launch {
+                            room.react(messageId, emoji)
+                                .onFailure { failure -> chatError = failure.message ?: "Couldn't react." }
+                        }
+                    },
                     modifier = Modifier.align(Alignment.BottomStart)
                         .fillMaxWidth(0.82f)
                         .padding(start = 16.dp, end = 8.dp, bottom = 8.dp),
@@ -742,42 +751,181 @@ private fun SceneSheet(current: String, pinned: Boolean, onPick: (String?) -> Un
  *
  * Only a handful, and only for a while: a remark in a room is not a transcript
  * to scroll, and anything older than the conversation has moved on from is
- * noise on top of what people came to do. Nothing has a solid background — the
- * scene shows through, which is what keeps it part of the room rather than a
- * window onto somewhere else.
+ * noise on top of what people came to do.
+ *
+ * They are bubbles now rather than bare lines. A line of text floating on a
+ * scene reads as a caption on the room; a bubble reads as somebody speaking in
+ * it, and which side it sits on says who without a name having to be repeated.
+ * The backgrounds stay translucent so the scene still shows through — the
+ * remarks are part of the room, not a window onto somewhere else.
+ *
+ * Press and hold to react. Reactions already existed on the server and in the
+ * realtime frames and had simply lost their control when the transcript went
+ * away; this gives it back without bringing the transcript with it.
  */
 @Composable
 private fun RoomComments(
     messages: List<com.viroreach.core.network.MomentMessageDto>,
     me: String?,
+    onReact: (messageId: String, emoji: String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val recent = messages.takeLast(4)
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    // Which bubble is offering its reactions. Only ever one, because two open
+    // at once is a menu, and a menu is the thing this is trying not to be.
+    var reacting by remember { mutableStateOf<String?>(null) }
+    // Anything that changes the tail closes it: the remark it belonged to has
+    // moved on, and a row of faces hanging over a different bubble is worse
+    // than no row at all.
+    LaunchedEffect(recent.lastOrNull()?.id) { reacting = null }
+
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         for ((index, message) in recent.withIndex()) {
             // The oldest of the few is on its way out, so the eye goes to the
             // newest without anything having to move.
             val fade = 0.45f + 0.55f * ((index + 1).toFloat() / recent.size)
-            Row(verticalAlignment = Alignment.Top) {
+            val mine = message.senderUserId == me
+            RoomComment(
+                message = message,
+                mine = mine,
+                fade = fade,
+                open = reacting == message.id,
+                onOpen = { reacting = if (reacting == message.id) null else message.id },
+                onReact = { emoji ->
+                    reacting = null
+                    onReact(message.id, emoji)
+                },
+                me = me,
+            )
+        }
+    }
+}
+
+/** One remark, as its person said it. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun RoomComment(
+    message: com.viroreach.core.network.MomentMessageDto,
+    mine: Boolean,
+    fade: Float,
+    open: Boolean,
+    onOpen: () -> Unit,
+    onReact: (String?) -> Unit,
+    me: String?,
+) {
+    Column(
+        Modifier.fillMaxWidth(),
+        horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
+    ) {
+        if (open) {
+            ReactionChoices(
+                chosen = message.reactions.firstOrNull { me != null && me in it.userIds }?.emoji,
+                onPick = onReact,
+            )
+            Spacer(Modifier.height(4.dp))
+        }
+        Row(verticalAlignment = Alignment.Bottom) {
+            if (mine) Spacer(Modifier.weight(1f, fill = false))
+            Surface(
+                color = (if (mine) ViroColors.BlueAccent else Color.Black).copy(alpha = if (mine) 0.42f * fade else 0.46f * fade),
+                shape = RoundedCornerShape(
+                    topStart = 16.dp,
+                    topEnd = 16.dp,
+                    // The corner nearest its person is the one that is cut,
+                    // which is what makes a bubble look spoken rather than
+                    // placed.
+                    bottomStart = if (mine) 16.dp else 4.dp,
+                    bottomEnd = if (mine) 4.dp else 16.dp,
+                ),
+                modifier = Modifier.combinedClickable(onClick = onOpen, onLongClick = onOpen),
+            ) {
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 7.dp)) {
+                    if (!mine) {
+                        Text(
+                            message.senderName.substringBefore(' '),
+                            color = ViroColors.BlueAccent.copy(alpha = fade),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
+                    }
+                    Text(
+                        message.body ?: com.viroreach.app.moments.SEALED_UNREADABLE,
+                        color = Color.White.copy(alpha = fade),
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        if (message.reactions.isNotEmpty()) {
+            Spacer(Modifier.height(2.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                for (reaction in message.reactions.take(4)) {
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.40f * fade),
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(reaction.emoji, style = MaterialTheme.typography.labelMedium)
+                            // One is just the mark; a number only earns its
+                            // place once more than one person has agreed.
+                            if (reaction.userIds.size > 1) {
+                                Spacer(Modifier.width(3.dp))
+                                Text(
+                                    reaction.userIds.size.toString(),
+                                    color = Color.White.copy(alpha = fade),
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The few ways to answer without saying anything. */
+@Composable
+private fun ReactionChoices(chosen: String?, onPick: (String?) -> Unit) {
+    Surface(color = Color.Black.copy(alpha = 0.62f), shape = RoundedCornerShape(18.dp)) {
+        Row(
+            Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            for (emoji in ROOM_REACTIONS) {
+                val picked = emoji == chosen
                 Text(
-                    if (message.senderUserId == me) "You" else message.senderName.substringBefore(' '),
-                    color = ViroColors.BlueAccent.copy(alpha = fade),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    message.body ?: com.viroreach.app.moments.SEALED_UNREADABLE,
-                    color = Color.White.copy(alpha = fade),
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
+                    emoji,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(if (picked) ViroColors.BlueAccent.copy(alpha = 0.35f) else Color.Transparent)
+                        // Pressing the one already given takes it back, which
+                        // is the only way out that does not need a second
+                        // control explaining itself.
+                        .clickable { onPick(if (picked) null else emoji) }
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
                 )
             }
         }
     }
 }
+
+/**
+ * Deliberately few, and deliberately kind.
+ *
+ * A room is people keeping each other company, so these are the answers you
+ * would actually give someone sitting next to you. Nothing here is a way to
+ * be unpleasant to somebody who has just said something honest.
+ */
+private val ROOM_REACTIONS = listOf("❤️", "😂", "🙌", "😮", "🥺")
 
 /** One line to say something, and nothing else taken off the screen for it. */
 @Composable

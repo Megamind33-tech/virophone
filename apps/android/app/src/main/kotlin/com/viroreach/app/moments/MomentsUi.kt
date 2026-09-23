@@ -1558,20 +1558,27 @@ private fun MoodStep(
                     onPick = onPick,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                 )
-                // Nothing is drawn over the artwork; this only says what the
-                // tap meant, underneath it.
-                Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                // Answering the question is enough to carry on. Waiting to be
+                // told a second time, by a button under the picture, is what
+                // made this feel like a form rather than a way in — and going
+                // back to Now afterwards was plainly wrong: the answer is the
+                // start of a Moment, so it opens one.
+                //
+                // The pause is for the face. It reacts to the press, and
+                // leaving before it has is throwing away the one moment the
+                // artwork exists for.
+                LaunchedEffect(selected) {
                     if (selected != null) {
-                        Button(onClick = onNext, modifier = Modifier.fillMaxWidth()) {
-                            Text("That's me", fontWeight = FontWeight.SemiBold)
-                        }
-                    } else {
-                        Text(
-                            "Tap how you are, or skip.",
-                            color = ViroColors.textMuted,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
+                        delay(900)
+                        onNext()
                     }
+                }
+                Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        if (selected == null) "Tap how you are, or skip." else "Setting up your Moment…",
+                        color = ViroColors.textMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                 }
             }
         }
@@ -1592,7 +1599,10 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
     var invitation by rememberSaveable { mutableStateOf("") }
     var moodKey by rememberSaveable { mutableStateOf<String?>(null) }
     // Asked once, first, and reachable again from the form afterwards.
-    var showMood by rememberSaveable { mutableStateOf(true) }
+    // Deliberately not saveable, for the same reason the sheet's own flag is
+    // not: a step that outlives the sheet it belongs to comes back answered
+    // for a Moment nobody has started yet.
+    var showMood by remember { mutableStateOf(true) }
     if (showMood) {
         MoodStep(
             selected = com.viroreach.app.moments.engine.MomentMood.of(moodKey),

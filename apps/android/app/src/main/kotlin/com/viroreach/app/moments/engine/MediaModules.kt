@@ -1,5 +1,7 @@
 package com.viroreach.app.moments.engine
 
+import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.filled.FastForward
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
@@ -256,7 +258,7 @@ object MusicModule : MomentModule {
                         Text("shared by ${if (it.ownerUserId == ctx.me) "you" else it.ownerName.substringBefore(' ')}",
                             color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.bodyMedium)
                     }
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(18.dp))
                     Transport(ctx, media, Modifier.fillMaxWidth())
                 }
                 Chooser(ctx, media, kind = "AUDIO", modifier = Modifier.weight(1f), compact = media.view.mediaId != null)
@@ -365,43 +367,140 @@ private fun PlayPause(playing: Boolean, size: Int, onClick: () -> Unit) {
 
 /** Play, pause and where we are — pressing any of them does it for everyone. */
 @Composable
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 private fun Transport(ctx: MomentRoomContext, media: MomentMediaContext, modifier: Modifier) {
     val scope = rememberCoroutineScope()
     val view = media.view
     var dragging by remember { mutableStateOf<Float?>(null) }
     val duration = view.durationMs ?: 0L
-    Column(modifier.background(Color.Black.copy(alpha = 0.45f)).padding(horizontal = 16.dp, vertical = 10.dp)) {
-        whoChanged(ctx)?.let { name ->
-            Text(if (view.playing) "$name pressed play" else "$name paused", color = Color.White.copy(alpha = 0.7f),
-                style = MaterialTheme.typography.labelMedium)
+    val shown = if (dragging != null) ((dragging ?: 0f) * duration).toLong() else view.positionMs
+    val progress = if (duration > 0) (shown.toFloat() / duration).coerceIn(0f, 1f) else 0f
+
+    Column(
+        modifier.padding(horizontal = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // The line under the song, not stacked into the controls: the time is
+        // information about the music, and the controls are for acting on it.
+        // Crushing them into one row is what made this feel like a widget.
+        if (duration > 0) {
+            Slider(
+                value = progress,
+                onValueChange = { dragging = it },
+                onValueChangeFinished = {
+                    val to = ((dragging ?: 0f) * duration).toLong()
+                    dragging = null
+                    scope.launch { media.share.playback.seek(to) }
+                },
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = Color.White,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.22f),
+                ),
+                thumb = {
+                    // Small and round. The default thumb is sized for a
+                    // settings screen, and on a record it looks like a handle
+                    // bolted to the music.
+                    Box(
+                        Modifier
+                            .size(if (dragging != null) 14.dp else 10.dp)
+                            .clip(CircleShape)
+                            .background(Color.White),
+                    )
+                },
+                track = { state ->
+                    Box(Modifier.fillMaxWidth().height(3.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.22f))) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth(state.value.coerceIn(0f, 1f))
+                                .height(3.dp)
+                                .clip(CircleShape)
+                                .background(Color.White),
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp)) {
+                Text(
+                    clock(shown),
+                    color = Color.White.copy(alpha = 0.62f),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                Spacer(Modifier.weight(1f))
+                // What is left, not what there is in total. Nobody listening
+                // to a song wants to do the subtraction.
+                Text(
+                    "-" + clock((duration - shown).coerceAtLeast(0L)),
+                    color = Color.White.copy(alpha = 0.62f),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
         }
-        if (media.view.error != null) {
-            Text(media.view.error, color = Color.White, style = MaterialTheme.typography.bodyMedium)
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            PlayPause(view.playing, size = 48) {
+
+        Spacer(Modifier.height(10.dp))
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
+        ) {
+            SkipButton(seconds = -15) {
+                scope.launch { media.share.playback.seek((view.positionMs - 15_000L).coerceAtLeast(0L)) }
+            }
+            // The one thing the hand goes to, and it is sized like it.
+            PlayPause(view.playing, size = 64) {
                 scope.launch { if (view.playing) media.share.playback.pause() else media.share.playback.play() }
             }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(view.title ?: "", color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (duration > 0) {
-                    Slider(
-                        value = dragging ?: (view.positionMs.toFloat() / duration).coerceIn(0f, 1f),
-                        onValueChange = { dragging = it },
-                        onValueChangeFinished = {
-                            val to = ((dragging ?: 0f) * duration).toLong()
-                            dragging = null
-                            scope.launch { media.share.playback.seek(to) }
-                        },
-                        colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White),
-                    )
-                    Text("${clock(if (dragging != null) ((dragging ?: 0f) * duration).toLong() else view.positionMs)} / ${clock(duration)}",
-                        color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
-                }
+            SkipButton(seconds = 15) {
+                val limit = if (duration > 0) duration else Long.MAX_VALUE
+                scope.launch { media.share.playback.seek((view.positionMs + 15_000L).coerceAtMost(limit)) }
             }
-            TextButton(onClick = { scope.launch { media.share.playback.stop() } }) { Text("Change", color = Color.White) }
         }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Quiet, because changing the record is rare next to playing and
+        // pausing it, and because whoever is listening did not come here to
+        // manage a queue.
+        TextButton(onClick = { scope.launch { media.share.playback.stop() } }) {
+            Text(
+                "Choose something else",
+                color = Color.White.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+
+        // Who moved it, under everything, where it explains a change rather
+        // than announcing one.
+        whoChanged(ctx)?.let { name ->
+            Text(
+                if (view.playing) "$name pressed play" else "$name paused",
+                color = Color.White.copy(alpha = 0.55f),
+                style = MaterialTheme.typography.labelMedium,
+            )
+        }
+        if (view.error != null) {
+            Text(view.error, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+/** Fifteen seconds, the way every player does it, because everybody knows it. */
+@Composable
+private fun SkipButton(seconds: Int, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            if (seconds < 0) Icons.Default.Replay else Icons.Default.FastForward,
+            contentDescription = if (seconds < 0) "Back 15 seconds" else "Forward 15 seconds",
+            tint = Color.White.copy(alpha = 0.85f),
+            modifier = Modifier.size(26.dp),
+        )
     }
 }
 

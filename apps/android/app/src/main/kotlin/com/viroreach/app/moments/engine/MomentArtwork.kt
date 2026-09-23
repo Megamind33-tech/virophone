@@ -104,19 +104,20 @@ private val activityPhotos: Map<String, Int> = mapOf(
     // All CC0 — public domain, no attribution required — from StockSnap and
     // rawpixel via Openverse. Credited here anyway, because where a thing came
     // from should not have to be rediscovered later.
+    "BE" to R.drawable.activity_be, // People at sunset, rawpixel
     "TALK" to R.drawable.activity_talk, // "Teapot Cup", StockSnap
     "WATCH" to R.drawable.activity_watch, // "Theatre seats rows", rawpixel
+    "LISTEN" to R.drawable.activity_listen, // Turntable and record, rawpixel
     "COOK" to R.drawable.activity_cook, // "Stove Pot", StockSnap
     "WALK" to R.drawable.activity_walk, // "Road Path", StockSnap
+    "CHOOSE" to R.drawable.activity_choose, // Hands joined in a circle, rawpixel
     "LEARN" to R.drawable.activity_learn, // "Tools Workshop", StockSnap
     "CELEBRATE" to R.drawable.activity_celebrate, // "Fireworks Lights", StockSnap
     "REMEMBER" to R.drawable.activity_remember, // "Old Photo", StockSnap
     "STAY" to R.drawable.activity_stay, // "Window Rain", StockSnap
-    // BE, LISTEN and CHOOSE keep their drawings on purpose. Nothing in the
-    // public-domain catalogue said the right thing: a holiday terrace for
-    // being with someone, a record stall with a drinks brand across it, and
-    // for choosing, nothing at all. A weak photograph is worse than a good
-    // drawing, and the drawing is already there.
+    // Every activity has a photograph now. The drawings below stay as the
+    // answer for an activity the server knows about and this build does not,
+    // which is the case they were always really for.
 )
 
 @Composable
