@@ -699,8 +699,17 @@ fun MomentRoomScreen(
                         val current = moment
                         scope.launch {
                             if (current != null && current.creatorUserId == me) {
+                                // Closed here only if the server agreed to
+                                // close it. Marking it shut regardless showed
+                                // the host an ending that had not happened,
+                                // with everybody else still in a Moment the
+                                // host believed was over — worse than an error.
                                 session.moments.end(current.id)
-                                room.markClosed()
+                                    .onSuccess { room.markClosed() }
+                                    .onFailure { failure ->
+                                        room.error.value =
+                                            failure.message ?: "Couldn't end this Moment. Try again."
+                                    }
                             } else {
                                 room.leave()
                                 onBack()

@@ -190,7 +190,33 @@ fun YouScreen(
                     SettingsNavRow("Media and storage", onMediaStorage)
                     SettingsNavRow("Calling privacy") { callingPrivacyExpanded = true }
                     SettingsRow(label = "Calling", value = callingLabel)
-                    SettingsRow(label = "Notifications", value = "Coming soon")
+                    // Android already owns this. Messages, calls and live
+                    // location each have their own channel, so the system's
+                    // own page is the real control surface: every switch on it
+                    // works, and it keeps working when a channel is added. A
+                    // second set inside Viro would have to be obeyed at every
+                    // point a notification is posted, and would quietly
+                    // disagree with the ones underneath it.
+                    SettingsRowClickable(
+                        label = "Notifications",
+                        value = "Manage",
+                        onClick = {
+                            val perApp = android.content.Intent(
+                                android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS,
+                            )
+                                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            // Not every phone has the per-app notification
+                            // page; all of them have app details, and its
+                            // notification entry is one tap further.
+                            val details = android.content.Intent(
+                                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                android.net.Uri.fromParts("package", context.packageName, null),
+                            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            runCatching { context.startActivity(perApp) }
+                                .recoverCatching { context.startActivity(details) }
+                        },
+                    )
                 }
                 SettingsSection(title = "Privacy & Security") {
                     // Who sees what about me.

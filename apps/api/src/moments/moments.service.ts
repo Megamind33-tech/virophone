@@ -213,6 +213,32 @@ export class MomentsService {
     for (const row of rows[0] ?? []) await this.closeRoom(row, 'moment.expired');
   }
 
+  /**
+   * Finish clearing up after closes that did not get that far.
+   *
+   * Marking a Moment terminal and erasing its room cannot be one transaction:
+   * most of the erasing is Redis, LiveKit and files. A failure half way
+   * through used to strand the leftovers for good, because [sweep] only ever
+   * looked at ACTIVE rows and the Moment was already ENDED.
+   *
+   * Deliberately not part of [sweep], which runs on every room read: this does
+   * real work and belongs on the timer, not in front of somebody waiting for a
+   * room to open.
+   */
+  async tidy() {
+    const unfinished = await this.db.query(`SELECT * FROM moments
+      WHERE cleaned_at IS NULL AND status <> 'ACTIVE' ORDER BY expires_at LIMIT 20`);
+    for (const row of unfinished) {
+      // Quietly: everybody was told the first time, and saying a Moment has
+      // ended for a second time is worse than the mess being tidied.
+      try {
+        await this.closeRoom(row, null);
+      } catch {
+        // Left for the next pass rather than stopping the others.
+      }
+    }
+  }
+
   // ------------------------------------------------------------------ rooms
 
   /** Room state is a fact about membership, not about the list: a blocked or
@@ -964,10 +990,22 @@ export class MomentsService {
    * Moment row itself stays (history keeps its ENDED/EXPIRED state) but keeps
    * no participants, messages, reactions, knocks or invitations, so the room
    * cannot be rejoined, inspected or resurrected. */
-  private async closeRoom(row: any, type: string) {
+  /**
+   * Erase the room behind a Moment that is over.
+   *
+   * [type] is the event everyone in it is told; null means this is a retry of
+   * a close that did not finish, where they have already been told once.
+   *
+   * Every step is safe to run again — the deletes are deletes, the Redis keys
+   * are gone or were already gone, and keepsake offers conflict away — because
+   * this is reached a second time whenever the first attempt failed part way.
+   * Only when all of it is through is the Moment written down as cleared up;
+   * until then the sweep keeps coming back for it.
+   */
+  private async closeRoom(row: any, type: string | null) {
     // Before anything is erased, and only from what the room already had.
     await this.offerKeepsakes(row);
-    await this.notify(row, type, { momentId: row.id });
+    if (type) await this.notify(row, type, { momentId: row.id });
     await this.db.query(`DELETE FROM moment_participants WHERE moment_id = $1`, [row.id]);
     await this.db.query(`DELETE FROM moment_cheers WHERE moment_id = $1`, [row.id]);
     await this.db.query(`DELETE FROM moment_messages WHERE moment_id = $1`, [row.id]);
@@ -983,6 +1021,9 @@ export class MomentsService {
     const shared = await this.db.query(`SELECT * FROM moment_media WHERE moment_id = $1`, [row.id]);
     for (const item of shared) this.removeFile(item);
     await this.db.query(`DELETE FROM moment_media WHERE moment_id = $1`, [row.id]);
+    // Last, and only if everything above got through. Anything that threw
+    // leaves this unset, which is the sweep's instruction to try again.
+    await this.db.query(`UPDATE moments SET cleaned_at = now() WHERE id = $1`, [row.id]);
   }
 
   // -------------------------------------------------------------- keepsakes

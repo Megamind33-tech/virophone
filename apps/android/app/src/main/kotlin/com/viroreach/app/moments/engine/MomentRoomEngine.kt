@@ -158,6 +158,16 @@ fun MomentRoomEngine(
     var menuOpen by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
     var chatError by remember { mutableStateOf<String?>(null) }
+    // The room's own error channel had nowhere to appear, so anything written
+    // to it was written into silence — including a Moment that would not end.
+    // It says so in the same place everything else the room has to say appears.
+    val roomError by room.error.collectAsState()
+    LaunchedEffect(roomError) {
+        roomError?.let {
+            notice = it
+            room.error.value = null
+        }
+    }
     // The remark being answered, if any. It lives here rather than in either
     // the comments or the composer because both need it: one to mark the
     // message, the other to send the link.

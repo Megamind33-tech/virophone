@@ -21,6 +21,9 @@ export class MomentsClock implements OnModuleInit, OnModuleDestroy {
     if (this.running) return;
     this.running = true;
     try { await this.moments.sweep(); } catch (e) { this.logger.warn(`Moment expiry failed: ${(e as Error).message}`); }
+    // Separately, because a room that failed to clear up should not stop the
+    // next Moment expiring on time.
+    try { await this.moments.tidy(); } catch (e) { this.logger.warn(`Moment cleanup retry failed: ${(e as Error).message}`); }
     // Every ten minutes or so: files nothing points at any more.
     if (++this.ticks % 120 === 0) {
       try { await this.moments.sweepOrphanMedia(); } catch (e) { this.logger.warn(`Moment media sweep failed: ${(e as Error).message}`); }

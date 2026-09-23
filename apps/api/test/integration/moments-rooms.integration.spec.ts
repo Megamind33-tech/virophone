@@ -13,6 +13,7 @@ import * as WebSocket from 'ws';
 import { createTestApp } from './test-app';
 import { resetDatabase, DATABASE_URL } from './reset-db';
 import { MomentsClock } from '../../src/moments/moments.module';
+import { MomentsService } from '../../src/moments/moments.service';
 import { RealtimeRegistry } from '../../src/realtime/realtime.registry';
 import { SignalingGateway } from '../../src/signaling/signaling.gateway';
 
@@ -296,5 +297,43 @@ describe('Viro Now Phase 2: rooms, chat, reactions, knocks and invitations', () 
       for (const result of disconnect.mock.results) await result.value;
       disconnect.mockRestore();
     }
+  });
+
+  it('comes back for a Moment that was marked over but never cleared up', async () => {
+    // Ending a Moment marks it terminal and then erases the room: rows, Redis
+    // keys, LiveKit, files. That cannot be one transaction, so a failure part
+    // way through used to strand the leftovers for good — the sweep only ever
+    // looked at ACTIVE rows, and this one is ENDED.
+    const m = await create();
+    await join(b, m.id);
+    await http().post(`/api/v1/moments/${m.id}/messages`).set(auth(b)).send({ body: 'still here' }).expect(201);
+
+    // Exactly the state a half-finished close leaves behind: terminal, with
+    // the room still sitting there and nothing recording that it was tidied.
+    await db.query(`UPDATE moments SET status = 'ENDED', cleaned_at = NULL WHERE id = $1`, [m.id]);
+    expect((await db.query(`SELECT 1 FROM moment_messages WHERE moment_id = $1`, [m.id])).rowCount).toBe(1);
+    expect((await db.query(`SELECT 1 FROM moment_participants WHERE moment_id = $1`, [m.id])).rowCount).toBeGreaterThan(0);
+
+    await app.get(MomentsService).tidy();
+
+    expect((await db.query(`SELECT 1 FROM moment_messages WHERE moment_id = $1`, [m.id])).rowCount).toBe(0);
+    expect((await db.query(`SELECT 1 FROM moment_participants WHERE moment_id = $1`, [m.id])).rowCount).toBe(0);
+    const [after] = (await db.query(`SELECT cleaned_at FROM moments WHERE id = $1`, [m.id])).rows;
+    expect(after.cleaned_at).not.toBeNull();
+  });
+
+  it('does not keep re-tidying a Moment it has already finished with', async () => {
+    // Otherwise every sweep would walk every Moment ever held, and anyone in
+    // one would be told it had ended again each time round.
+    const m = await create();
+    await join(b, m.id);
+    await http().post(`/api/v1/moments/${m.id}/end`).set(auth(a)).expect(200);
+    const [closed] = (await db.query(`SELECT cleaned_at FROM moments WHERE id = $1`, [m.id])).rows;
+    expect(closed.cleaned_at).not.toBeNull();
+
+    const told = jest.spyOn(app.get(RealtimeRegistry), 'deliverToUser');
+    await app.get(MomentsService).tidy();
+    expect(told.mock.calls.some(c => c[1]?.type === 'moment.ended')).toBe(false);
+    told.mockRestore();
   });
 });
