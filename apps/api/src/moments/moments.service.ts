@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { roomMessages } from './room-messages';
 import { DataSource } from 'typeorm';
 import { RealtimeRegistry } from '../realtime/realtime.registry';
 import { PushService } from '../push/push.service';
@@ -37,7 +38,7 @@ export interface CreateMoment { type: string; text?: string; visibility: string;
 /** One sealed copy of a room message, addressed to one device. */
 export interface MomentEnvelope { deviceId: string; ciphertext: string; type?: number }
 /** A room message as the sender offers it: readable text, or sealed copies. */
-export interface MomentMessageInput { body?: string | null; envelopes?: MomentEnvelope[] }
+export interface MomentMessageInput { body?: string | null; envelopes?: MomentEnvelope[]; replyToId?: string | null }
 
 // Contacts is deliberately owner-directed: knowing somebody's number does not
 // entitle a stranger to their activity. Every read rechecks blocks both ways.
@@ -309,16 +310,9 @@ export class MomentsService {
       // device was in the room. There is no way to show it and no honest
       // placeholder for it either, so it is simply not part of this device's
       // view of the room.
-      messages: messages.reverse()
-        .filter((m: any) => m.body !== null || m.ciphertext)
-        .map((m: any) => ({
-          id: m.id, momentId: m.moment_id, senderUserId: m.sender_user_id,
-          senderDeviceId: m.sender_device_id, senderName: m.display_name || 'Viro user',
-          body: m.body, sealed: m.body === null,
-          envelope: m.ciphertext ? { ciphertext: m.ciphertext, type: m.envelope_type ?? 1 } : null,
-          createdAt: new Date(m.created_at).toISOString(),
-          reactions: byMessage.get(m.id) ?? [],
-        })),
+      // Every message in the room, including the ones this device cannot open;
+      // see room-messages.ts for why that matters and what used to happen.
+      messages: roomMessages(messages, byMessage),
     };
   }
 
@@ -358,8 +352,20 @@ export class MomentsService {
     }
     const sealed = envelopes.length > 0;
 
-    const [row] = await this.db.query(`INSERT INTO moment_messages (moment_id, sender_user_id, sender_device_id, body)
-      VALUES ($1,$2,$3,$4) RETURNING *`, [id, userId, deviceId || null, sealed ? null : text]);
+    // What this answers, if anything. Checked against this room rather than
+    // trusted: a reply may only ever point at a message in the room it is
+    // being said in, or it becomes a way to ask the server about another one.
+    let replyTo: string | null = null;
+    if (input.replyToId) {
+      const [found] = await this.db.query(
+        `SELECT 1 FROM moment_messages WHERE id = $1 AND moment_id = $2`,
+        [input.replyToId, id],
+      );
+      if (!found) throw new BadRequestException('That message is not in this Moment.');
+      replyTo = input.replyToId;
+    }
+    const [row] = await this.db.query(`INSERT INTO moment_messages (moment_id, sender_user_id, sender_device_id, body, reply_to_id)
+      VALUES ($1,$2,$3,$4,$5) RETURNING *`, [id, userId, deviceId || null, sealed ? null : text, replyTo]);
     if (sealed) {
       const tuples = envelopes
         .map((_, i) => `($1::uuid, $${i * 3 + 2}::uuid, $${i * 3 + 3}::text, $${i * 3 + 4}::smallint)`)
@@ -377,7 +383,9 @@ export class MomentsService {
     const base = {
       id: row.id, momentId: id, senderUserId: userId, senderDeviceId: deviceId || null,
       senderName: await this.nameOf(userId),
-      createdAt: new Date(row.created_at).toISOString(), reactions: [] as unknown[],
+      createdAt: new Date(row.created_at).toISOString(),
+      replyToId: row.reply_to_id ?? null,
+      reactions: [] as unknown[],
     };
     if (sealed) {
       // One frame per device, each carrying only that device's own copy — no

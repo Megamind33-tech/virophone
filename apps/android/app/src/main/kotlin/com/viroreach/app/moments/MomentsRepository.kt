@@ -327,15 +327,15 @@ class MomentRoomState(
      * conversation. That is the same rule ordinary chats follow, and it is
      * what stops the promise being true only some of the time.
      */
-    suspend fun send(body: String): Result<MomentMessageDto> = mutex.withLock {
+    suspend fun send(body: String, replyToId: String? = null): Result<MomentMessageDto> = mutex.withLock {
         val text = body.trim().take(500)
         if (text.isEmpty()) return@withLock Result.failure(IllegalStateException("Type a message first."))
         try {
             val envelopes = sealFor(text)
             val sent = api.sendMessage(momentId, if (envelopes == null) {
-                SendMomentMessageBody(body = text)
+                SendMomentMessageBody(body = text, replyToId = replyToId)
             } else {
-                SendMomentMessageBody(envelopes = envelopes)
+                SendMomentMessageBody(envelopes = envelopes, replyToId = replyToId)
             })
             if (envelopes != null) encrypted.value = true
             // The server answers a sealed message with no body — it has none.

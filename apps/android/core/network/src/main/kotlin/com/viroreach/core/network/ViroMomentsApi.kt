@@ -65,6 +65,15 @@ data class MomentReactionDto(val emoji: String, val userIds: List<String>)
 data class MomentMessageDto(
     val id: String, val momentId: String, val senderUserId: String, val senderName: String,
     val body: String?, val createdAt: String, val reactions: List<MomentReactionDto> = emptyList(),
+    /**
+     * The message this answers, if it answers one.
+     *
+     * Only the id travels. What was actually said is looked up from the
+     * messages this phone already holds, because in a sealed room the server
+     * cannot read the remark being answered and must not be the thing that
+     * carries a preview of it.
+     */
+    val replyToId: String? = null,
     val sealed: Boolean = false,
     val senderDeviceId: String? = null,
     val envelope: MomentEnvelopeDto? = null,
@@ -193,7 +202,11 @@ data class MomentRoomChangeBody(
     val scene: String? = null,
 )
 /** Whichever the sender could manage: readable text, or one copy per device. */
-data class SendMomentMessageBody(val body: String? = null, val envelopes: List<MomentEnvelopeBody>? = null)
+data class SendMomentMessageBody(
+    val body: String? = null,
+    val envelopes: List<MomentEnvelopeBody>? = null,
+    val replyToId: String? = null,
+)
 data class MomentVisibilityBody(val visibility: String)
 data class MomentReactBody(val emoji: String?)
 data class KnockDto(val knockerUserId: String, val knockerName: String, val createdAt: String)

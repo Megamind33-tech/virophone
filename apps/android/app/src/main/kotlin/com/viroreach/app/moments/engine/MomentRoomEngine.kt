@@ -72,6 +72,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -147,6 +148,10 @@ fun MomentRoomEngine(
     var menuOpen by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
     var chatError by remember { mutableStateOf<String?>(null) }
+    // The remark being answered, if any. It lives here rather than in either
+    // the comments or the composer because both need it: one to mark the
+    // message, the other to send the link.
+    var replyingTo by remember { mutableStateOf<com.viroreach.core.network.MomentMessageDto?>(null) }
 
     // Messages that arrived while the chat was closed: a quiet badge, never a
     // takeover of the room.
@@ -298,6 +303,10 @@ fun MomentRoomEngine(
                                 .onFailure { failure -> chatError = failure.message ?: "Couldn't react." }
                         }
                     },
+                    onReply = { message ->
+                        replyingTo = message
+                        chatOpen = true
+                    },
                     modifier = Modifier.align(Alignment.BottomStart)
                         .fillMaxWidth(0.82f)
                         .padding(start = 16.dp, end = 8.dp, bottom = 8.dp),
@@ -329,8 +338,11 @@ fun MomentRoomEngine(
             ) {
                 RoomComposer(
                     room = room,
+                    replyingTo = replyingTo,
+                    me = me,
+                    onCancelReply = { replyingTo = null },
                     onError = { chatError = it },
-                    onDone = { chatOpen = false },
+                    onDone = { chatOpen = false; replyingTo = null },
                 )
             }
             if (chatError != null) {
@@ -768,6 +780,7 @@ private fun RoomComments(
     messages: List<com.viroreach.core.network.MomentMessageDto>,
     me: String?,
     onReact: (messageId: String, emoji: String?) -> Unit,
+    onReply: (com.viroreach.core.network.MomentMessageDto) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val recent = messages.takeLast(4)
@@ -787,6 +800,9 @@ private fun RoomComments(
             val mine = message.senderUserId == me
             RoomComment(
                 message = message,
+                // What it answers, resolved here from what this phone holds.
+                // The server only ever sent the id, on purpose.
+                answering = message.replyToId?.let { id -> messages.firstOrNull { it.id == id } },
                 mine = mine,
                 fade = fade,
                 open = reacting == message.id,
@@ -794,6 +810,10 @@ private fun RoomComments(
                 onReact = { emoji ->
                     reacting = null
                     onReact(message.id, emoji)
+                },
+                onReply = {
+                    reacting = null
+                    onReply(message)
                 },
                 me = me,
             )
@@ -806,11 +826,13 @@ private fun RoomComments(
 @Composable
 private fun RoomComment(
     message: com.viroreach.core.network.MomentMessageDto,
+    answering: com.viroreach.core.network.MomentMessageDto?,
     mine: Boolean,
     fade: Float,
     open: Boolean,
     onOpen: () -> Unit,
     onReact: (String?) -> Unit,
+    onReply: () -> Unit,
     me: String?,
 ) {
     Column(
@@ -821,6 +843,7 @@ private fun RoomComment(
             ReactionChoices(
                 chosen = message.reactions.firstOrNull { me != null && me in it.userIds }?.emoji,
                 onPick = onReact,
+                onReply = onReply,
             )
             Spacer(Modifier.height(4.dp))
         }
@@ -840,6 +863,37 @@ private fun RoomComment(
                 modifier = Modifier.combinedClickable(onClick = onOpen, onLongClick = onOpen),
             ) {
                 Column(Modifier.padding(horizontal = 12.dp, vertical = 7.dp)) {
+                    if (answering != null) {
+                        // A quiet line of what is being answered, with a rule
+                        // beside it. Short on purpose: it is here to say which
+                        // remark, not to repeat it.
+                        Row(Modifier.padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier
+                                    .width(2.dp)
+                                    .height(26.dp)
+                                    .clip(CircleShape)
+                                    .background(ViroColors.BlueAccent.copy(alpha = 0.8f * fade)),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Column {
+                                Text(
+                                    if (answering.senderUserId == me) "You" else answering.senderName.substringBefore(' '),
+                                    color = ViroColors.BlueAccent.copy(alpha = 0.85f * fade),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                )
+                                Text(
+                                    answering.body ?: com.viroreach.app.moments.SEALED_UNREADABLE,
+                                    color = Color.White.copy(alpha = 0.6f * fade),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
                     if (!mine) {
                         Text(
                             message.senderName.substringBefore(' '),
@@ -892,7 +946,7 @@ private fun RoomComment(
 
 /** The few ways to answer without saying anything. */
 @Composable
-private fun ReactionChoices(chosen: String?, onPick: (String?) -> Unit) {
+private fun ReactionChoices(chosen: String?, onPick: (String?) -> Unit, onReply: () -> Unit) {
     Surface(color = Color.Black.copy(alpha = 0.62f), shape = RoundedCornerShape(18.dp)) {
         Row(
             Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -914,6 +968,20 @@ private fun ReactionChoices(chosen: String?, onPick: (String?) -> Unit) {
                         .padding(horizontal = 6.dp, vertical = 4.dp),
                 )
             }
+            // Answering sits with the reactions because it is the same
+            // decision — what to do about what somebody just said — and a
+            // second menu for it would be one press too many.
+            Box(Modifier.width(1.dp).height(18.dp).background(Color.White.copy(alpha = 0.25f)))
+            Text(
+                "Reply",
+                color = Color.White,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClick = onReply)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
         }
     }
 }
@@ -931,6 +999,9 @@ private val ROOM_REACTIONS = listOf("❤️", "😂", "🙌", "😮", "🥺")
 @Composable
 private fun RoomComposer(
     room: com.viroreach.app.moments.MomentRoomState,
+    replyingTo: com.viroreach.core.network.MomentMessageDto?,
+    me: String?,
+    onCancelReply: () -> Unit,
     onError: (String) -> Unit,
     onDone: () -> Unit,
 ) {
@@ -938,13 +1009,67 @@ private fun RoomComposer(
     var draft by remember { mutableStateOf("") }
     val focus = remember { androidx.compose.ui.focus.FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    // Whatever is being answered at the moment Send is pressed, not whatever
+    // it was when this was first composed.
+    val answering by rememberUpdatedState(replyingTo)
     fun send() {
         val text = draft.trim()
         if (text.isEmpty()) {
             onDone()
         } else {
             draft = ""
-            scope.launch { room.send(text).onFailure { onError(it.message ?: "Couldn't send.") } }
+            val to = answering?.id
+            scope.launch { room.send(text, to).onFailure { onError(it.message ?: "Couldn't send.") } }
+            onCancelReply()
+        }
+    }
+    Column(Modifier.fillMaxWidth()) {
+    if (replyingTo != null) {
+        // What is about to be answered, so nobody sends a reply into the
+        // wrong conversation — and a way out of it that is not "delete what
+        // you have written".
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                .background(Color.Black.copy(alpha = 0.45f))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .width(2.dp)
+                    .height(28.dp)
+                    .clip(CircleShape)
+                    .background(ViroColors.BlueAccent),
+            )
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Replying to " + (if (replyingTo.senderUserId == me) "yourself" else replyingTo.senderName.substringBefore(' ')),
+                    color = ViroColors.BlueAccent,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    replyingTo.body ?: com.viroreach.app.moments.SEALED_UNREADABLE,
+                    color = Color.White.copy(alpha = 0.7f),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Icon(
+                Icons.Default.Close,
+                contentDescription = "Stop replying",
+                tint = Color.White.copy(alpha = 0.7f),
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onCancelReply)
+                    .padding(5.dp),
+            )
         }
     }
     Row(
@@ -976,6 +1101,7 @@ private fun RoomComposer(
         TextButton(onClick = { send() }) {
             Text("Send", color = ViroColors.BlueAccent, fontWeight = FontWeight.SemiBold)
         }
+    }
     }
 }
 

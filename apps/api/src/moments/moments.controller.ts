@@ -80,6 +80,9 @@ class MomentMessageDto {
   @IsOptional() @IsString() @MaxLength(500) body?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(64) @ValidateNested({ each: true })
   @Type(() => MomentEnvelopeDto) envelopes?: MomentEnvelopeDto[];
+  // What this answers. Only the link: what was said is resolved by the client
+  // from what it already holds, so a sealed remark is never previewed here.
+  @IsOptional() @IsUUID('4') replyToId?: string;
 }
 class VisibilityDto {
   @IsIn(MOMENT_AUDIENCES) visibility!: string;
