@@ -10,16 +10,19 @@ import { Profile } from '../database/entities/profile.entity';
 import { PhoneIdentity } from '../database/entities/phone-identity.entity';
 import { Device } from '../database/entities/device.entity';
 import { SecurityEvent } from '../database/entities/security-event.entity';
+import { MomentsModule } from '../moments/moments.module';
+import { AdminAuditInterceptor } from './admin.audit';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, Profile, PhoneIdentity, Device, SecurityEvent]),
     PushModule,
+    MomentsModule,
     JwtModule.register({
       secret: process.env.JWT_ACCESS_SECRET || 'dev_access_secret',
     }),
   ],
   controllers: [AdminConsoleController, AdminController],
-  providers: [AdminService, AdminGuard],
+  providers: [AdminService, AdminGuard, AdminAuditInterceptor],
 })
 export class AdminModule {}

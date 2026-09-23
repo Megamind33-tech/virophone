@@ -1,5 +1,7 @@
 package com.viroreach.app.moments.engine
 
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.viroreach.core.designsystem.components.ViroAvatar
@@ -261,6 +263,10 @@ fun MomentRoomEngine(
 
             // The primary experience. When the room changes, this is what
             // transforms — the room, not a jump to another screen.
+            // How much room the bottom stack takes, so nothing is drawn
+            // underneath it.
+            var overlayHeight by remember { mutableStateOf(0.dp) }
+            val density = LocalDensity.current
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (shape != null) {
                     val ctx = MomentRoomContext(
@@ -280,7 +286,14 @@ fun MomentRoomEngine(
                     ) { primary ->
                         val module = primary?.let { MomentModules.find(it) }
                         if (module != null) {
-                            module.Primary(ctx, Modifier.fillMaxSize())
+                            // Kept clear of whatever is stacked at the bottom.
+                            // The scene still fills the room behind it — a
+                            // background is meant to — but the module's own
+                            // content stops where the bar begins. Without this
+                            // the last row of a list sat underneath the
+                            // comments line, which is how "Add a song" ended up
+                            // with a conversation printed over it.
+                            module.Primary(ctx, Modifier.fillMaxSize().padding(bottom = overlayHeight))
                         } else {
                             // The server can be ahead of this phone. Say so plainly
                             // rather than draw an empty room.
@@ -293,7 +306,13 @@ fun MomentRoomEngine(
                     // printed through the music bar: neither knew the other
                     // was there. One column, in order, and they cannot.
                     Column(
-                        Modifier.align(Alignment.BottomStart).fillMaxWidth(),
+                        Modifier
+                            .align(Alignment.BottomStart)
+                            .fillMaxWidth()
+                            // Measured rather than assumed: what is stacked
+                            // here changes with the room, and a fixed inset
+                            // would be wrong in every room but one.
+                            .onSizeChanged { overlayHeight = with(density) { it.height.toDp() } },
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         RoomCommentsBar(

@@ -8,6 +8,7 @@ import { Device } from '../database/entities/device.entity';
 import { SecurityEvent } from '../database/entities/security-event.entity';
 import { ViroException } from '../common/exceptions/viro.exception';
 import { PushService } from '../push/push.service';
+import { MomentsService } from '../moments/moments.service';
 
 @Injectable()
 export class AdminService {
@@ -19,6 +20,7 @@ export class AdminService {
     @InjectRepository(SecurityEvent) private readonly events: Repository<SecurityEvent>,
     private readonly db: DataSource,
     private readonly push: PushService,
+    private readonly moments: MomentsService,
   ) {}
 
   /**
@@ -32,6 +34,8 @@ export class AdminService {
     const [row] = await this.db.query(`SELECT
       (SELECT count(*)::int FROM users) AS users,
       (SELECT count(*)::int FROM users WHERE status = 'SUSPENDED') AS suspended,
+      (SELECT count(DISTINCT user_id)::int FROM devices WHERE revoked_at IS NULL AND last_seen_at > now() - interval '24 hours') AS active_today,
+      (SELECT count(*)::int FROM security_events WHERE severity IN ('HIGH', 'CRITICAL', 'ERROR') AND created_at > now() - interval '24 hours') AS high_priority_events,
       (SELECT count(*)::int FROM users WHERE created_at > now() - interval '7 days') AS new_this_week,
       (SELECT count(*)::int FROM devices) AS devices,
       (SELECT count(*)::int FROM moments WHERE status = 'ACTIVE' AND expires_at > now()) AS live_moments,
@@ -68,12 +72,55 @@ export class AdminService {
    * about.
    */
   async endMoment(id: string) {
-    const [rows] = await this.db.query(
-      `UPDATE moments SET status = 'ENDED' WHERE id = $1 AND status = 'ACTIVE' RETURNING id`, [id]);
-    if (!rows || rows.length === 0) {
+    const [row] = await this.db.query(
+      `SELECT creator_user_id FROM moments WHERE id = $1 AND status = 'ACTIVE' AND expires_at > now()`, [id]);
+    if (!row) {
       throw new ViroException('NOT_FOUND', 'No live Moment with that id.', HttpStatus.NOT_FOUND);
     }
+    return this.moments.end(row.creator_user_id, id);
+  }
+
+  async insights() {
+    const days = await this.db.query(`WITH days AS (
+      SELECT generate_series((now() AT TIME ZONE 'UTC')::date - 13, (now() AT TIME ZONE 'UTC')::date, interval '1 day')::date AS day
+    ), signups AS (SELECT (created_at AT TIME ZONE 'UTC')::date AS day, count(*)::int AS n FROM users
+      WHERE created_at >= ((now() AT TIME ZONE 'UTC')::date - 13) AT TIME ZONE 'UTC' GROUP BY 1),
+    rooms AS (SELECT (created_at AT TIME ZONE 'UTC')::date AS day, count(*)::int AS n FROM moments
+      WHERE created_at >= ((now() AT TIME ZONE 'UTC')::date - 13) AT TIME ZONE 'UTC' GROUP BY 1)
+    SELECT to_char(d.day, 'YYYY-MM-DD') AS day, coalesce(s.n, 0) AS signups, coalesce(r.n, 0) AS moments
+    FROM days d LEFT JOIN signups s USING(day) LEFT JOIN rooms r USING(day) ORDER BY d.day`);
+    return { days, timezone: 'UTC' };
+  }
+
+  async directory(q = '', status = '', page = 1, limit = 20) {
+    const size = Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 100) : 20;
+    const current = Number.isFinite(page) ? Math.max(page, 1) : 1;
+    const params = [`%${q.trim().replace(/[\\%_]/g, '\\$&')}%`, status];
+    const where = `WHERE ($1 = '%%' OR p.display_name ILIKE $1 OR p.viro_id ILIKE $1
+      OR u.id::text ILIKE $1 OR EXISTS (SELECT 1 FROM phone_identities pi WHERE pi.user_id = u.id AND pi.phone_e164 ILIKE $1))
+      AND ($2 = '' OR u.status = $2)`;
+    const [count] = await this.db.query(`SELECT count(*)::int AS total FROM users u LEFT JOIN profiles p ON p.user_id = u.id ${where}`, params);
+    const items = await this.db.query(`SELECT u.id, u.status, u.admin_role AS "adminRole", u.created_at AS "createdAt",
+      p.display_name AS "displayName", p.viro_id AS "viroId",
+      (SELECT count(*)::int FROM devices d WHERE d.user_id = u.id AND d.revoked_at IS NULL) AS "activeDevices"
+      FROM users u LEFT JOIN profiles p ON p.user_id = u.id ${where}
+      ORDER BY u.created_at DESC, u.id LIMIT $3 OFFSET $4`, [...params, size, (current - 1) * size]);
+    return { items, total: count.total, page: current, limit: size };
+  }
+
+  async revokeDevice(userId: string, deviceId: string) {
+    const device = await this.devices.findOne({ where: { id: deviceId, userId } });
+    if (!device) throw new ViroException('NOT_FOUND', 'Device not found for this account.', HttpStatus.NOT_FOUND);
+    device.revokedAt = device.revokedAt ?? new Date();
+    await this.devices.save(device);
     return { success: true };
+  }
+
+  async notificationAudience(userId?: string) {
+    if (userId) await this.getUser(userId);
+    const [row] = await this.db.query(`SELECT count(*)::int AS devices, count(DISTINCT user_id)::int AS people
+      FROM push_tokens WHERE ($1::uuid IS NULL OR user_id = $1::uuid)`, [userId ?? null]);
+    return { ...row, people: Math.min(row.people, 5000), capped: row.people > 5000 };
   }
 
   /** Who is on what plan, newest first. */
@@ -329,11 +376,16 @@ export class AdminService {
         platform: d.platform,
         lastSeenAt: d.lastSeenAt,
         revokedAt: d.revokedAt,
+        appVersion: d.appVersion,
+        createdAt: d.createdAt,
       })),
     };
   }
 
-  async setStatus(id: string, status: 'ACTIVE' | 'SUSPENDED') {
+  async setStatus(id: string, status: 'ACTIVE' | 'SUSPENDED', actor?: string) {
+    if (id === actor && status === 'SUSPENDED') {
+      throw new ViroException('FORBIDDEN', 'You cannot suspend your own admin account.', HttpStatus.FORBIDDEN);
+    }
     const user = await this.users.findOne({ where: { id } });
     if (!user) {
       throw new ViroException('NOT_FOUND', 'User not found.', HttpStatus.NOT_FOUND);

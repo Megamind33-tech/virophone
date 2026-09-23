@@ -1,9 +1,20 @@
-import { Body, Controller, Delete, Get, Header, Param, ParseUUIDPipe, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ArrayMaxSize, IsArray, IsIn, IsISO8601, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 import type { Response } from 'express';
 import { ADMIN_CONSOLE_PAGE } from './admin.page';
 import { AdminService } from './admin.service';
 import { AdminGuard } from './admin.guard';
+import { AdminAuditInterceptor } from './admin.audit';
+
+class ActionDto {
+  @IsOptional() @IsString() @MaxLength(240) reason?: string;
+}
+
+class AudienceDto {
+  @IsOptional() @IsUUID() userId?: string;
+}
+
+type AdminRequest = { adminActor: string };
 
 class NotifyDto {
   /** Absent means everybody with a device. */
@@ -61,8 +72,27 @@ export class AdminConsoleController {
 
 @Controller('api/v1/admin')
 @UseGuards(AdminGuard)
+@UseInterceptors(AdminAuditInterceptor)
 export class AdminController {
   constructor(private readonly admin: AdminService) {}
+
+  @Get('directory')
+  directory(@Query('q') q?: string, @Query('status') status?: string,
+    @Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.admin.directory(q, status, Number(page || 1), Number(limit || 20));
+  }
+
+  @Get('insights')
+  insights() { return this.admin.insights(); }
+
+  @Get('notification-audience')
+  notificationAudience(@Query() query: AudienceDto) { return this.admin.notificationAudience(query.userId); }
+
+  @Post('users/:id/devices/:deviceId/revoke')
+  revokeDevice(@Param('id', ParseUUIDPipe) id: string, @Param('deviceId', ParseUUIDPipe) deviceId: string,
+    @Body() _body: ActionDto) {
+    return this.admin.revokeDevice(id, deviceId);
+  }
 
   @Get('users')
   listUsers(@Query('q') q?: string, @Query('limit') limit?: string) {
@@ -70,17 +100,17 @@ export class AdminController {
   }
 
   @Get('users/:id')
-  getUser(@Param('id') id: string) {
+  getUser(@Param('id', ParseUUIDPipe) id: string) {
     return this.admin.getUser(id);
   }
 
   @Post('users/:id/suspend')
-  suspend(@Param('id') id: string) {
-    return this.admin.setStatus(id, 'SUSPENDED');
+  suspend(@Param('id', ParseUUIDPipe) id: string, @Body() _body: ActionDto, @Req() req: AdminRequest) {
+    return this.admin.setStatus(id, 'SUSPENDED', req.adminActor);
   }
 
   @Post('users/:id/unsuspend')
-  unsuspend(@Param('id') id: string) {
+  unsuspend(@Param('id', ParseUUIDPipe) id: string, @Body() _body: ActionDto) {
     return this.admin.setStatus(id, 'ACTIVE');
   }
 
@@ -96,7 +126,7 @@ export class AdminController {
 
   /** Ends a live Moment the way its host would, sweeper and all. */
   @Delete('moments/:id')
-  endMoment(@Param('id') id: string) {
+  endMoment(@Param('id', ParseUUIDPipe) id: string, @Body() _body: ActionDto) {
     return this.admin.endMoment(id);
   }
 
@@ -111,8 +141,8 @@ export class AdminController {
   }
 
   @Post('notify')
-  notify(@Body() body: NotifyDto) {
-    return this.admin.notify({ ...body, by: 'admin-console' });
+  notify(@Body() body: NotifyDto, @Req() req: AdminRequest) {
+    return this.admin.notify({ ...body, by: req.adminActor });
   }
 
   // ------------------------------------------------------------ campaigns

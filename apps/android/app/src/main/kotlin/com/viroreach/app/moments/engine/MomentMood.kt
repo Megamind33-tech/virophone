@@ -150,15 +150,22 @@ fun MoodScreen(
     val pick by rememberUpdatedState(onPick)
     var view by remember { mutableStateOf<RiveAnimationView?>(null) }
 
-    // Long enough on screen without dying counts as proof the artwork is safe
-    // on this phone, and the note that would have disabled it is cleared.
+    // Proof the artwork is safe on this phone is a drawn frame, not a
+    // stopwatch.
     //
-    // The wait is the whole point. Clearing it the moment the view is built
-    // would clear it before the dangerous part — loading the file, making the
-    // surface, drawing the first frames — has had time to happen.
-    LaunchedEffect(reason, attempt) {
-        if (reason == null) {
-            delay(SETTLED_MS)
+    // This used to wait four seconds before clearing the note that disables
+    // the artwork after a crash. Then picking a mood started carrying on into
+    // the Moment after nine hundred milliseconds, so the wait never finished,
+    // the note was never cleared, and every later visit found a phone that had
+    // supposedly died here: artwork off, plain choices, until somebody pressed
+    // Try again. Something that only works when asked twice is worse than
+    // something that does not work.
+    //
+    // A frame is the thing actually being tested. By the time one is drawn the
+    // file has loaded, the surface exists and the renderer has run.
+    var drew by remember(attempt) { mutableStateOf(false) }
+    LaunchedEffect(drew) {
+        if (drew) {
             com.viroreach.app.diagnostics.Breadcrumbs.moment("animation-ready")
             moodArtworkSurvived(context)
         }
@@ -193,6 +200,19 @@ fun MoodScreen(
                                 autoplay = true,
                                 fit = app.rive.runtime.kotlin.core.Fit.COVER,
                             )
+                            registerListener(object : RiveFileController.Listener {
+                                override fun notifyAdvance(elapsed: Float) {
+                                    // The first frame: whatever could have
+                                    // killed the process has already happened
+                                    // and did not.
+                                    if (!drew) drew = true
+                                }
+                                override fun notifyStateChanged(stateMachineName: String, stateName: String) {}
+                                override fun notifyPlay(animation: PlayableInstance) {}
+                                override fun notifyPause(animation: PlayableInstance) {}
+                                override fun notifyStop(animation: PlayableInstance) {}
+                                override fun notifyLoop(animation: PlayableInstance) {}
+                            })
                         }
                     }.getOrElse { e ->
                         val why = e.javaClass.simpleName + ": " + (e.message ?: "no message")
@@ -429,8 +449,6 @@ private fun moodArtworkSurvived(context: Context) {
 
 private const val TAG = "ViroMood"
 private const val RIVE_KEY = "mood-artwork"
-/** Up, drawing and still alive this long means the artwork is fine here. */
-private const val SETTLED_MS = 4_000L
 /** How many times a person may ask for the artwork again before it rests. */
 private const val MAX_RETRIES = 2
 /** Shown when the file has nothing playable in it. */

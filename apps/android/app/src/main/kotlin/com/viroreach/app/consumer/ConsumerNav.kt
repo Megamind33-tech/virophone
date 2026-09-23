@@ -214,7 +214,13 @@ fun ConsumerNav(
     // person would want to know about without having to go and look: somebody
     // asked to connect, somebody wrote, somebody rang, a Moment is open to
     // them. Nothing here is invented to give a badge something to show.
-    val inbox by session.messaging.conversations().collectAsState(initial = emptyList())
+    // Remembered, because conversations() builds a new Flow every time it is
+    // called. Handing collectAsState a different instance on each composition
+    // makes it cancel and restart collection, which emits, which recomposes,
+    // which builds another one — a loop with no exit on the first screen after
+    // signing in.
+    val inboxFlow = remember(session) { session.messaging.conversations() }
+    val inbox by inboxFlow.collectAsState(initial = emptyList())
     val invitations by session.moments.invitations.collectAsState()
     val callLog by session.callHistoryStore.entries.collectAsState()
     val callsSeenAt by session.callHistoryStore.seenAt.collectAsState()
