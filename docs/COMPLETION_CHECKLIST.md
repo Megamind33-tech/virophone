@@ -11,7 +11,7 @@ functional once the corresponding secret/service is supplied.
 - [x] A3. Push sender abstraction (FCM) + call-invite push on authorize when callee offline. ⚠️ needs FCM key
 - [x] A4. Call lifecycle persistence: RINGING/ACTIVE/answered_at from signaling
 - [x] A5. Call quality telemetry: `/calls/:id/events` persists to `call_quality`
-- [ ] A6. Android: FCM receiver → wake incoming-call UI; register push token on login ⚠️
+- [x] A6. Android: FCM receiver → wake incoming-call UI; register push token on login. ViroFirebaseMessagingService is in the manifest and calls registerPushToken on refresh.
 
 ## Phase B — Messaging as a real subsystem
 - [x] B1. Schema: `conversations`, `conversation_participants`, `messages`, `message_receipts`
@@ -35,7 +35,7 @@ functional once the corresponding secret/service is supplied.
 - [ ] D4. (If needed for large groups) SFU integration. ⚠️ needs SFU service
 
 ## Phase E — Product completeness & launch
-- [x] E1. Android Settings: blocked-contacts list, login country picker, Help, devices, connections, calling privacy, account export share. Notifications remain deferred until FCM (A6).
+- [x] E1. Android Settings: blocked-contacts list, login country picker, Help, devices, connections, calling privacy, account export share, notifications. The notifications row opens the system per-channel page, which is where the switches for these channels actually live.
 - [x] E2. Account deletion (`DELETE /api/v1/me`) and GDPR export (`GET /api/v1/me/export`) + Android “Download my data”
 - [x] E3. Subscriptions/billing **stub**: `GET /plans`, `GET|POST /me/subscription` (Free/Plus seed, no Stripe/Play yet) + Android Subscription screen
 - [x] E4. Admin/moderation APIs (`/api/v1/admin/*`) via `X-Admin-Key` or ADMIN/SECURITY_ADMIN role
@@ -45,7 +45,7 @@ functional once the corresponding secret/service is supplied.
 
 ## Android client wiring status
 - [x] API client methods for push, call history/telemetry, messaging, conferences, account export/delete, devices, connections, plans/subscription
-- [ ] A6. FCM receiver + token registration on login. ⚠️ needs `google-services.json` + Firebase deps
+- [x] A6. FCM receiver + token registration on login. Shipping; google-services.json and the Firebase dependencies are in place.
 - [x] B5. Messages inbox tab + ChatScreen history hydrate / server send
 - [x] Calls tab merges server `GET /calls/history` into local call log
 - [x] D2. Group mesh client wiring in ConferenceManager/GroupCallScreen

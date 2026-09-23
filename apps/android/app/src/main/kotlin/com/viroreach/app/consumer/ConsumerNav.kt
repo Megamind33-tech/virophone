@@ -222,6 +222,7 @@ fun ConsumerNav(
     val inboxFlow = remember(session) { session.messaging.conversations() }
     val inbox by inboxFlow.collectAsState(initial = emptyList())
     val invitations by session.moments.invitations.collectAsState()
+    val knocking by session.moments.knocks.collectAsState()
     val callLog by session.callHistoryStore.entries.collectAsState()
     val callsSeenAt by session.callHistoryStore.seenAt.collectAsState()
     var pendingConnections by remember { mutableStateOf(0) }
@@ -235,7 +236,9 @@ fun ConsumerNav(
             }
     }
     val navCounts = ViroNavCounts(
-        now = invitations.size,
+        // Both are somebody waiting on this person: one asked them in, the
+        // other is at a door they are already holding open.
+        now = invitations.size + knocking,
         // Archived and hidden conversations are deliberately out: they were
         // put away on purpose, and a badge would drag them back.
         chats = inbox.filter { !it.archived && !it.hidden }.sumOf { it.unread } + invitations.size,

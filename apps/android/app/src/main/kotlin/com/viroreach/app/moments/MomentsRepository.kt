@@ -63,6 +63,9 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
     val loaded = _loaded.asStateFlow()
     private val _invitations = MutableStateFlow<List<MomentInvitationDto>>(emptyList())
     val invitations = _invitations.asStateFlow()
+    /** People waiting at a door of this person's own. */
+    private val _knocks = MutableStateFlow(0)
+    val knocks = _knocks.asStateFlow()
 
     /** Everything moment.* the socket delivers; open rooms and the Now screen
      *  subscribe rather than each owning a socket. */
@@ -70,7 +73,7 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
     val frames = _frames.asSharedFlow()
 
     fun now() = System.currentTimeMillis() + offset
-    fun clear() { owner = null; _moments.value = emptyList(); _invitations.value = emptyList(); _loaded.value = false; _error.value = null; offset = 0 }
+    fun clear() { owner = null; _moments.value = emptyList(); _invitations.value = emptyList(); _knocks.value = 0; _loaded.value = false; _error.value = null; offset = 0 }
     fun prune() {
         if (owner != userId()) clear()
         _moments.value = _moments.value.filter { it.endsAt() > now() }
@@ -97,6 +100,7 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
             val result = api.invitations()
             if (account != userId()) return@withLock clear()
             _invitations.value = result.invitations.filter { it.moment.endsAt() > now() }
+            _knocks.value = result.knocks
         }
         catch (e: CancellationException) { throw e }
         catch (e: Exception) { prune() }

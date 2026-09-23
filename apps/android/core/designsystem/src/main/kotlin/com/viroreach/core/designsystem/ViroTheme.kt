@@ -61,6 +61,10 @@ fun ViroTheme(
     }
     val baseDensity = LocalDensity.current
     CompositionLocalProvider(
+        // The semantic tokens every screen reads come from here. Providing
+        // the Material scheme alone was the whole bug: it changed what
+        // Material draws and nothing about what Viro draws.
+        LocalViroPalette provides if (darkTheme) ViroDarkPalette else ViroLightPalette,
         LocalDensity provides Density(
             density = baseDensity.density * densityMultiplier,
             fontScale = baseDensity.fontScale * fontMultiplier,

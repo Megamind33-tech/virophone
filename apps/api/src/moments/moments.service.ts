@@ -544,8 +544,20 @@ export class MomentsService {
       LEFT JOIN profiles p ON p.user_id = m.creator_user_id
       WHERE i.invitee_user_id = $1 AND m.status = 'ACTIVE' AND m.expires_at > now() AND ${VISIBLE}
       ORDER BY i.created_at DESC`, [userId]);
-    return { invitations: rows.map((r: any) => ({ invitationId: r.invitation_id,
-      invitedAt: new Date(r.invited_at).toISOString(), moment: this.dto(r) })) };
+    // People waiting at a door of this person's own, counted across every
+    // Moment they are hosting. A knock is answered from wherever they happen
+    // to be in the app, so the count has to be findable from anywhere too —
+    // and it belongs with invitations because both answer the same question:
+    // is anybody waiting for me.
+    const [knocking] = await this.db.query(`SELECT COUNT(*)::int AS waiting
+      FROM moment_knocks k JOIN moments m ON m.id = k.moment_id
+      WHERE m.creator_user_id = $1 AND m.status = 'ACTIVE' AND m.expires_at > now()
+        AND k.status = 'PENDING'`, [userId]);
+    return {
+      invitations: rows.map((r: any) => ({ invitationId: r.invitation_id,
+        invitedAt: new Date(r.invited_at).toISOString(), moment: this.dto(r) })),
+      knocks: knocking?.waiting ?? 0,
+    };
   }
 
   async declineInvitation(userId: string, invitationId: string) {

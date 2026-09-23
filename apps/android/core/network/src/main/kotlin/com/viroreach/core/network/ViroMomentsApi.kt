@@ -214,7 +214,18 @@ data class KnocksDto(val knocks: List<KnockDto>)
 data class KnockResponseBody(val accept: Boolean)
 data class InviteBody(val userId: String)
 data class MomentInvitationDto(val invitationId: String, val invitedAt: String, val moment: MomentDto)
-data class MomentInvitationsDto(val invitations: List<MomentInvitationDto>)
+data class MomentInvitationsDto(
+    val invitations: List<MomentInvitationDto>,
+    /**
+     * People knocking on Moments this person is hosting.
+     *
+     * A count rather than a list: it exists to put a number on the Now tab,
+     * and answering a knock already happens through the dialog that arrives
+     * with it. Zero from a server too old to send it, which is correct — an
+     * old server has nothing to say about knocks here.
+     */
+    val knocks: Int = 0,
+)
 
 /**
  * Something a Moment could leave behind. An offer, not a memory: it is kept
