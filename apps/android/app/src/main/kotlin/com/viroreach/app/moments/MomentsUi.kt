@@ -1362,10 +1362,10 @@ private fun SecondaryMoment(m: MomentDto, clock: Long, onOpen: () -> Unit) {
 
 /** An invitation still waiting on an answer, with a way to say no. */
 @Composable
-private fun InvitationRow(moment: MomentDto, onOpen: () -> Unit, onDismiss: () -> Unit) {
+internal fun InvitationRow(moment: MomentDto, onOpen: () -> Unit, onDismiss: () -> Unit) {
     Surface(shape = RoundedCornerShape(18.dp), color = ViroColors.surface, modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.height(78.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.width(78.dp).fillMaxHeight().clickable(onClick = onOpen)) {
+        Row(Modifier.heightIn(min = 100.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(78.dp).clickable(onClick = onOpen)) {
                 com.viroreach.app.moments.engine.MomentActivityArt(moment.intent ?: "BE", Modifier.fillMaxSize())
                 Box(Modifier.align(Alignment.Center)) { MomentAvatar(moment) }
             }
@@ -1377,12 +1377,19 @@ private fun InvitationRow(moment: MomentDto, onOpen: () -> Unit, onDismiss: () -
                     style = MaterialTheme.typography.labelMedium,
                 )
                 Text(
-                    moment.invitation(),
+                    listOfNotNull(
+                        com.viroreach.app.moments.engine.MomentMood.of(moment.mood)?.aboutThem,
+                        moment.activity(),
+                    ).joinToString(" · "),
                     color = ViroColors.textPrimary,
                     fontWeight = FontWeight.Medium,
-                    maxLines = 1,
+                    maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                 )
+                moment.invitationText?.takeIf { it.isNotBlank() }?.let { words ->
+                    Text(words, color = ViroColors.textMuted, style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
             }
             TextButton(onClick = onOpen) { Text("Step in", color = ViroColors.BlueAccent) }
             IconButton(onClick = onDismiss, modifier = Modifier.size(40.dp)) {
@@ -1633,6 +1640,7 @@ private fun TellPeopleSheet(
     var failed by remember { mutableStateOf<String?>(null) }
     var chosen by remember { mutableStateOf(setOf<String>()) }
     var sending by remember { mutableStateOf(false) }
+    var sendError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         runCatching { session.api.listConnections() }
@@ -1739,9 +1747,12 @@ private fun TellPeopleSheet(
                         scope.launch {
                             // One at a time, and a failure for one person does
                             // not cost the others theirs.
-                            chosen.forEach { id -> session.moments.invite(moment.id, id) }
+                            sendError = null
+                            val unsent = chosen.filter { id -> session.moments.invite(moment.id, id).isFailure }.toSet()
+                            chosen = unsent
                             sending = false
-                            onDone()
+                            if (unsent.isEmpty()) onDone()
+                            else sendError = "Couldn't tell ${unsent.size} people. Tap Tell to retry."
                         }
                     },
                 ) {
@@ -1751,6 +1762,7 @@ private fun TellPeopleSheet(
                     )
                 }
             }
+            sendError?.let { Text(it, color = ViroColors.textMuted, style = MaterialTheme.typography.bodySmall) }
         }
     }
 }

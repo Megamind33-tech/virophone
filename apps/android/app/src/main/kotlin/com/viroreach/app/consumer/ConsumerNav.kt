@@ -232,7 +232,7 @@ fun ConsumerNav(
         now = invitations.size,
         // Archived and hidden conversations are deliberately out: they were
         // put away on purpose, and a badge would drag them back.
-        chats = inbox.filter { !it.archived && !it.hidden }.sumOf { it.unread },
+        chats = inbox.filter { !it.archived && !it.hidden }.sumOf { it.unread } + invitations.size,
         calls = callLog.count {
             it.type == com.viroreach.app.consumer.data.CallLogType.MISSED && it.timestampMs > callsSeenAt
         },

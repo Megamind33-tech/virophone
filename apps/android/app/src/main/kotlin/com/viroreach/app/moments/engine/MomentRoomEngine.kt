@@ -255,6 +255,7 @@ fun MomentRoomEngine(
                 isHost = moment?.creatorUserId == me,
                 onPeople = { menuOpen = false; peopleOpen = true },
                 onInvite = { menuOpen = false; inviteOpen = true },
+                onTogether = { menuOpen = false; togetherOpen = true },
                 onEnd = { menuOpen = false; onEnd() },
             )
 
@@ -376,7 +377,6 @@ fun MomentRoomEngine(
                     if (media.cameraOn || granted(Manifest.permission.CAMERA)) toggleCamera()
                     else cameraPermission.launch(Manifest.permission.CAMERA)
                 },
-                onTogether = { togetherOpen = true },
                 onChat = { chatOpen = true },
                 onHeart = { scope.launch { room.touch("HEART").onFailure { notice = it.message } } },
                 onTouch = { touchOpen = true },
@@ -529,6 +529,7 @@ private fun RoomHeader(
     isHost: Boolean,
     onPeople: () -> Unit,
     onInvite: () -> Unit,
+    onTogether: () -> Unit,
     onEnd: () -> Unit,
 ) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -556,6 +557,7 @@ private fun RoomHeader(
         Box {
             IconButton(onClick = { onMenu(true) }) { Icon(Icons.Default.MoreVert, "More", tint = Color.White) }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { onMenu(false) }) {
+                DropdownMenuItem(text = { Text("Do something together") }, onClick = onTogether)
                 DropdownMenuItem(text = { Text("People here") }, onClick = onPeople)
                 if (isHost) DropdownMenuItem(text = { Text("Invite someone") }, onClick = onInvite)
                 DropdownMenuItem(
@@ -568,8 +570,8 @@ private fun RoomHeader(
 }
 
 /**
- * Four things near the thumb: your microphone, your camera, changing what the
- * room is, and the chat. People and the rest live behind the menu.
+ * Microphone, camera, touch and chat stay near the thumb. Changing what the
+ * room is lives in the header menu beside people and leaving.
  * The microphone and camera start off, every time, for everyone.
  */
 @Composable
@@ -580,7 +582,6 @@ private fun RoomControls(
     cameraOn: Boolean,
     onMic: () -> Unit,
     onCamera: () -> Unit,
-    onTogether: () -> Unit,
     onChat: () -> Unit,
     onHeart: () -> Unit,
     onTouch: () -> Unit,
@@ -603,16 +604,6 @@ private fun RoomControls(
             TouchButton(onHeart = onHeart, onChoose = onTouch)
             BadgedBox(badge = { if (unread > 0) Badge { Text(if (unread > 9) "9+" else "$unread") } }) {
                 RoundAction("Chat", onChat)
-            }
-        }
-        Surface(
-            shape = RoundedCornerShape(28.dp),
-            color = Color.White.copy(alpha = 0.16f),
-            modifier = Modifier.fillMaxWidth().height(52.dp).clickable(onClick = onTogether),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text("Do something together", color = Color.White, style = MaterialTheme.typography.labelLarge,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 8.dp))
             }
         }
     }

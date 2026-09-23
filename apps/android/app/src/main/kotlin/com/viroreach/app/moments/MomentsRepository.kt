@@ -74,6 +74,7 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
     fun prune() {
         if (owner != userId()) clear()
         _moments.value = _moments.value.filter { it.endsAt() > now() }
+        _invitations.value = _invitations.value.filter { it.moment.endsAt() > now() }
     }
     suspend fun refresh() = mutex.withLock {
         val account = userId() ?: return@withLock clear()
@@ -89,11 +90,16 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
         catch (e: CancellationException) { throw e }
         catch (e: Exception) { prune(); _error.value = "Couldn't refresh Moments. Check your connection." }
     }
-    suspend fun refreshInvitations() {
-        if (userId() == null) return
-        try { _invitations.value = api.invitations().invitations }
+    suspend fun refreshInvitations() = mutex.withLock {
+        val account = userId() ?: return@withLock clear()
+        if (owner != account) { clear(); owner = account }
+        try {
+            val result = api.invitations()
+            if (account != userId()) return@withLock clear()
+            _invitations.value = result.invitations.filter { it.moment.endsAt() > now() }
+        }
         catch (e: CancellationException) { throw e }
-        catch (e: Exception) { /* The section simply stays absent until it loads. */ }
+        catch (e: Exception) { prune() }
     }
     suspend fun declineInvitation(id: String): Result<Unit> = runCatching { api.declineInvitation(id) }
         .onFailure { if (it is CancellationException) throw it }
@@ -108,9 +114,10 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
             "moment.invited" -> { refresh(); refreshInvitations() }
             "moment.created", "moment.updated", "moment.ended", "moment.expired" -> {
                 refresh()
-                if (type != "moment.created" && type != "moment.updated") refreshInvitations()
+                refreshInvitations()
             }
-            "moment.joined", "moment.left", "moment.cheer", "moment.audience" -> refresh()
+            "moment.audience" -> { refresh(); refreshInvitations() }
+            "moment.joined", "moment.left", "moment.cheer" -> refresh()
             else -> {}
         }
     }

@@ -471,6 +471,9 @@ export class MomentsService {
     const [connected] = await this.db.query(`SELECT 1 FROM viro_connections WHERE status = 'ACCEPTED' AND
       ((requester_user_id = $1 AND recipient_user_id = $2) OR (recipient_user_id = $1 AND requester_user_id = $2))`, [userId, inviteeId]);
     if (!connected) throw new BadRequestException('You can only invite accepted Viro connections.');
+    // An invitation must not promise entry to somebody excluded by the
+    // Moment's audience. Keep the same authorization as inbox reads and joins.
+    await this.liveMoment(inviteeId, id);
     await this.db.query(`INSERT INTO moment_invitations (moment_id, invitee_user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [id, inviteeId]);
     const name = await this.nameOf(userId);
     const activity = moment.text?.trim() || moment.type;
@@ -1010,7 +1013,7 @@ export class MomentsService {
       [row.id, endedAt]);
 
     // The right to keep outlives the participant rows, which are about to go.
-    const audience = people.map((_: any, i: number) => `($1, ${i + 2}::uuid)`).join(',');
+    const audience = people.map((_: any, i: number) => `($1, $${i + 2}::uuid)`).join(',');
     await this.db.query(
       `INSERT INTO moment_keepsake_audience (moment_id, user_id) VALUES ${audience}
        ON CONFLICT DO NOTHING`,
@@ -1049,7 +1052,7 @@ export class MomentsService {
 
     const expiresAt = new Date(endedAt.getTime() + MomentsService.KEEPSAKE_OFFER_HOURS * 3600_000);
     const tuples = offers
-      .map((_, i) => `($1::uuid, ${i * 3 + 2}, ${i * 3 + 3}, ${i * 3 + 4}, ${offers.length * 3 + 2}::timestamptz)`)
+      .map((_, i) => `($1::uuid, $${i * 3 + 2}, $${i * 3 + 3}, $${i * 3 + 4}, $${offers.length * 3 + 2}::timestamptz)`)
       .join(',');
     await this.db.query(
       `INSERT INTO moment_keepsake_offers (moment_id, kind, title, detail, expires_at) VALUES ${tuples}`,
@@ -1134,7 +1137,7 @@ export class MomentsService {
 
     const tuples = offers
       .map((_: any, i: number) =>
-        `($1::uuid, $2::uuid, ${i * 4 + 3}::uuid, ${i * 4 + 4}, ${i * 4 + 5}, ${i * 4 + 6})`)
+        `($1::uuid, $2::uuid, $${i * 4 + 3}::uuid, $${i * 4 + 4}, $${i * 4 + 5}, $${i * 4 + 6})`)
       .join(',');
     await this.db.query(
       `INSERT INTO moment_keepsakes (moment_id, user_id, offer_id, kind, title, detail)

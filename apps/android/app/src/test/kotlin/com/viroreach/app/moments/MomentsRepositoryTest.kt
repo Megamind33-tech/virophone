@@ -35,6 +35,8 @@ class MomentsRepositoryTest {
         var sent = mutableListOf<MomentMessageDto>()
         var knocksSent = 0
         var invited = mutableListOf<String>()
+        var invitationList = emptyList<MomentInvitationDto>()
+        var afterInvitations: () -> Unit = {}
         var knockResponses = mutableListOf<Pair<String, Boolean>>()
         var left = 0
         override suspend fun now(): MomentsNowDto {
@@ -51,7 +53,9 @@ class MomentsRepositoryTest {
         override suspend fun end(id: String) { list = emptyList(); afterMutation() }
         override suspend fun invitations(): MomentInvitationsDto {
             if (fail) error("offline")
-            return MomentInvitationsDto(emptyList())
+            val result = MomentInvitationsDto(invitationList)
+            afterInvitations()
+            return result
         }
         override suspend fun declineInvitation(id: String) {}
         override suspend fun join(id: String): MomentRoomDto {
@@ -137,6 +141,42 @@ class MomentsRepositoryTest {
         val api = Api(listOf(moment(System.currentTimeMillis()-1000)))
         val repo = MomentsRepository(api) { "bob" }
         repo.refresh(); assertTrue(repo.moments.value.isEmpty())
+    }
+    @Test fun `invitations load without visiting Now and survive its first refresh`() = runTest {
+        val api = Api(listOf(moment()))
+        api.invitationList = listOf(MomentInvitationDto("invite", Instant.now().toString(), moment()))
+        val repo = MomentsRepository(api) { "bob" }
+        repo.refreshInvitations()
+        repo.refresh()
+        assertEquals(1, repo.invitations.value.size)
+    }
+    @Test fun `invitation response cannot cross accounts`() = runTest {
+        var user: String? = "bob"
+        val api = Api(listOf(moment()))
+        api.invitationList = listOf(MomentInvitationDto("invite", Instant.now().toString(), moment()))
+        val repo = MomentsRepository(api) { user }
+        api.afterInvitations = { user = "carol" }
+        repo.refreshInvitations()
+        assertTrue(repo.invitations.value.isEmpty())
+        api.afterInvitations = { user = null }
+        repo.refreshInvitations()
+        assertTrue(repo.invitations.value.isEmpty())
+    }
+    @Test fun `expired invitations are not displayed`() = runTest {
+        val api = Api(emptyList())
+        api.invitationList = listOf(MomentInvitationDto("invite", Instant.now().toString(), moment(System.currentTimeMillis() - 1_000)))
+        val repo = MomentsRepository(api) { "bob" }
+        repo.refreshInvitations()
+        assertTrue(repo.invitations.value.isEmpty())
+    }
+    @Test fun `audience updates remove invitations that are no longer visible`() = runTest {
+        val api = Api(listOf(moment()))
+        api.invitationList = listOf(MomentInvitationDto("invite", Instant.now().toString(), moment()))
+        val repo = MomentsRepository(api) { "bob" }
+        repo.refreshInvitations()
+        api.invitationList = emptyList()
+        repo.onFrame("moment.updated", emptyMap())
+        assertTrue(repo.invitations.value.isEmpty())
     }
     @Test fun `failed refresh preserves still active session cache`() = runTest {
         val api = Api(listOf(moment())); val repo = MomentsRepository(api) { "bob" }

@@ -42,6 +42,14 @@ class ViroFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
+        if (data["type"] == "moment-invite") {
+            val session = SessionManager.get(applicationContext)
+            scope.launch {
+                session.moments.refreshInvitations()
+                runCatching { session.callManager.ensureSignalingReady() }
+            }
+            return
+        }
         if (data["type"] == "message" || data["type"] == "loop") {
             // The socket was not there to deliver it; fetch now, so the chat
             // is already up to date when the notification is opened.

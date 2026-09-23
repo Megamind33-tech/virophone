@@ -176,17 +176,22 @@ describe('Viro Now Phase 2: rooms, chat, reactions, knocks and invitations', () 
   });
 
   it('invites accepted connections only, and the invitee can decline or join from the invitation', async () => {
-    const m = await create();
+    const m = await create(a, { mood: 'SAD', intent: 'TALK', invitationText: 'Can we talk?' });
     await http().post(`/api/v1/moments/${m.id}/invites`).set(auth(b)).send({ userId: a.userId }).expect(403); // not host
     await http().post(`/api/v1/moments/${m.id}/invites`).set(auth(a)).send({ userId: stranger.userId }).expect(400); // not connected
     await http().post(`/api/v1/moments/${m.id}/invites`).set(auth(a)).send({ userId: a.userId }).expect(400); // self
     const spy = jest.spyOn(app.get(RealtimeRegistry), 'deliverToUser');
     await http().post(`/api/v1/moments/${m.id}/invites`).set(auth(a)).send({ userId: b.userId }).expect(200);
     expect(spy.mock.calls.find(c => c[1]?.type === 'moment.invited')?.[0]).toBe(b.userId);
+    expect(spy.mock.calls.find(c => c[1]?.type === 'moment.invited')?.[1].payload).toMatchObject({
+      momentId: m.id, mood: 'SAD', told: expect.stringContaining('is a bit low and would like to talk'),
+    });
     spy.mockRestore();
     let invitations = (await http().get('/api/v1/moments/invitations').set(auth(b)).expect(200)).body.invitations;
     expect(invitations).toHaveLength(1);
     expect(invitations[0].moment.id).toBe(m.id);
+    expect(invitations[0].moment).toMatchObject({ mood: 'SAD', intent: 'TALK', invitationText: 'Can we talk?' });
+    expect((await http().get('/api/v1/moments/invitations').set(auth(stranger)).expect(200)).body.invitations).toEqual([]);
     // A blocked invitee stops seeing the invitation (§23), without acting on it.
     await http().post('/api/v1/blocks').set(auth(a)).send({ blockedUserId: b.userId }).expect(201);
     expect((await http().get('/api/v1/moments/invitations').set(auth(b)).expect(200)).body.invitations).toEqual([]);
@@ -199,6 +204,16 @@ describe('Viro Now Phase 2: rooms, chat, reactions, knocks and invitations', () 
     await http().post(`/api/v1/moments/${m.id}/invites`).set(auth(a)).send({ userId: b.userId }).expect(200);
     const again = (await http().get('/api/v1/moments/invitations').set(auth(b)).expect(200)).body.invitations;
     await http().delete(`/api/v1/moments/invitations/${again[0].invitationId}`).set(auth(a)).expect(404);
+  });
+
+  it('does not report a sent invitation when its recipient is outside the audience', async () => {
+    const m = await create(a, { visibility: 'CONTACTS', mood: 'SAD' });
+    const spy = jest.spyOn(app.get(RealtimeRegistry), 'deliverToUser');
+    try {
+      await http().post(`/api/v1/moments/${m.id}/invites`).set(auth(a)).send({ userId: b.userId }).expect(404);
+      expect(spy.mock.calls.filter(c => c[1]?.type === 'moment.invited')).toHaveLength(0);
+      expect((await db.query('SELECT * FROM moment_invitations WHERE moment_id=$1', [m.id])).rows).toHaveLength(0);
+    } finally { spy.mockRestore(); }
   });
 
   it('closes the room when the Moment ends: no joins, messages, reactions or participants remain', async () => {

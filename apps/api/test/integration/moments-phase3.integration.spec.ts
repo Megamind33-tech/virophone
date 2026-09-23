@@ -128,13 +128,14 @@ describe('Viro Now Phase 3: sealed rooms, Moment reactions, audience editing', (
     expect(kept.rows.map((r: any) => r.device_id)).toEqual([b.deviceId]);
   });
 
-  it('leaves a sealed message out of the view of a device it was never addressed to', async () => {
+  it('keeps an unreadable placeholder without exposing another devices sealed copy', async () => {
     const m = await create();
     await http().post(`/api/v1/moments/${m.id}/messages`).set(auth(a))
       .send({ envelopes: [{ deviceId: a.deviceId, ciphertext: 'only-for-a' }] }).expect(201);
     // b joins afterwards: there is no copy for b and no way to make one.
     const late = await join(b, m.id);
-    expect(late.messages).toHaveLength(0);
+    expect(late.messages).toHaveLength(1);
+    expect(late.messages[0]).toMatchObject({ sealed: true, body: null, envelope: null });
     // The host still sees what they said.
     expect((await roomOf(a, m.id)).messages).toHaveLength(1);
   });

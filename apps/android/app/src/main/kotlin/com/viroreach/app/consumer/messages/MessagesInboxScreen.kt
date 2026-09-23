@@ -29,6 +29,8 @@ import com.viroreach.app.consumer.resolveAvatarUrl
 import com.viroreach.app.messaging.ConversationItem
 import com.viroreach.app.messaging.Delivery
 import com.viroreach.app.messaging.preview
+import com.viroreach.app.moments.InvitationRow
+import com.viroreach.app.moments.MomentRoomScreen
 import com.viroreach.app.messaging.ui.ChatLock
 import com.viroreach.app.messaging.ui.GroupAvatar
 import com.viroreach.app.messaging.ui.Ticks
@@ -65,6 +67,7 @@ fun MessagesInboxScreen(
     onNewGroup: () -> Unit = {},
 ) {
     var tab by rememberSaveable { mutableIntStateOf(if (startOnConnections) 1 else 0) }
+    var momentId by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(startOnConnections) { if (startOnConnections) tab = 1 }
     ViroScreenBackground {
         ViroSafeScreen {
@@ -81,12 +84,24 @@ fun MessagesInboxScreen(
                     }
                 }
                 if (tab == 0) {
-                    Inbox(session, onOpenChat, null)
+                    Inbox(session, onOpenChat, onOpenMoment = { momentId = it })
                 } else {
                     ConnectionsDashboard(session, onOpenChat, onCall, onOpenRelationship)
                 }
             }
         }
+    }
+    momentId?.let { id ->
+        MomentRoomScreen(
+            session = session,
+            room = session.openMomentRoom(id),
+            onBack = { momentId = null },
+            onCall = onCall,
+            onOpenChat = { peer, name ->
+                momentId = null
+                onOpenChat(ChatRoute(peerUserId = peer, peerName = name))
+            },
+        )
     }
 }
 
@@ -111,9 +126,16 @@ private fun Segmented(labels: List<String>, selected: Int, onSelect: (Int) -> Un
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit, header: (@Composable () -> Unit)? = null) {
+private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit, onOpenMoment: (String) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val invitations by session.moments.invitations.collectAsState()
+    LaunchedEffect(session) {
+        while (true) {
+            session.moments.refreshInvitations()
+            kotlinx.coroutines.delay(30_000)
+        }
+    }
     val conversations by remember { session.messaging.conversations() }.collectAsState(initial = emptyList())
     val typing by session.messaging.typing.collectAsState()
     val overview by session.relationships.overview.collectAsState()
@@ -236,7 +258,23 @@ private fun Inbox(session: SessionManager, onOpenChat: (ChatRoute) -> Unit, head
             }
         }
         LazyColumn(Modifier.fillMaxSize()) {
-            if (header != null) item(key = "moments-header") { header() }
+            if (!showHidden && !showArchived) {
+                items(invitations, key = { "moment-invite-${it.invitationId}" }) { invitation ->
+                    Box(Modifier.padding(horizontal = ViroSpacing.md, vertical = 4.dp)) {
+                        InvitationRow(
+                            moment = invitation.moment,
+                            onOpen = { onOpenMoment(invitation.moment.id) },
+                            onDismiss = {
+                                scope.launch {
+                                    session.moments.declineInvitation(invitation.invitationId).onFailure {
+                                        Toast.makeText(context, "Couldn't dismiss invitation. Try again.", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                        )
+                    }
+                }
+            }
             if (visible.isEmpty()) {
                 item(key = "empty-conversations") {
                     Column(
