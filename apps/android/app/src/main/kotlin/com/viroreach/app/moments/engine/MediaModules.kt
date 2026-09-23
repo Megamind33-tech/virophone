@@ -1,4 +1,5 @@
 package com.viroreach.app.moments.engine
+import androidx.compose.material.icons.filled.Add
 import com.viroreach.core.designsystem.ViroColors
 
 import androidx.compose.material.icons.filled.MoreVert
@@ -680,12 +681,42 @@ private fun Chooser(ctx: MomentRoomContext, media: MomentMediaContext, kind: Str
                         Text(p.error, color = Color.White, textAlign = TextAlign.Center, modifier = Modifier.clickable { media.share.dismissProblem() })
                         Spacer(Modifier.height(6.dp))
                     }
-                    Surface(
-                        shape = RoundedCornerShape(24.dp), color = Color.White,
-                        modifier = Modifier.clickable { media.share.dismissProblem(); pick.launch(if (kind == "VIDEO") "video/*" else "audio/*") },
+                    // A row, not a slab. A solid white pill with a sentence
+                    // in it was the loudest thing on the screen and the least
+                    // used: people come here to pick something, and adding one
+                    // is the occasional case. It reads as one more item in the
+                    // list, which is what it is.
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                media.share.dismissProblem()
+                                pick.launch(if (kind == "VIDEO") "video/*" else "audio/*")
+                            }
+                            .padding(horizontal = 8.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(if (kind == "VIDEO") "Share a video from your phone" else "Share a song from your phone",
-                            color = Color.Black, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
+                        Box(
+                            Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color.White.copy(alpha = 0.10f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = null,
+                                tint = Color.White.copy(alpha = 0.8f),
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            if (kind == "VIDEO") "Add a video" else "Add a song",
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
                     }
                 }
                 if (!compact) {

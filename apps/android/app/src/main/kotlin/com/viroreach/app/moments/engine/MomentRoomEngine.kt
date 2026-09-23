@@ -1,5 +1,13 @@
 package com.viroreach.app.moments.engine
 
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import com.viroreach.core.designsystem.components.ViroAvatar
+import com.viroreach.core.designsystem.components.ViroAvatarSize
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -287,21 +295,12 @@ fun MomentRoomEngine(
                         Modifier.align(Alignment.BottomStart).fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        RoomTimeline(
-                            messages = messages,
-                            shared = sharedItems,
+                        RoomCommentsBar(
+                            count = messages.size,
+                            latest = messages.lastOrNull(),
                             me = me,
-                            onReact = { messageId, emoji ->
-                                scope.launch {
-                                    room.react(messageId, emoji)
-                                        .onFailure { failure -> chatError = failure.message ?: "Couldn't react." }
-                                }
-                            },
-                            onReply = { message ->
-                                replyingTo = message
-                                chatOpen = true
-                            },
-                            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp),
+                            onOpen = { chatOpen = true },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                         )
                         val besides = besideKeys.mapNotNull { MomentModules.find(it) }
                         if (besides.isNotEmpty()) {
@@ -332,20 +331,27 @@ fun MomentRoomEngine(
                 }
             }
 
-            // Saying something does not take the room away either: the box
-            // appears above the controls and the scene stays where it is.
-            androidx.compose.animation.AnimatedVisibility(
-                visible = chatOpen,
-                enter = fadeIn(tween(160)) + slideInVertically(tween(220)) { it },
-                exit = fadeOut(tween(140)) + slideOutVertically(tween(200)) { it },
-            ) {
-                RoomComposer(
+            // Reading and saying something are the same place now. The box
+            // used to slide up on its own with the remarks stacked over the
+            // scene behind it, which meant the conversation was in two halves
+            // and neither could be scrolled.
+            if (chatOpen) {
+                RoomCommentsSheet(
                     room = room,
-                    replyingTo = replyingTo,
+                    messages = messages,
+                    shared = sharedItems,
                     me = me,
-                    onCancelReply = { replyingTo = null },
+                    now = now,
+                    replyingTo = replyingTo,
+                    onReplyTo = { replyingTo = it },
+                    onReact = { messageId, emoji ->
+                        scope.launch {
+                            room.react(messageId, emoji)
+                                .onFailure { failure -> chatError = failure.message ?: "Couldn't react." }
+                        }
+                    },
                     onError = { chatError = it },
-                    onDone = { chatOpen = false; replyingTo = null },
+                    onDismiss = { chatOpen = false; replyingTo = null },
                 )
             }
             if (chatError != null) {
@@ -761,66 +767,6 @@ private fun SceneSheet(current: String, pinned: Boolean, onPick: (String?) -> Un
     }
 }
 
-/**
- * One thread of what has happened in the room.
- *
- * What somebody said and what somebody put on are the same kind of event —
- * both are people doing something in front of each other — and they were being
- * kept in two places that knew nothing about each other. Worse, both were
- * drawn at the bottom of the same box, so the remarks were printed straight
- * through the music bar.
- *
- * So there is one column, in the order things happened. A remark is a bubble;
- * bringing a song is a quiet line, because it is an event rather than
- * something said, and giving it a bubble would put words in somebody's mouth.
- */
-@Composable
-private fun RoomTimeline(
-    messages: List<com.viroreach.core.network.MomentMessageDto>,
-    shared: List<com.viroreach.core.network.MomentMediaDto>,
-    me: String?,
-    onReact: (messageId: String, emoji: String?) -> Unit,
-    onReply: (com.viroreach.core.network.MomentMessageDto) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    // Only a handful, and only the newest: a room is not a transcript to
-    // scroll, and anything the conversation has moved on from is noise on top
-    // of what people came here to do.
-    val entries = remember(messages, shared) { roomEntries(messages, shared).takeLast(5) }
-    var reacting by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(entries.lastOrNull()?.at) { reacting = null }
-
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        for ((index, entry) in entries.withIndex()) {
-            // The oldest of the few is on its way out, so the eye goes to the
-            // newest without anything having to move.
-            val fade = 0.45f + 0.55f * ((index + 1).toFloat() / entries.size)
-            when (entry) {
-                is RoomEntry.Said -> RoomComment(
-                    message = entry.message,
-                    // What it answers, resolved here from what this phone
-                    // holds. The server only ever sent the id, on purpose.
-                    answering = entry.message.replyToId?.let { id -> messages.firstOrNull { it.id == id } },
-                    mine = entry.message.senderUserId == me,
-                    fade = fade,
-                    open = reacting == entry.message.id,
-                    onOpen = { reacting = if (reacting == entry.message.id) null else entry.message.id },
-                    onReact = { emoji ->
-                        reacting = null
-                        onReact(entry.message.id, emoji)
-                    },
-                    onReply = {
-                        reacting = null
-                        onReply(entry.message)
-                    },
-                    me = me,
-                )
-                is RoomEntry.Brought -> RoomArrival(entry.media, me, fade)
-            }
-        }
-    }
-}
-
 /** Something that happened in the room, whoever did it. */
 private sealed interface RoomEntry {
     /** When, on the server's clock, so the two kinds sort against each other. */
@@ -850,183 +796,360 @@ private fun instantOf(raw: String?): Long? =
     raw?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }
 
 /**
- * Somebody put something on.
+ * How many people have said something, and the last thing said.
  *
- * A line rather than a bubble, and centred rather than sided, because nobody
- * said it — the room did. It reads as part of the thread without pretending to
- * be a remark.
+ * The room shows this one line and nothing else. Remarks used to be stacked
+ * over the scene, four at a time, fading: that is a heads-up display, not a
+ * conversation, and it put words on top of the thing people came to look at.
+ * Reading meant squinting past the music bar, and there was no way to see
+ * anything older than the last few.
+ *
+ * So the room keeps a door instead of a window. This is the door.
  */
 @Composable
-private fun RoomArrival(
-    media: com.viroreach.core.network.MomentMediaDto,
+private fun RoomCommentsBar(
+    count: Int,
+    latest: com.viroreach.core.network.MomentMessageDto?,
     me: String?,
-    fade: Float,
+    onOpen: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 2.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = Color.Black.copy(alpha = 0.45f),
+        modifier = modifier.clickable(onClick = onOpen),
     ) {
-        Surface(
-            color = Color.Black.copy(alpha = 0.38f * fade),
-            shape = RoundedCornerShape(12.dp),
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            Column(Modifier.weight(1f)) {
                 Text(
-                    if (media.kind == "VIDEO") "▶" else "♪",
-                    color = ViroColors.BlueAccent.copy(alpha = fade),
-                    style = MaterialTheme.typography.labelMedium,
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    (if (media.ownerUserId == me) "You" else media.ownerName.substringBefore(' ')) + " brought",
-                    color = Color.White.copy(alpha = 0.62f * fade),
-                    style = MaterialTheme.typography.labelMedium,
-                )
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    media.title,
-                    color = Color.White.copy(alpha = 0.92f * fade),
+                    if (count == 0) "Comments" else "Comments · " + count,
+                    color = Color.White.copy(alpha = 0.7f),
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
+                if (latest != null) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        (if (latest.senderUserId == me) "You" else latest.senderName.substringBefore(' ')) +
+                            ": " + (latest.body ?: com.viroreach.app.moments.SEALED_UNREADABLE),
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                } else {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "Say something",
+                        color = Color.White.copy(alpha = 0.5f),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
             }
+            Icon(
+                Icons.Default.KeyboardArrowUp,
+                contentDescription = "Open comments",
+                tint = Color.White.copy(alpha = 0.6f),
+                modifier = Modifier.size(22.dp),
+            )
         }
     }
 }
 
-/** One remark, as its person said it. */
+/**
+ * The whole conversation, opened.
+ *
+ * A list rather than bubbles. Bubbles are for a chat between two people, where
+ * which side a thing sits on is the only way to tell who said it; a room has
+ * several people in it and a name against a face reads faster than a colour.
+ * This is the shape every comment section people already know uses, and there
+ * is no reason for a Moment to be the exception.
+ *
+ * What somebody brought stays in the same list, because it happened in the
+ * same conversation — the thread is the room's memory, not just its chat.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RoomCommentsSheet(
+    room: com.viroreach.app.moments.MomentRoomState,
+    messages: List<com.viroreach.core.network.MomentMessageDto>,
+    shared: List<com.viroreach.core.network.MomentMediaDto>,
+    me: String?,
+    now: Long,
+    replyingTo: com.viroreach.core.network.MomentMessageDto?,
+    onReplyTo: (com.viroreach.core.network.MomentMessageDto?) -> Unit,
+    onReact: (messageId: String, emoji: String?) -> Unit,
+    onError: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val entries = remember(messages, shared) { roomEntries(messages, shared) }
+    val listState = rememberLazyListState()
+    // Opening lands on the newest, the way arriving in a conversation should.
+    LaunchedEffect(entries.size) {
+        if (entries.isNotEmpty()) listState.scrollToItem(entries.size - 1)
+    }
+    var reacting by remember { mutableStateOf<String?>(null) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = ViroColors.surface,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight(0.88f)) {
+            Text(
+                if (messages.isEmpty()) "Comments" else "Comments · " + messages.size,
+                color = ViroColors.textPrimary,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+            )
+            HorizontalDivider(color = ViroColors.textMuted.copy(alpha = 0.15f))
+            if (entries.isEmpty()) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text(
+                        "Nothing said yet.",
+                        color = ViroColors.textMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                ) {
+                    items(entries.size, key = { entries[it].key() }) { i ->
+                        when (val entry = entries[i]) {
+                            is RoomEntry.Said -> CommentRow(
+                                message = entry.message,
+                                answering = entry.message.replyToId?.let { id -> messages.firstOrNull { it.id == id } },
+                                me = me,
+                                now = now,
+                                open = reacting == entry.message.id,
+                                onOpen = {
+                                    reacting = if (reacting == entry.message.id) null else entry.message.id
+                                },
+                                onReact = { emoji ->
+                                    reacting = null
+                                    onReact(entry.message.id, emoji)
+                                },
+                                onReply = {
+                                    reacting = null
+                                    onReplyTo(entry.message)
+                                },
+                            )
+                            is RoomEntry.Brought -> BroughtRow(entry.media, me)
+                        }
+                    }
+                }
+            }
+            HorizontalDivider(color = ViroColors.textMuted.copy(alpha = 0.15f))
+            RoomComposer(
+                room = room,
+                replyingTo = replyingTo,
+                me = me,
+                onCancelReply = { onReplyTo(null) },
+                onError = onError,
+                onDone = {},
+            )
+        }
+    }
+}
+
+/** A key that is stable across both kinds, so the list does not re-shuffle. */
+private fun RoomEntry.key(): String = when (this) {
+    is RoomEntry.Said -> "said:" + message.id
+    is RoomEntry.Brought -> "brought:" + media.id
+}
+
+/**
+ * One comment, the way a comment is usually shown: a face, a name, when, and
+ * what was said — then what you can do about it.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RoomComment(
+private fun CommentRow(
     message: com.viroreach.core.network.MomentMessageDto,
     answering: com.viroreach.core.network.MomentMessageDto?,
-    mine: Boolean,
-    fade: Float,
+    me: String?,
+    now: Long,
     open: Boolean,
     onOpen: () -> Unit,
     onReact: (String?) -> Unit,
     onReply: () -> Unit,
-    me: String?,
 ) {
-    Column(
-        Modifier.fillMaxWidth(),
-        horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
+    val mine = message.senderUserId == me
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onOpen, onLongClick = onOpen)
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.Top,
     ) {
-        if (open) {
-            ReactionChoices(
-                chosen = message.reactions.firstOrNull { me != null && me in it.userIds }?.emoji,
-                onPick = onReact,
-                onReply = onReply,
-            )
-            Spacer(Modifier.height(4.dp))
-        }
-        Row(verticalAlignment = Alignment.Bottom) {
-            if (mine) Spacer(Modifier.weight(1f, fill = false))
-            Surface(
-                color = (if (mine) ViroColors.BlueAccent else Color.Black).copy(alpha = if (mine) 0.42f * fade else 0.46f * fade),
-                shape = RoundedCornerShape(
-                    topStart = 16.dp,
-                    topEnd = 16.dp,
-                    // The corner nearest its person is the one that is cut,
-                    // which is what makes a bubble look spoken rather than
-                    // placed.
-                    bottomStart = if (mine) 16.dp else 4.dp,
-                    bottomEnd = if (mine) 4.dp else 16.dp,
-                ),
-                modifier = Modifier.combinedClickable(onClick = onOpen, onLongClick = onOpen),
-            ) {
-                Column(Modifier.padding(horizontal = 12.dp, vertical = 7.dp)) {
-                    if (answering != null) {
-                        // A quiet line of what is being answered, with a rule
-                        // beside it. Short on purpose: it is here to say which
-                        // remark, not to repeat it.
-                        Row(Modifier.padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                Modifier
-                                    .width(2.dp)
-                                    .height(26.dp)
-                                    .clip(CircleShape)
-                                    .background(ViroColors.BlueAccent.copy(alpha = 0.8f * fade)),
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Column {
-                                Text(
-                                    if (answering.senderUserId == me) "You" else answering.senderName.substringBefore(' '),
-                                    color = ViroColors.BlueAccent.copy(alpha = 0.85f * fade),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                )
-                                Text(
-                                    answering.body ?: com.viroreach.app.moments.SEALED_UNREADABLE,
-                                    color = Color.White.copy(alpha = 0.6f * fade),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                    }
-                    if (!mine) {
-                        Text(
-                            message.senderName.substringBefore(' '),
-                            color = ViroColors.BlueAccent.copy(alpha = fade),
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                        )
-                    }
+        ViroAvatar(
+            size = ViroAvatarSize.Small,
+            imageUrl = null,
+            displayName = if (mine) "You" else message.senderName,
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (mine) "You" else message.senderName.substringBefore(' '),
+                    color = ViroColors.textPrimary,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    said(message.createdAt, now),
+                    color = ViroColors.textMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            if (answering != null) {
+                Spacer(Modifier.height(3.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .width(2.dp)
+                            .height(20.dp)
+                            .clip(CircleShape)
+                            .background(ViroColors.BlueAccent.copy(alpha = 0.7f)),
+                    )
+                    Spacer(Modifier.width(6.dp))
                     Text(
-                        message.body ?: com.viroreach.app.moments.SEALED_UNREADABLE,
-                        color = Color.White.copy(alpha = fade),
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 4,
+                        (if (answering.senderUserId == me) "You" else answering.senderName.substringBefore(' ')) +
+                            ": " + (answering.body ?: com.viroreach.app.moments.SEALED_UNREADABLE),
+                        color = ViroColors.textMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
-        }
-        if (message.reactions.isNotEmpty()) {
-            Spacer(Modifier.height(2.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                for (reaction in message.reactions.take(4)) {
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.40f * fade),
-                        shape = RoundedCornerShape(10.dp),
-                    ) {
-                        Row(
-                            Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+            Spacer(Modifier.height(3.dp))
+            Text(
+                message.body ?: com.viroreach.app.moments.SEALED_UNREADABLE,
+                color = ViroColors.textPrimary,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            if (message.reactions.isNotEmpty() || open) {
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    for (reaction in message.reactions.take(4)) {
+                        Surface(
+                            color = ViroColors.textMuted.copy(alpha = 0.14f),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.padding(end = 4.dp),
                         ) {
-                            Text(reaction.emoji, style = MaterialTheme.typography.labelMedium)
-                            // One is just the mark; a number only earns its
-                            // place once more than one person has agreed.
-                            if (reaction.userIds.size > 1) {
-                                Spacer(Modifier.width(3.dp))
-                                Text(
-                                    reaction.userIds.size.toString(),
-                                    color = Color.White.copy(alpha = fade),
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
+                            Row(
+                                Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(reaction.emoji, style = MaterialTheme.typography.labelMedium)
+                                // One is the mark itself; a number earns its
+                                // place only once somebody has agreed.
+                                if (reaction.userIds.size > 1) {
+                                    Spacer(Modifier.width(3.dp))
+                                    Text(
+                                        reaction.userIds.size.toString(),
+                                        color = ViroColors.textMuted,
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
                             }
                         }
                     }
+                    if (!open) {
+                        Text(
+                            "Reply",
+                            color = ViroColors.textMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable(onClick = onReply)
+                                .padding(horizontal = 6.dp, vertical = 3.dp),
+                        )
+                    }
                 }
+            }
+            if (open) {
+                Spacer(Modifier.height(6.dp))
+                ReactionChoices(
+                    chosen = message.reactions.firstOrNull { me != null && me in it.userIds }?.emoji,
+                    onPick = onReact,
+                    onReply = onReply,
+                )
             }
         }
     }
 }
 
-/** The few ways to answer without saying anything. */
+/** Somebody put something on: an event in the thread, not a remark. */
+@Composable
+private fun BroughtRow(media: com.viroreach.core.network.MomentMediaDto, me: String?) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            if (media.kind == "VIDEO") "▶" else "♪",
+            color = ViroColors.BlueAccent,
+            style = MaterialTheme.typography.labelMedium,
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            (if (media.ownerUserId == me) "You" else media.ownerName.substringBefore(' ')) + " brought ",
+            color = ViroColors.textMuted,
+            style = MaterialTheme.typography.labelMedium,
+        )
+        Text(
+            media.title,
+            color = ViroColors.textPrimary,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * How long ago, in as few characters as it takes.
+ *
+ * A clock time would be wrong here: a room lasts an hour or two, so what
+ * matters is whether something was said just now or a while back, not what the
+ * wall clock said when it happened.
+ */
+private fun said(createdAt: String, now: Long): String {
+    val at = instantOf(createdAt) ?: return ""
+    val seconds = ((now - at) / 1000L).coerceAtLeast(0L)
+    return when {
+        seconds < 45 -> "now"
+        seconds < 3600 -> (seconds / 60).coerceAtLeast(1) .toString() + "m"
+        seconds < 86_400 -> (seconds / 3600).toString() + "h"
+        else -> (seconds / 86_400).toString() + "d"
+    }
+}
+
+
+/**
+ * The few ways to answer without saying anything.
+ *
+ * Deliberately few, and deliberately kind. A room is people keeping each other
+ * company, so these are the answers you would actually give somebody sitting
+ * next to you. Nothing here is a way to be unpleasant to someone who has just
+ * said something honest.
+ */
 @Composable
 private fun ReactionChoices(chosen: String?, onPick: (String?) -> Unit, onReply: () -> Unit) {
-    Surface(color = Color.Black.copy(alpha = 0.62f), shape = RoundedCornerShape(18.dp)) {
+    Surface(color = ViroColors.textMuted.copy(alpha = 0.14f), shape = RoundedCornerShape(18.dp)) {
         Row(
             Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1047,13 +1170,10 @@ private fun ReactionChoices(chosen: String?, onPick: (String?) -> Unit, onReply:
                         .padding(horizontal = 6.dp, vertical = 4.dp),
                 )
             }
-            // Answering sits with the reactions because it is the same
-            // decision — what to do about what somebody just said — and a
-            // second menu for it would be one press too many.
-            Box(Modifier.width(1.dp).height(18.dp).background(Color.White.copy(alpha = 0.25f)))
+            Box(Modifier.width(1.dp).height(18.dp).background(ViroColors.textMuted.copy(alpha = 0.3f)))
             Text(
                 "Reply",
-                color = Color.White,
+                color = ViroColors.BlueAccent,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier
@@ -1065,13 +1185,6 @@ private fun ReactionChoices(chosen: String?, onPick: (String?) -> Unit, onReply:
     }
 }
 
-/**
- * Deliberately few, and deliberately kind.
- *
- * A room is people keeping each other company, so these are the answers you
- * would actually give someone sitting next to you. Nothing here is a way to
- * be unpleasant to somebody who has just said something honest.
- */
 private val ROOM_REACTIONS = listOf("❤️", "😂", "🙌", "😮", "🥺")
 
 /** One line to say something, and nothing else taken off the screen for it. */
