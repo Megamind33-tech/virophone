@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { roomMessages } from './room-messages';
+import { moodInvitation } from './mood-words';
 import { DataSource } from 'typeorm';
 import { RealtimeRegistry } from '../realtime/realtime.registry';
 import { PushService } from '../push/push.service';
@@ -473,12 +474,24 @@ export class MomentsService {
     await this.db.query(`INSERT INTO moment_invitations (moment_id, invitee_user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [id, inviteeId]);
     const name = await this.nameOf(userId);
     const activity = moment.text?.trim() || moment.type;
+    // How they are and what they are asking for, in one sentence. It used to
+    // say only that somebody had invited you to a Moment, which is the one
+    // thing the person receiving it could already guess — and it left out the
+    // part that decides whether you go: how they actually are.
+    const told = moodInvitation(
+      name,
+      moment.mood,
+      moment.intent ?? intentForLegacyType(moment.type),
+      moment.invitation_text,
+    );
     const delivered = await this.realtime.deliverToUser(inviteeId, {
-      type: 'moment.invited', payload: { momentId: id, inviterName: name, activity } });
+      type: 'moment.invited',
+      payload: { momentId: id, inviterName: name, activity, mood: moment.mood ?? null, told: told.title },
+    });
     if (!delivered) {
       await this.push.sendToUser(inviteeId, {
-        title: `${name} invited you to a Moment`,
-        body: activity,
+        title: told.title,
+        body: told.body,
         data: { type: 'moment-invite', momentId: id },
       });
     }

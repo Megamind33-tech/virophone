@@ -6,6 +6,7 @@ import android.content.Context
 
 import androidx.datastore.preferences.core.edit
 
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 
 import androidx.datastore.preferences.preferencesDataStore
@@ -94,6 +95,26 @@ class CallHistoryStore(context: Context) {
 
 
 
+    /**
+     * When the call list was last looked at.
+     *
+     * A missed call has no seen flag of its own, and adding one to every
+     * entry would mean rewriting the whole history just to clear a badge.
+     * One instant answers the only question being asked — what came in since
+     * the last look — and survives a restart, which a count held in memory
+     * would not.
+     */
+    private val _seenAt = MutableStateFlow(0L)
+
+    val seenAt: StateFlow<Long> = _seenAt.asStateFlow()
+
+    /** The call list is on screen: nothing in it is news any more. */
+    fun markSeen() {
+        val now = System.currentTimeMillis()
+        _seenAt.value = now
+        scope.launch { store.edit { prefs -> prefs[KEY_SEEN_AT] = now } }
+    }
+
     private var activeLogId: String? = null
 
     fun hasActiveCall(): Boolean = activeLogId != null
@@ -109,6 +130,8 @@ class CallHistoryStore(context: Context) {
 
 
     private suspend fun loadPersisted() {
+
+        _seenAt.value = store.data.first()[KEY_SEEN_AT] ?: 0L
 
         val raw = store.data.first()[KEY_ENTRIES].orEmpty()
 
@@ -298,6 +321,9 @@ class CallHistoryStore(context: Context) {
     companion object {
 
         private val KEY_ENTRIES = stringPreferencesKey("entries")
+
+        /** When the call list was last looked at, so a missed call stops being news. */
+        private val KEY_SEEN_AT = longPreferencesKey("seen_at")
 
     }
 

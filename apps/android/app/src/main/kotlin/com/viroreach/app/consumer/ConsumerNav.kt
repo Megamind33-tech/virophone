@@ -71,6 +71,7 @@ import com.viroreach.app.session.SessionManager
 
 import com.viroreach.core.designsystem.ViroColors
 
+import com.viroreach.core.designsystem.components.ViroNavCounts
 import com.viroreach.core.designsystem.components.ViroConsumerBottomBar
 
 import com.viroreach.core.designsystem.components.ViroConsumerTab
@@ -208,6 +209,39 @@ fun ConsumerNav(
 
 
     val callState by session.callManager.state.collectAsState()
+
+    // What is waiting, per tab. Each of these is a real pending thing that a
+    // person would want to know about without having to go and look: somebody
+    // asked to connect, somebody wrote, somebody rang, a Moment is open to
+    // them. Nothing here is invented to give a badge something to show.
+    val inbox by session.messaging.conversations().collectAsState(initial = emptyList())
+    val invitations by session.moments.invitations.collectAsState()
+    val callLog by session.callHistoryStore.entries.collectAsState()
+    val callsSeenAt by session.callHistoryStore.seenAt.collectAsState()
+    var pendingConnections by remember { mutableStateOf(0) }
+    // Connections are asked for rather than pushed, so this checks on arrival
+    // and whenever the Contacts tab is opened — often enough to be true, rare
+    // enough not to be a poll.
+    LaunchedEffect(tab) {
+        runCatching { session.api.listConnections() }
+            .onSuccess { list ->
+                pendingConnections = list.count { it.status == "PENDING" && it.direction == "INCOMING" }
+            }
+    }
+    val navCounts = ViroNavCounts(
+        now = invitations.size,
+        // Archived and hidden conversations are deliberately out: they were
+        // put away on purpose, and a badge would drag them back.
+        chats = inbox.filter { !it.archived && !it.hidden }.sumOf { it.unread },
+        calls = callLog.count {
+            it.type == com.viroreach.app.consumer.data.CallLogType.MISSED && it.timestampMs > callsSeenAt
+        },
+        contacts = pendingConnections,
+    )
+    // Looking at the call list is what makes a missed call stop being news.
+    LaunchedEffect(tab) {
+        if (tab == ViroConsumerTab.Calls) session.callHistoryStore.markSeen()
+    }
 
     val isCaller by session.callManager.isCallerRole.collectAsState()
 
@@ -1025,7 +1059,7 @@ fun ConsumerNav(
 
         bottomBar = {
 
-            ViroConsumerBottomBar(selected = tab, onSelect = { tab = it })
+            ViroConsumerBottomBar(selected = tab, onSelect = { tab = it }, counts = navCounts)
 
         },
 

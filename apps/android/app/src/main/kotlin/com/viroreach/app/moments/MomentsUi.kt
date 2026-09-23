@@ -100,6 +100,8 @@ fun NowScreen(
     // process down.
     val gatePhase by com.viroreach.app.moments.engine.MomentSessionGate.phase.collectAsState()
     var sheetInstance by remember { mutableIntStateOf(0) }
+    // A Moment that has just been made and not yet been stepped into.
+    var tellAbout by remember { mutableStateOf<MomentDto?>(null) }
     val startMoment: () -> Unit = {
         if (!create && com.viroreach.app.moments.engine.MomentSessionGate.idle()) {
             sheetInstance += 1
@@ -300,10 +302,29 @@ fun NowScreen(
         if (create) CreateMomentSheet(onDismiss = { create = false }, onStart = { body ->
             busy = true
             scope.launch {
-                repo.create(body).onSuccess { create = false; roomId = it.id }.onFailure { actionError = it.message }
+                repo.create(body)
+                    .onSuccess { created ->
+                        create = false
+                        // Who to tell is asked here, between making the Moment
+                        // and stepping into it: it is about this Moment, and
+                        // asking afterwards would make it an afterthought.
+                        tellAbout = created
+                    }
+                    .onFailure { actionError = it.message }
                 busy = false
             }
         }, busy = busy, error = actionError)
+
+        tellAbout?.let { made ->
+            TellPeopleSheet(
+                session = session,
+                moment = made,
+                onDone = {
+                    tellAbout = null
+                    roomId = made.id
+                },
+            )
+        }
 
         manage?.let { id ->
             val moment = moments.firstOrNull { it.id == id }
@@ -1578,6 +1599,155 @@ private fun MoodStep(
                         if (selected == null) "Tap how you are, or skip." else "Setting up your Moment…",
                         color = ViroColors.textMuted,
                         style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Who to tell, once a Moment is open.
+ *
+ * Nobody is told anything without being chosen here. That is the whole point
+ * of the step: how somebody is feeling is theirs, and a Moment that quietly
+ * announced a mood to everybody in your contacts would be a betrayal dressed
+ * as a feature. Nothing is preselected, and skipping is a real answer — a
+ * Moment nobody was told about is still a Moment, and still findable by the
+ * people it is visible to.
+ *
+ * Only accepted Viro connections appear, because the server will only accept
+ * an invitation for one, and offering a name that would be refused is a lie
+ * with an error message attached.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TellPeopleSheet(
+    session: SessionManager,
+    moment: MomentDto,
+    onDone: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var people by remember { mutableStateOf<List<com.viroreach.core.network.ConnectionDto>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var failed by remember { mutableStateOf<String?>(null) }
+    var chosen by remember { mutableStateOf(setOf<String>()) }
+    var sending by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        runCatching { session.api.listConnections() }
+            .onSuccess { list ->
+                people = list.filter { it.status == "ACCEPTED" && it.peerUserId != null }
+                loading = false
+            }
+            .onFailure {
+                failed = "Couldn't load your connections."
+                loading = false
+            }
+    }
+
+    val mood = com.viroreach.app.moments.engine.MomentMood.of(moment.mood)
+    val intent = com.viroreach.app.moments.engine.MomentIntent.of(moment.intent)
+
+    ModalBottomSheet(
+        onDismissRequest = { if (!sending) onDone() },
+        containerColor = ViroColors.surface,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+            Text("Tell someone?", color = ViroColors.textPrimary, style = MaterialTheme.typography.headlineSmall)
+            Spacer(Modifier.height(6.dp))
+            // What they will see, before anybody is chosen. Saying it plainly
+            // here is the only way the choice is an informed one.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (mood != null) {
+                    com.viroreach.app.moments.engine.MoodTag(mood)
+                    Text(" · ", color = ViroColors.textMuted)
+                }
+                Text(
+                    intent?.label ?: "Time together",
+                    color = ViroColors.textMuted,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (mood != null) {
+                    "They'll be told how you are and what you'd like — nothing else."
+                } else {
+                    "They'll be told what you'd like — nothing else."
+                },
+                color = ViroColors.textMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(16.dp))
+
+            when {
+                loading -> Text("Looking…", color = ViroColors.textMuted)
+                failed != null -> Text(failed ?: "", color = ViroColors.textMuted)
+                people.isEmpty() -> Text(
+                    "You have no Viro connections yet. Your Moment is open either way.",
+                    color = ViroColors.textMuted,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                else -> LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
+                    items(people.size, key = { people[it].id }) { i ->
+                        val person = people[i]
+                        val id = person.peerUserId ?: return@items
+                        val picked = id in chosen
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable(enabled = !sending) {
+                                    chosen = if (picked) chosen - id else chosen + id
+                                }
+                                .padding(vertical = 10.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            ViroAvatar(
+                                size = ViroAvatarSize.Small,
+                                imageUrl = person.peerAvatarUrl,
+                                displayName = person.peerDisplayName ?: "Viro user",
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                person.peerDisplayName ?: "Viro user",
+                                color = ViroColors.textPrimary,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Checkbox(checked = picked, onCheckedChange = null, enabled = !sending)
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onDone, enabled = !sending) {
+                    // Not "cancel": telling nobody is a legitimate answer, and
+                    // the wording should not imply the Moment failed.
+                    Text("Not now", color = ViroColors.textMuted)
+                }
+                Spacer(Modifier.weight(1f))
+                Button(
+                    enabled = chosen.isNotEmpty() && !sending,
+                    onClick = {
+                        sending = true
+                        scope.launch {
+                            // One at a time, and a failure for one person does
+                            // not cost the others theirs.
+                            chosen.forEach { id -> session.moments.invite(moment.id, id) }
+                            sending = false
+                            onDone()
+                        }
+                    },
+                ) {
+                    Text(
+                        if (chosen.isEmpty()) "Tell" else "Tell " + chosen.size,
+                        fontWeight = FontWeight.SemiBold,
                     )
                 }
             }

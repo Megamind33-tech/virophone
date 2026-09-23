@@ -1,5 +1,7 @@
 package com.viroreach.core.designsystem.components
 
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.foundation.Image
 import androidx.compose.ui.res.painterResource
 import com.viroreach.core.designsystem.R
@@ -739,6 +741,7 @@ fun ViroConsumerBottomBar(
     selected: ViroConsumerTab,
     onSelect: (ViroConsumerTab) -> Unit,
     modifier: Modifier = Modifier,
+    counts: ViroNavCounts = ViroNavCounts.None,
 ) {
     NavigationBar(
         modifier = modifier.fillMaxWidth(),
@@ -756,16 +759,49 @@ fun ViroConsumerBottomBar(
         )
         tabs.forEach { (tab, iconLabel) ->
             val isSelected = selected == tab
+            val waiting = when (tab) {
+                ViroConsumerTab.Now -> counts.now
+                ViroConsumerTab.Chats -> counts.chats
+                ViroConsumerTab.Calls -> counts.calls
+                ViroConsumerTab.Contacts -> counts.contacts
+                ViroConsumerTab.You -> 0
+            }
             NavigationBarItem(
                 selected = isSelected,
                 onClick = { onSelect(tab) },
                 icon = {
-                    Icon(
-                        iconLabel.first,
-                        contentDescription = iconLabel.second,
-                        modifier = Modifier.size(22.dp),
-                        tint = if (isSelected) ViroColors.ElectricBlue else ViroColors.MutedBlue.copy(alpha = 0.85f),
-                    )
+                    BadgedBox(
+                        badge = {
+                            // Only when there is something. A badge that is
+                            // always present is furniture, and stops being
+                            // read at all.
+                            if (waiting > 0) {
+                                Badge(
+                                    containerColor = ViroColors.ElectricBlue,
+                                    contentColor = Color.White,
+                                ) {
+                                    // Past a certain point the exact number
+                                    // stops meaning anything and only makes
+                                    // the badge wider.
+                                    Text(
+                                        if (waiting > 99) "99+" else waiting.toString(),
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                            }
+                        },
+                    ) {
+                        Icon(
+                            iconLabel.first,
+                            contentDescription = if (waiting > 0) {
+                                iconLabel.second + ", " + waiting + " waiting"
+                            } else {
+                                iconLabel.second
+                            },
+                            modifier = Modifier.size(22.dp),
+                            tint = if (isSelected) ViroColors.ElectricBlue else ViroColors.MutedBlue.copy(alpha = 0.85f),
+                        )
+                    }
                 },
                 label = {
                     Text(
