@@ -67,7 +67,7 @@ echo "==> Uploading $(du -h "$APK" | cut -f1) to Firebase App Distribution"
 if [[ -n "$TESTER_GROUP" ]]; then
   "$FIREBASE_BIN" appdistribution:distribute "$APK" \
     --app "$APP_ID" --project "$PROJECT" \
-    --release-notes "$NOTES" --group-aliases "$TESTER_GROUP"
+    --release-notes "$NOTES" --groups "$TESTER_GROUP"
 else
   "$FIREBASE_BIN" appdistribution:distribute "$APK" \
     --app "$APP_ID" --project "$PROJECT" \
