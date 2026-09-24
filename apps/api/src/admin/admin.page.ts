@@ -22,34 +22,40 @@ export const ADMIN_CONSOLE_PAGE = `<!doctype html>
 <title>Viro — console</title>
 <style>
   :root {
-    --bg: #00122C; --surface: #001A3F; --raised: #0A2548;
-    --text: #F2F4F7; --muted: #9AA3AD; --accent: #42A5F5;
-    --good: #4CD964; --bad: #FF6B4A; --line: rgba(255,255,255,.08);
+    --bg: #07111f; --surface: #0d1c2f; --raised: #142943;
+    --text: #f4f7fb; --muted: #8ea1b8; --accent: #6ba8ff;
+    --good: #54d69a; --bad: #ff7d85; --line: rgba(183,209,240,.12);
+    --shadow: 0 18px 48px rgba(0,0,0,.22);
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: var(--bg); color: var(--text);
+    margin: 0; background: radial-gradient(circle at 85% -10%, #173557 0, transparent 34%), var(--bg); color: var(--text);
     font: 15px/1.5 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
   }
+  #app { min-height: 100vh; display: grid; grid-template-columns: 236px 1fr; grid-template-rows: 76px 1fr; }
   header {
+    grid-column: 2; grid-row: 1;
     display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
-    padding: 18px 20px; border-bottom: 1px solid var(--line);
+    padding: 18px 30px; border-bottom: 1px solid var(--line); background: rgba(7,17,31,.72); backdrop-filter: blur(18px);
   }
-  h1 { font-size: 20px; margin: 0; font-weight: 600; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -.02em; }
   header .sub { color: var(--muted); font-size: 13px; }
   header .spacer { flex: 1; }
-  nav { display: flex; gap: 4px; padding: 10px 14px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+  nav { grid-column: 1; grid-row: 1 / 3; display: flex; flex-direction: column; gap: 5px; padding: 22px 14px; border-right: 1px solid var(--line); background: rgba(5,14,27,.9); }
+  nav:before { content: 'VIRO'; color: var(--text); font-size: 22px; font-weight: 750; letter-spacing: .12em; padding: 0 14px 30px; }
   nav button {
-    background: transparent; border: 0; color: var(--muted); padding: 8px 14px;
-    border-radius: 20px; cursor: pointer; font-size: 14px;
+    text-align: left; background: transparent; border: 0; color: var(--muted); padding: 11px 14px;
+    border-radius: 10px; cursor: pointer; font-size: 14px; transition: .18s ease;
   }
-  nav button[aria-current="true"] { background: var(--raised); color: var(--text); }
-  main { padding: 20px; max-width: 1100px; }
+  nav button:hover { background: rgba(107,168,255,.09); color: var(--text); }
+  nav button[aria-current="true"] { background: linear-gradient(90deg, rgba(107,168,255,.2), rgba(107,168,255,.05)); color: var(--text); box-shadow: inset 3px 0 var(--accent); }
+  main { grid-column: 2; grid-row: 2; padding: 30px; max-width: 1320px; width: 100%; }
   .cards { display: flex; flex-wrap: wrap; gap: 12px; }
-  .card { background: var(--surface); border-radius: 14px; padding: 14px 16px; min-width: 150px; flex: 1; }
-  .card .n { font-size: 26px; font-weight: 600; }
+  .card { background: linear-gradient(145deg, rgba(17,39,66,.98), rgba(10,27,47,.98)); border: 1px solid var(--line); border-radius: 16px; padding: 18px 19px; min-width: 170px; flex: 1; box-shadow: var(--shadow); }
+  .card .n { font-size: 30px; font-weight: 650; letter-spacing: -.04em; }
   .card .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
   table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  .panel { background: rgba(13,28,47,.8); border: 1px solid var(--line); border-radius: 16px; padding: 20px; box-shadow: var(--shadow); }
   th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); font-size: 14px; vertical-align: top; }
   th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
   input, textarea, select, button.action {
@@ -85,6 +91,12 @@ export const ADMIN_CONSOLE_PAGE = `<!doctype html>
   .split > * { flex: 1; min-width: 300px; }
   .field { display: grid; gap: 4px; margin-bottom: 10px; }
   label { font-size: 13px; color: var(--muted); }
+  h2 { font-size: 25px; margin: 0 0 5px; letter-spacing: -.03em; } h3 { color: var(--text); }
+  .section-head { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:18px; }
+  .chart { display:flex; gap:8px; align-items:flex-end; min-height:150px; padding:18px 8px 4px; }
+  .bar { flex:1; min-width:10px; border-radius:6px 6px 2px 2px; background:linear-gradient(180deg,var(--accent),#365c9d); position:relative; }
+  .bar span { position:absolute; bottom:-22px; left:50%; transform:translateX(-50%); font-size:10px; color:var(--muted); }
+  @media(max-width:800px) { #app{display:block} nav{position:sticky;top:0;z-index:2;flex-direction:row;overflow:auto;padding:10px} nav:before{display:none} header{padding:16px 18px} main{padding:18px} }
 </style>
 </head>
 <body>
@@ -121,8 +133,7 @@ export const ADMIN_CONSOLE_PAGE = `<!doctype html>
     ['subscribers', 'Subscribers'],
     ['campaigns', 'Campaigns'],
     ['notify', 'Notifications'],
-    ['security', 'Security'],
-    ['roadmap', 'Not built yet'],
+    ['security', 'Activity'],
   ];
 
   function el(id) { return document.getElementById(id); }
@@ -177,40 +188,45 @@ export const ADMIN_CONSOLE_PAGE = `<!doctype html>
     if (tab === 'campaigns') return campaigns(v);
     if (tab === 'notify') return notify(v);
     if (tab === 'security') return security(v);
-    if (tab === 'roadmap') return roadmap(v);
   }
 
   function fail(v, e) { v.innerHTML = '<p class="err">' + esc(e.message) + '</p>'; }
 
   function overview(v) {
-    api('/overview').then(function (o) {
+    Promise.all([api('/overview'), api('/insights')]).then(function (result) {
+      var o = result[0], insight = result[1];
       var cards = [
         ['People', o.users], ['New this week', o.new_this_week], ['Suspended', o.suspended],
+        ['Active today', o.active_today],
         ['Devices', o.devices], ['Devices with keys', o.keyed_devices],
         ['Moments live', o.live_moments], ['Moments this week', o.moments_this_week],
         ['Messages today', o.messages_today], ['Security events today', o.events_today],
       ];
-      v.innerHTML = '<div class="cards">' + cards.map(function (c) {
+      var max = Math.max.apply(null, insight.days.map(function (d) { return Math.max(d.signups, d.moments); }).concat([1]));
+      var bars = insight.days.map(function (d) { return '<div class="bar" style="height:' + Math.max(8, (Math.max(d.signups, d.moments) / max) * 120) + 'px" title="' + esc(d.day + ': ' + d.signups + ' signups, ' + d.moments + ' Moments') + '"><span>' + esc(d.day.slice(5)) + '</span></div>'; }).join('');
+      v.innerHTML = '<div class="section-head"><div><h2>Good morning, operator</h2><div class="note">A live view of the people and moments moving through Viro.</div></div><span class="pill good">Live data · UTC</span></div>' +
+      '<div class="cards">' + cards.map(function (c) {
         return '<div class="card"><div class="n">' + esc(c[1] == null ? '—' : c[1]) + '</div><div class="k">' + esc(c[0]) + '</div></div>';
-      }).join('') + '</div>' +
-      '<p class="note" style="margin-top:16px">Counted live from the database each time this loads, so nothing here can drift from the truth.</p>';
+      }).join('') + '</div><div class="panel" style="margin-top:20px"><div class="section-head"><div><h3 style="margin:0">Platform pulse</h3><div class="note">Signups and Moments over the last 14 days</div></div><span class="pill">Hover a bar for detail</span></div><div class="chart">' + bars + '</div></div>';
     }).catch(function (e) { fail(v, e); });
   }
 
   function people(v) {
-    v.innerHTML = '<div class="row"><input id="q" placeholder="Name, Viro ID or phone number" style="max-width:360px">' +
-      '<button class="ghost" id="go">Search</button></div><div id="list"></div>';
-    function load(q) {
-      api('/users?limit=50' + (q ? '&q=' + encodeURIComponent(q) : '')).then(function (rows) {
+    v.innerHTML = '<div class="section-head"><div><h2>People</h2><div class="note">Search, inspect and protect accounts without exposing private conversations.</div></div></div><div class="panel"><div class="row"><input id="q" placeholder="Name, Viro ID, phone or account ID" style="max-width:430px"><select id="status" style="max-width:170px"><option value="">All statuses</option><option>ACTIVE</option><option>SUSPENDED</option><option>DELETED</option></select><button class="action" id="go">Search people</button></div><div id="list"></div></div>';
+    function load(q, status) {
+      api('/directory?limit=20&page=1' + (q ? '&q=' + encodeURIComponent(q) : '') + (status ? '&status=' + status : '')).then(function (result) {
+        var rows = result.items || [];
         el('list').innerHTML = rows.length === 0 ? '<p class="note">Nobody matched.</p>' :
-          '<table><tr><th>Person</th><th>Status</th><th>Joined</th><th></th></tr>' + rows.map(function (u) {
+          '<table><tr><th>Person</th><th>Status</th><th>Devices</th><th>Joined</th><th></th></tr>' + rows.map(function (u) {
             var suspended = u.status === 'SUSPENDED';
-            return '<tr><td>' + esc(u.displayName || 'Viro user') + '<div class="note">' + esc(u.viroId || u.id) + '</div></td>' +
+            return '<tr><td><button class="ghost" data-view="' + esc(u.id) + '">' + esc(u.displayName || 'Viro user') + '</button><div class="note">' + esc(u.viroId || u.id) + '</div></td>' +
               '<td><span class="pill ' + (suspended ? 'bad' : 'good') + '">' + esc(u.status || '—') + '</span></td>' +
+              '<td>' + esc(u.activeDevices == null ? '—' : u.activeDevices) + '</td>' +
               '<td class="note">' + when(u.createdAt) + '</td>' +
               '<td><button class="ghost ' + (suspended ? '' : 'danger') + '" data-id="' + esc(u.id) + '" data-on="' + suspended + '">' +
               (suspended ? 'Restore' : 'Suspend') + '</button></td></tr>';
           }).join('') + '</table>';
+        Array.prototype.forEach.call(el('list').querySelectorAll('button[data-view]'), function (b) { b.onclick = function () { userDetail(v, b.dataset.view); }; });
         Array.prototype.forEach.call(el('list').querySelectorAll('button[data-id]'), function (b) {
           b.onclick = function () {
             var path = '/users/' + b.dataset.id + (b.dataset.on === 'true' ? '/unsuspend' : '/suspend');
@@ -220,9 +236,18 @@ export const ADMIN_CONSOLE_PAGE = `<!doctype html>
         });
       }).catch(function (e) { fail(v, e); });
     }
-    el('go').onclick = function () { load(el('q').value); };
-    el('q').onkeydown = function (e) { if (e.key === 'Enter') load(el('q').value); };
-    load('');
+    el('go').onclick = function () { load(el('q').value, el('status').value); };
+    el('q').onkeydown = function (e) { if (e.key === 'Enter') load(el('q').value, el('status').value); };
+    load('', '');
+  }
+
+  function userDetail(v, id) {
+    api('/users/' + id).then(function (u) {
+      v.innerHTML = '<button class="ghost" id="backPeople">← People</button><div class="section-head" style="margin-top:20px"><div><h2>' + esc(u.displayName || 'Viro user') + '</h2><div class="note">' + esc(u.viroId || u.id) + ' · joined ' + when(u.createdAt) + '</div></div><span class="pill ' + (u.status === 'ACTIVE' ? 'good' : 'bad') + '">' + esc(u.status) + '</span></div><div class="split"><div class="panel"><h3>Account controls</h3><p class="note">Suspending revokes active devices and blocks sign-in. Every action is audited.</p><button id="accountAction" class="ghost ' + (u.status === 'ACTIVE' ? 'danger' : '') + '">' + (u.status === 'ACTIVE' ? 'Suspend account' : 'Restore account') + '</button></div><div class="panel"><h3>Devices</h3>' + (u.devices || []).map(function (d) { return '<div class="row" style="justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line)"><span><strong>' + esc(d.platform) + '</strong><span class="note"> · ' + esc(d.appVersion || 'unknown') + ' · last seen ' + when(d.lastSeenAt) + '</span></span>' + (d.revokedAt ? '<span class="pill bad">revoked</span>' : '<button class="ghost danger" data-revoke="' + esc(d.id) + '">Revoke</button>') + '</div>'; }).join('') + '</div></div>';
+      el('backPeople').onclick = function () { people(v); };
+      el('accountAction').onclick = function () { if (!confirm('Change this account status?')) return; api('/users/' + id + (u.status === 'ACTIVE' ? '/suspend' : '/unsuspend'), { method: 'POST', body: JSON.stringify({ reason: 'Admin console action' }) }).then(function () { userDetail(v, id); }).catch(function (e) { alert(e.message); }); };
+      Array.prototype.forEach.call(v.querySelectorAll('button[data-revoke]'), function (b) { b.onclick = function () { if (!confirm('Revoke this device?')) return; api('/users/' + id + '/devices/' + b.dataset.revoke + '/revoke', { method: 'POST', body: '{}' }).then(function () { userDetail(v, id); }).catch(function (e) { alert(e.message); }); }; });
+    }).catch(function (e) { fail(v, e); });
   }
 
   function moments(v) {
@@ -412,7 +437,7 @@ export const ADMIN_CONSOLE_PAGE = `<!doctype html>
         '<div style="flex:1"><div class="t">' + esc(p.title) + '</div>' +
         (p.body ? '<div class="b">' + esc(p.body) + '</div>' : '') +
         (p.action ? '<div class="b">opens: ' + esc(p.action) + '</div>' : '') + '</div>' +
-        '<button class="ghost danger" data-rm="' + esc(p.id) + '">Remove</button></div>';
+        '<button class="ghost" data-edit="' + esc(p.id) + '">Edit</button><button class="ghost danger" data-rm="' + esc(p.id) + '">Remove</button></div>';
     }).join('');
 
     var dragging = null;
@@ -444,6 +469,18 @@ export const ADMIN_CONSOLE_PAGE = `<!doctype html>
           .catch(function (e) { alert(e.message); });
       };
     });
+    Array.prototype.forEach.call(host.querySelectorAll('button[data-edit]'), function (b) {
+      b.onclick = function () {
+        var row = b.closest('.promo');
+        var title = prompt('Promotion title', row.querySelector('.t').textContent);
+        if (title === null) return;
+        var bodyNode = row.querySelector('.b');
+        var body = prompt('Promotion message', bodyNode ? bodyNode.textContent : '');
+        if (body === null) return;
+        api('/promotions/' + b.dataset.edit, { method: 'PATCH', body: JSON.stringify({ title: title, body: body }) })
+          .then(function () { campaignDetail(el('view'), campaignId); }).catch(function (e) { alert(e.message); });
+      };
+    });
 
     function save() {
       var ids = Array.prototype.map.call(host.querySelectorAll('.promo'), function (r) { return r.dataset.id; });
@@ -453,13 +490,14 @@ export const ADMIN_CONSOLE_PAGE = `<!doctype html>
   }
 
   function notify(v) {
-    v.innerHTML = '<form class="stack" id="f">' +
+    v.innerHTML = '<div class="section-head"><div><h2>Notifications</h2><div class="note">Send a useful, human update to a precise audience.</div></div></div><div class="panel"><form class="stack" id="f">' +
       '<label>Who <input id="uid" placeholder="User id, or leave empty for everyone with a device"></label>' +
       '<label>Title <input id="t" maxlength="80" required></label>' +
       '<label>Message <textarea id="b" rows="3" maxlength="240" required></textarea></label>' +
       '<button class="action" type="submit">Send</button>' +
       '<p class="err" id="ne"></p></form>' +
-      '<p class="note">A broadcast reaches everyone with a registered device, up to five thousand, and is written to the security log with who sent it.</p>';
+      '<p class="note" id="audience">Checking reachable devices…</p></div>';
+    api('/notification-audience').then(function (a) { el('audience').textContent = a.people + ' people · ' + a.devices + ' registered devices' + (a.capped ? ' · capped at 5,000' : ''); }).catch(function () {});
     el('f').onsubmit = function (e) {
       e.preventDefault();
       var uid = el('uid').value.trim();
@@ -472,24 +510,12 @@ export const ADMIN_CONSOLE_PAGE = `<!doctype html>
 
   function security(v) {
     api('/security-events?limit=100').then(function (rows) {
-      v.innerHTML = rows.length === 0 ? '<p class="note">Nothing logged.</p>' :
+      v.innerHTML = '<div class="section-head"><div><h2>Activity log</h2><div class="note">A tamper-resistant trail of sensitive actions and platform events.</div></div></div><div class="panel">' + (rows.length === 0 ? '<p class="note">Nothing logged.</p>' :
         '<table><tr><th>When</th><th>Event</th><th>Severity</th><th>Detail</th></tr>' + rows.map(function (e) {
           return '<tr><td class="note">' + when(e.createdAt || e.created_at) + '</td><td>' + esc(e.eventType || e.event_type) + '</td>' +
             '<td>' + esc(e.severity) + '</td><td class="note">' + esc(JSON.stringify(e.metadata || {})) + '</td></tr>';
-        }).join('') + '</table>';
+        }).join('') + '</table>') + '</div>';
     }).catch(function (e) { fail(v, e); });
-  }
-
-  // Said plainly rather than shown as controls that do nothing. A console
-  // with dead buttons is worse than one that admits its own edges.
-  function roadmap(v) {
-    v.innerHTML = '<div class="unbuilt"><p>These were asked for and are <strong>not built</strong>. Nothing on the other tabs is a mock — everything there is wired to a real endpoint.</p><ul>' +
-      [       'Theme changing from here — the app ships one palette and a wallpaper each person sets; pushing a theme centrally is a new capability, not a switch.',
-       'Account recovery — recovery today is the encrypted-backup key held on the phone, and deliberately not something an admin can perform. Any admin-side recovery has to be designed against that promise first.',
-       'Customer support threads — a person can be found and suspended here, but there is no ticketing, no conversation and no notes.',
-       'Creating or editing Moments on somebody\\'s behalf — ending one is here; opening one as another person is impersonation and needs a decision before it is code.',
-       'Blocking controls beyond suspension — per-pair blocks exist in the app and are not exposed here.'
-      ].map(function (s) { return '<li>' + s + '</li>'; }).join('') + '</ul></div>';
   }
 
   el('enter').onclick = function () {
