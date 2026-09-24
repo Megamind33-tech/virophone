@@ -454,12 +454,25 @@ export class MomentsService {
     await this.db.query(`INSERT INTO moment_knocks (moment_id, knocker_user_id) VALUES ($1,$2)
       ON CONFLICT (moment_id, knocker_user_id) DO UPDATE SET status = 'PENDING' RETURNING id`, [id, userId]);
     const name = await this.nameOf(userId);
+    const told = moodInvitation(
+      name,
+      moment.mood,
+      moment.intent ?? intentForLegacyType(moment.type),
+      moment.invitation_text,
+    );
     const delivered = await this.realtime.deliverToUser(moment.creator_user_id, {
-      type: 'moment.knock', payload: { momentId: id, knockerUserId: userId, knockerName: name } });
+      type: 'moment.knock', payload: {
+        momentId: id,
+        knockerUserId: userId,
+        knockerName: name,
+        activity: moment.text?.trim() || moment.type,
+        mood: moment.mood ?? null,
+        told: told.title,
+      } });
     if (!delivered) {
       await this.push.sendToUser(moment.creator_user_id, {
-        title: `${name} wants to talk`,
-        body: 'Tap to answer from their Moment.',
+        title: told.title,
+        body: told.body,
         data: { type: 'moment-knock', momentId: id, knockerUserId: userId },
       });
     }

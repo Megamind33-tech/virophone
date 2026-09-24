@@ -1009,8 +1009,9 @@ fun MomentKnockListener(session: SessionManager, onCall: (String?, String?, Stri
         val knockerId = payload["knockerUserId"] as? String
         val knockerName = payload["knockerName"] as? String ?: "Someone"
         val momentId = payload["momentId"] as? String
+        val told = payload["told"] as? String
         AlertDialog(onDismissRequest = { if (!busy) knock = null }, containerColor = ViroColors.surface,
-            title = { Text("$knockerName wants to talk", color = ViroColors.textPrimary) },
+            title = { Text(told ?: "$knockerName wants to talk", color = ViroColors.textPrimary) },
             text = { Text("They knocked on your Moment.", color = ViroColors.textMuted) },
             confirmButton = {
                 TextButton(enabled = !busy, onClick = {
