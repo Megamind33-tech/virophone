@@ -50,7 +50,7 @@ fun StickerGifPanel(
     val context = LocalContext.current
     val features by repo.features.collectAsState()
     var tab by remember { mutableIntStateOf(0) }
-    Column(Modifier.fillMaxWidth().height(320.dp).background(ViroColors.NavySurface)) {
+    Column(Modifier.fillMaxWidth().height(320.dp).background(ViroColors.surface)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             listOf("Stickers", "GIFs").forEachIndexed { i, label ->
                 Text(

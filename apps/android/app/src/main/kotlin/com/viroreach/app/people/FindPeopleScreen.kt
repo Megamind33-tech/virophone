@@ -155,7 +155,7 @@ fun FindPeopleScreen(
                 }
 
                 Spacer(Modifier.height(ViroSpacing.xl))
-                HorizontalDivider(color = ViroColors.NavySurfaceElevated)
+                HorizontalDivider(color = ViroColors.surfaceRaised)
                 Spacer(Modifier.height(ViroSpacing.md))
                 Text("Your Viro ID", style = MaterialTheme.typography.labelMedium, color = ViroColors.textMuted)
                 Spacer(Modifier.height(4.dp))
@@ -227,7 +227,7 @@ private fun PersonCard(
             ViroAvatar(displayName = name, imageUrl = person.avatarUrl, size = ViroAvatarSize.Large)
             Spacer(Modifier.width(ViroSpacing.md))
             Column(Modifier.weight(1f)) {
-                Text(name, color = Color.White, style = MaterialTheme.typography.titleMedium)
+                Text(name, color = ViroColors.textPrimary, style = MaterialTheme.typography.titleMedium)
                 person.viroId?.let { Text(it, color = ViroColors.textSecondary) }
             }
         }
@@ -281,7 +281,7 @@ private fun RequestRow(connection: ConnectionDto, busy: Boolean, onAccept: () ->
         ViroAvatar(displayName = name, imageUrl = connection.peerAvatarUrl, size = ViroAvatarSize.Medium)
         Spacer(Modifier.width(ViroSpacing.sm))
         Column(Modifier.weight(1f)) {
-            Text(name, color = Color.White)
+            Text(name, color = ViroColors.textPrimary)
             connection.peerViroId?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = ViroColors.textSecondary) }
         }
         TextButton(onClick = onAccept, enabled = !busy) { Text("Accept", color = ViroColors.accent) }

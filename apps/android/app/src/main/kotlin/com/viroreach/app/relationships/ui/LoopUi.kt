@@ -97,9 +97,9 @@ fun LoopCreateDialog(
     }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.9f), shape = RoundedCornerShape(24.dp), color = ViroColors.NavySurface) {
+        Surface(Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.9f), shape = RoundedCornerShape(24.dp), color = ViroColors.surface) {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp)) {
-                Text("Start a Loop", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                Text("Start a Loop", color = ViroColors.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
                 Text(
                     "A question you both answer on a rhythm. Nobody is punished for missing a day.",
                     color = ViroColors.textSecondary, fontSize = 14.sp,
@@ -126,7 +126,7 @@ fun LoopCreateDialog(
                             .padding(10.dp),
                     ) {
                         Column {
-                            Text(t.title, color = Color.White, fontWeight = FontWeight.Medium)
+                            Text(t.title, color = ViroColors.textPrimary, fontWeight = FontWeight.Medium)
                             Text(t.prompt, color = ViroColors.textSecondary, fontSize = 13.sp)
                         }
                     }
@@ -145,10 +145,10 @@ fun LoopCreateDialog(
                         DAY_LABELS.forEachIndexed { i, l ->
                             val on = days and (1 shl i) != 0
                             Box(
-                                Modifier.size(36.dp).clip(CircleShape).background(if (on) vibe.accent else ViroColors.NavySurfaceElevated)
+                                Modifier.size(36.dp).clip(CircleShape).background(if (on) vibe.accent else ViroColors.surfaceRaised)
                                     .clickable { days = days xor (1 shl i) },
                                 contentAlignment = Alignment.Center,
-                            ) { Text(l, color = Color.White) }
+                            ) { Text(l, color = if (on) ViroColors.onAccent else ViroColors.textPrimary) }
                         }
                     }
                 }
@@ -171,7 +171,7 @@ fun LoopCreateDialog(
                 Spacer(Modifier.height(12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Reveal together", color = Color.White)
+                        Text("Reveal together", color = ViroColors.textPrimary)
                         Text("Your answer stays hidden until they answer too.", color = ViroColors.textSecondary, fontSize = 12.sp)
                     }
                     Switch(checked = reciprocal, onCheckedChange = { reciprocal = it })
@@ -237,13 +237,13 @@ fun LoopCard(
             Text("🔁", fontSize = 18.sp)
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
-                Text(loop.title, color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text(loop.title, color = ViroColors.textPrimary, fontWeight = FontWeight.SemiBold)
                 Text(momentsLine(loop), color = ViroColors.textSecondary, fontSize = 12.sp)
             }
             IconButton(onClick = { onMore(loop) }) { Icon(Icons.Default.MoreHoriz, "Loop options", tint = ViroColors.textSecondary) }
         }
         Spacer(Modifier.height(6.dp))
-        Text(loop.prompt, color = Color.White, fontSize = 16.sp)
+        Text(loop.prompt, color = ViroColors.textPrimary, fontSize = 16.sp)
         Spacer(Modifier.height(10.dp))
         when {
             loop.active != true -> Text("Paused", color = ViroColors.textSecondary)
@@ -313,7 +313,7 @@ private fun AnswerInput(
                 placeholder = { Text("Your answer") },
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(18.dp),
-                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White),
+                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = ViroColors.textPrimary, unfocusedTextColor = ViroColors.textPrimary),
             )
             if (text.isBlank() && kind == "ANY") {
                 IconButton(onClick = { onVoice(loop) }) { Icon(Icons.Default.Mic, "Answer by voice", tint = vibe.accent) }
@@ -347,7 +347,7 @@ private fun AnswerLine(
             "EMOJI" -> Text(words.orEmpty(), fontSize = 26.sp)
             else -> Text(
                 words ?: "🔒 Waiting for this answer",
-                color = if (words == null) ViroColors.textSecondary else Color.White,
+                color = if (words == null) ViroColors.textSecondary else ViroColors.textPrimary,
             )
         }
     }
@@ -366,9 +366,9 @@ fun LoopHistoryDialog(
     onDismiss: () -> Unit,
 ) {
     Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(20.dp), color = ViroColors.NavySurface) {
+        Surface(shape = RoundedCornerShape(20.dp), color = ViroColors.surface) {
             Column(Modifier.padding(18.dp).heightIn(max = 560.dp)) {
-                Text(loop.title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                Text(loop.title, color = ViroColors.textPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                 Text("${loop.completedTotal ?: 0} moments shared", color = ViroColors.textSecondary)
                 Spacer(Modifier.height(10.dp))
                 LazyColumn(Modifier.weight(1f, fill = false)) {

@@ -79,8 +79,8 @@ fun MessagesInboxScreen(
                     Segmented(listOf("Messages", "Connections"), tab) { tab = it }
                     Spacer(Modifier.weight(1f))
                     if (tab == 0) {
-                        IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Search messages", tint = Color.White) }
-                        IconButton(onClick = onNewGroup) { Icon(Icons.Default.GroupAdd, "New group", tint = Color.White) }
+                        IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Search messages", tint = ViroColors.textPrimary) }
+                        IconButton(onClick = onNewGroup) { Icon(Icons.Default.GroupAdd, "New group", tint = ViroColors.textPrimary) }
                     }
                 }
                 if (tab == 0) {
@@ -108,7 +108,7 @@ fun MessagesInboxScreen(
 @Composable
 private fun Segmented(labels: List<String>, selected: Int, onSelect: (Int) -> Unit) {
     Row(
-        Modifier.clip(RoundedCornerShape(20.dp)).background(ViroColors.NavySurfaceElevated).padding(3.dp),
+        Modifier.clip(RoundedCornerShape(20.dp)).background(ViroColors.surfaceRaised).padding(3.dp),
     ) {
         labels.forEachIndexed { i, label ->
             Box(
@@ -118,7 +118,7 @@ private fun Segmented(labels: List<String>, selected: Int, onSelect: (Int) -> Un
                     .clickable { onSelect(i) }
                     .padding(horizontal = 18.dp, vertical = 8.dp),
             ) {
-                Text(label, color = Color.White, fontWeight = if (i == selected) FontWeight.SemiBold else FontWeight.Normal)
+                Text(label, color = if (i == selected) ViroColors.onAccent else ViroColors.textPrimary, fontWeight = if (i == selected) FontWeight.SemiBold else FontWeight.Normal)
             }
         }
     }
@@ -392,7 +392,7 @@ private fun ConversationRow(
             else ViroAvatar(displayName = name, imageUrl = avatarUrl, size = ViroAvatarSize.Medium)
             if (c.isPrivate) {
                 Box(
-                    Modifier.align(Alignment.BottomEnd).size(18.dp).clip(CircleShape).background(ViroColors.NavyBackground),
+                    Modifier.align(Alignment.BottomEnd).size(18.dp).clip(CircleShape).background(ViroColors.background),
                     contentAlignment = Alignment.Center,
                 ) { Text("🔒", fontSize = 10.sp) }
             }
@@ -402,7 +402,7 @@ private fun ConversationRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     if (c.isPrivate) "$name · Private" else name,
-                    color = Color.White,
+                    color = ViroColors.textPrimary,
                     fontWeight = if (c.unread > 0 || c.unreadMarked || c.mentionedUnread) FontWeight.Bold else FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -475,14 +475,14 @@ private fun ConversationRow(
                         Spacer(Modifier.width(4.dp))
                         Box(
                             Modifier.clip(CircleShape).background(ViroColors.accent).padding(horizontal = 7.dp, vertical = 2.dp),
-                        ) { Text(c.unread.toString(), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+                        ) { Text(c.unread.toString(), color = ViroColors.onAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
                     }
                 }
             } else if (c.unread > 0) {
                 Spacer(Modifier.height(4.dp))
                 Box(
                     Modifier.clip(CircleShape).background(ViroColors.accent).padding(horizontal = 7.dp, vertical = 2.dp),
-                ) { Text(c.unread.toString(), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+                ) { Text(c.unread.toString(), color = ViroColors.onAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
             } else if (c.unreadMarked) {
                 // Marked unread by hand: a plain dot, with no count to show.
                 Spacer(Modifier.height(4.dp))

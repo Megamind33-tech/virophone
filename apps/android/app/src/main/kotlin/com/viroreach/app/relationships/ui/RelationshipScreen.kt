@@ -114,11 +114,11 @@ fun RelationshipScreen(
     }
 
     BackHandler { onBack() }
-    Column(Modifier.fillMaxSize().background(ViroColors.NavyBackground).systemBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(ViroColors.background).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
+            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ViroColors.textPrimary) }
             Column(Modifier.weight(1f)) {
-                Text(name, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                Text(name, color = ViroColors.textPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                 Text("Only you can see this page.", color = ViroColors.textSecondary, fontSize = 12.sp)
             }
             TextButton(onClick = { scope.launch { if (save() != null) Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show() } }, enabled = !saving) {
@@ -131,7 +131,7 @@ fun RelationshipScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         HealthPill(h.code)
                         Spacer(Modifier.width(8.dp))
-                        Text(h.text, color = Color.White, modifier = Modifier.weight(1f))
+                        Text(h.text, color = ViroColors.textPrimary, modifier = Modifier.weight(1f))
                     }
                     rel.lastInteractionAt?.let {
                         Text("Last in touch: ${it.take(10)}", color = ViroColors.textSecondary, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
@@ -190,7 +190,7 @@ fun RelationshipScreen(
                     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             "${d.label ?: d.kind} — ${d.day} ${java.time.Month.of(d.month).name.lowercase().replaceFirstChar { it.uppercase() }}${d.year?.let { " $it" } ?: ""}",
-                            color = Color.White, modifier = Modifier.weight(1f),
+                            color = ViroColors.textPrimary, modifier = Modifier.weight(1f),
                         )
                         IconButton(onClick = { scope.launch { session.relationships.removeDate(d.id) } }) {
                             Icon(Icons.Default.Close, "Remove", tint = ViroColors.textSecondary)
@@ -206,7 +206,7 @@ fun RelationshipScreen(
                     commitments.forEach { c ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(c.text.replaceFirstChar { it.uppercase() }, color = Color.White)
+                                Text(c.text.replaceFirstChar { it.uppercase() }, color = ViroColors.textPrimary)
                                 Text(c.dueAt.take(16).replace('T', ' '), color = ViroColors.textSecondary, fontSize = 12.sp)
                             }
                             TextButton(onClick = { scope.launch { session.relationships.setCommitmentStatus(c.id, "DONE") } }) { Text("Done") }
@@ -221,7 +221,7 @@ fun RelationshipScreen(
                 if (loops.isEmpty()) Text("No Loops yet. Start one from the chat menu.", color = ViroColors.textSecondary)
                 loops.forEach { l ->
                     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                        Text("🔁 ${l.title}", color = Color.White, modifier = Modifier.weight(1f))
+                        Text("🔁 ${l.title}", color = ViroColors.textPrimary, modifier = Modifier.weight(1f))
                         Text("${l.completedTotal ?: 0} shared", color = ViroColors.textSecondary)
                     }
                 }
@@ -237,7 +237,7 @@ fun RelationshipScreen(
 
             Card(title = "Reminders & notes") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Reminders about ${name.split(" ").first()}", color = Color.White, modifier = Modifier.weight(1f))
+                    Text("Reminders about ${name.split(" ").first()}", color = ViroColors.textPrimary, modifier = Modifier.weight(1f))
                     Switch(checked = reminders, onCheckedChange = { reminders = it })
                 }
                 OutlinedTextField(value = notes, onValueChange = { notes = it.take(4000) }, label = { Text("Private notes") }, modifier = Modifier.fillMaxWidth().heightIn(min = 90.dp))
@@ -266,7 +266,7 @@ fun RelationshipScreen(
 @Composable
 private fun Card(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(ViroColors.NavySurface).padding(14.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(ViroColors.surface).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(title, color = ViroColors.textSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
@@ -277,11 +277,11 @@ private fun Card(title: String, content: @Composable ColumnScope.() -> Unit) {
 @Composable
 private fun Stepper(prefix: String, value: Int, min: Int, max: Int, suffix: String, onChange: (Int) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(prefix, color = Color.White)
-        IconButton(onClick = { onChange((value - 1).coerceAtLeast(min)) }) { Icon(Icons.Default.Remove, "Less", tint = Color.White) }
-        Text("$value", color = Color.White, fontWeight = FontWeight.Bold)
-        IconButton(onClick = { onChange((value + 1).coerceAtMost(max)) }) { Icon(Icons.Default.Add, "More", tint = Color.White) }
-        Text(suffix, color = Color.White)
+        Text(prefix, color = ViroColors.textPrimary)
+        IconButton(onClick = { onChange((value - 1).coerceAtLeast(min)) }) { Icon(Icons.Default.Remove, "Less", tint = ViroColors.textPrimary) }
+        Text("$value", color = ViroColors.textPrimary, fontWeight = FontWeight.Bold)
+        IconButton(onClick = { onChange((value + 1).coerceAtMost(max)) }) { Icon(Icons.Default.Add, "More", tint = ViroColors.textPrimary) }
+        Text(suffix, color = ViroColors.textPrimary)
     }
 }
 
@@ -301,7 +301,7 @@ private fun MomentRow(t: TimelineItemDto) {
     }
     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
         Text(date, color = ViroColors.textSecondary, fontSize = 13.sp, modifier = Modifier.width(56.dp))
-        Text("$icon ${t.title}${t.detail?.let { " — $it" } ?: ""}", color = Color.White, fontSize = 14.sp)
+        Text("$icon ${t.title}${t.detail?.let { " — $it" } ?: ""}", color = ViroColors.textPrimary, fontSize = 14.sp)
     }
 }
 

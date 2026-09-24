@@ -155,7 +155,7 @@ fun MessageRow(
                     .clip(shape)
                     .background(bubbleColor)
                     .then(
-                        if (msg.deleted) Modifier.background(ViroColors.NavySurface.copy(alpha = 0.5f), shape) else Modifier,
+                        if (msg.deleted) Modifier.background(ViroColors.surface.copy(alpha = 0.5f), shape) else Modifier,
                     )
                     .combinedClickable(
                         onClick = {
@@ -325,7 +325,7 @@ private fun ReactionsRow(msg: ChatMessage, onClick: () -> Unit) {
             .padding(horizontal = 8.dp)
             .offset(y = (-4).dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(ViroColors.NavySurfaceElevated)
+            .background(ViroColors.surfaceRaised)
             .clickable(onClick = onClick)
             .padding(horizontal = 6.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -519,7 +519,7 @@ private fun SystemRow(msg: ChatMessage, senderLabel: (String) -> String) {
             textAlign = TextAlign.Center,
             modifier = Modifier
                 .clip(RoundedCornerShape(10.dp))
-                .background(ViroColors.NavySurface.copy(alpha = 0.8f))
+                .background(ViroColors.surface.copy(alpha = 0.8f))
                 .padding(horizontal = 12.dp, vertical = 6.dp),
         )
     }
@@ -562,7 +562,7 @@ fun DaySeparator(label: String) {
             fontSize = 12.sp,
             modifier = Modifier
                 .clip(RoundedCornerShape(10.dp))
-                .background(ViroColors.NavySurface)
+                .background(ViroColors.surface)
                 .padding(horizontal = 10.dp, vertical = 4.dp),
         )
     }

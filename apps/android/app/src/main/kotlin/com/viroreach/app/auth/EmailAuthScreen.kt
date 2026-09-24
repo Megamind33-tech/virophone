@@ -1,5 +1,6 @@
 package com.viroreach.app.auth
 
+import com.viroreach.core.designsystem.ViroColors
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -59,7 +60,7 @@ fun EmailAuthScreen(
                 Text(
                     if (registerMode) "Create an account" else "Sign in with email",
                     style = MaterialTheme.typography.headlineMedium,
-                    color = Color.White,
+                    color = ViroColors.textPrimary,
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(

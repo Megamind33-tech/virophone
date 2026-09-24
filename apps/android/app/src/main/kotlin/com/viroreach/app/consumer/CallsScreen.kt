@@ -85,7 +85,7 @@ fun CallsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column {
-                        Text("Viro", style = MaterialTheme.typography.headlineMedium, color = Color.White)
+                        Text("Viro", style = MaterialTheme.typography.headlineMedium, color = ViroColors.textPrimary)
                         Text(
                             "PEOPLE. VOICE. PROGRESS.",
                             style = MaterialTheme.typography.labelSmall,
@@ -94,11 +94,11 @@ fun CallsScreen(
                     }
                     Row {
                         IconButton(onClick = { searchOpen = !searchOpen }) {
-                            Icon(Icons.Default.Search, contentDescription = "Search calls", tint = Color.White)
+                            Icon(Icons.Default.Search, contentDescription = "Search calls", tint = ViroColors.textPrimary)
                         }
                         Box {
                             IconButton(onClick = { menuExpanded = true }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "Call options", tint = Color.White)
+                                Icon(Icons.Default.MoreVert, contentDescription = "Call options", tint = ViroColors.textPrimary)
                             }
                             DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                                 DropdownMenuItem(

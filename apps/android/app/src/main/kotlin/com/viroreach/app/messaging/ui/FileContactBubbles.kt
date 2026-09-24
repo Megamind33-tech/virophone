@@ -120,7 +120,7 @@ fun ContactContent(
                 Text(
                     card.name.split(' ').filter { it.isNotBlank() }.take(2)
                         .joinToString("") { it.first().uppercase() }.ifBlank { "#" },
-                    color = ViroColors.NavyBackground,
+                    color = ViroColors.background,
                     fontWeight = FontWeight.Bold,
                 )
             }

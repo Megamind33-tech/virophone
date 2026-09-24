@@ -61,6 +61,19 @@ class MainActivity : FragmentActivity() {
                         DensityPreference.COMPACT -> ViroDensityMode.COMPACT
                     },
                 ) {
+                    // The status and navigation bar icons follow the app's own
+                    // appearance, not the phone's. enableEdgeToEdge() reads the
+                    // system setting, so a person who chose Light in Viro on a
+                    // phone set to dark got white clock and battery icons printed
+                    // on a white screen.
+                    val light = com.viroreach.core.designsystem.ViroColors.isLight
+                    val view = androidx.compose.ui.platform.LocalView.current
+                    androidx.compose.runtime.SideEffect {
+                        androidx.core.view.WindowCompat.getInsetsController(window, view).apply {
+                            isAppearanceLightStatusBars = light
+                            isAppearanceLightNavigationBars = light
+                        }
+                    }
                     ViroReachRoot()
                     com.viroreach.app.diagnostics.CrashReportPrompt()
                 }

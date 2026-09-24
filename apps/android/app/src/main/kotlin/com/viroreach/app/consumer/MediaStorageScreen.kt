@@ -95,7 +95,7 @@ fun MediaStorageScreen(session: SessionManager, onBack: () -> Unit) {
                         item {
                             Text(
                                 formatStorageSize(u.totalBytes),
-                                color = Color.White,
+                                color = ViroColors.textPrimary,
                                 fontSize = 28.sp,
                                 fontWeight = FontWeight.SemiBold,
                             )
@@ -200,7 +200,7 @@ private fun AutoRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit
 private fun UsageBar(u: StorageUsage) {
     val total = u.totalBytes
     Row(
-        Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(ViroColors.NavySurfaceElevated),
+        Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(ViroColors.surfaceRaised),
     ) {
         Box(Modifier.weight(storageShare(u.photoBytes, total).coerceAtLeast(0.001f)).fillMaxHeight().background(ViroColors.accent))
         Box(Modifier.weight(storageShare(u.voiceBytes, total).coerceAtLeast(0.001f)).fillMaxHeight().background(ViroColors.success))
@@ -224,7 +224,7 @@ private fun ConversationRow(row: ConversationUsage, enabled: Boolean, onClear: (
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(row.title ?: "Chat", color = Color.White, fontSize = 15.sp)
+            Text(row.title ?: "Chat", color = ViroColors.textPrimary, fontSize = 15.sp)
             Text(
                 "${formatStorageSize(row.bytes)} · ${row.files} ${if (row.files == 1) "file" else "files"}",
                 color = ViroColors.textSecondary,

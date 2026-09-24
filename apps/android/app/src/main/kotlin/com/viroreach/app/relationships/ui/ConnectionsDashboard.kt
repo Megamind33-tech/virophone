@@ -71,7 +71,7 @@ fun ConnectionsDashboard(
                         .background(ViroColors.accent.copy(alpha = 0.16f)).padding(16.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(b.title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text(b.title, color = ViroColors.textPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Tune, "Reminder settings", tint = ViroColors.textSecondary) }
                     }
                     Text(b.summary, color = ViroColors.textSecondary)
@@ -84,7 +84,7 @@ fun ConnectionsDashboard(
                 Column(Modifier.fillMaxWidth().padding(vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("🤝", fontSize = 40.sp)
                     Spacer(Modifier.height(8.dp))
-                    Text("Who matters to you?", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Who matters to you?", color = ViroColors.textPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                     Text(
                         "Open a chat and tap the person's name to add a relationship: a target, important dates and Loops. Viro remembers, and reminds you at the right moment. Only you see it.",
                         color = ViroColors.textSecondary,
@@ -127,10 +127,10 @@ fun ConnectionsDashboard(
             item { SectionTitle("Coming up") }
             coming.groupBy { it.label }.forEach { (label, list) ->
                 item(key = "cu-$label") {
-                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(ViroColors.NavySurface).padding(14.dp)) {
+                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(ViroColors.surface).padding(14.dp)) {
                         Text(label, color = ViroColors.textSecondary, fontSize = 13.sp)
                         list.forEach { c ->
-                            Text("${c.icon ?: "•"} ${c.text}", color = Color.White, modifier = Modifier.padding(top = 4.dp))
+                            Text("${c.icon ?: "•"} ${c.text}", color = ViroColors.textPrimary, modifier = Modifier.padding(top = 4.dp))
                         }
                     }
                 }
@@ -141,17 +141,17 @@ fun ConnectionsDashboard(
         if (targets.isNotEmpty()) {
             item { SectionTitle("Your targets") }
             item {
-                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(ViroColors.NavySurface).padding(14.dp)) {
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(ViroColors.surface).padding(14.dp)) {
                     targets.forEach { t ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(t.label, color = Color.White, modifier = Modifier.weight(1f))
+                            Text(t.label, color = ViroColors.textPrimary, modifier = Modifier.weight(1f))
                             Text("${t.met} / ${t.total} on track", color = ViroColors.textSecondary)
                         }
                         LinearProgressIndicator(
                             progress = { if (t.total == 0) 0f else t.met.toFloat() / t.total },
                             modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
                             color = ViroColors.accent,
-                            trackColor = ViroColors.NavySurfaceElevated,
+                            trackColor = ViroColors.surfaceRaised,
                         )
                     }
                 }
@@ -162,8 +162,8 @@ fun ConnectionsDashboard(
         if (moments.isNotEmpty()) {
             item { SectionTitle("This month") }
             item {
-                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(ViroColors.NavySurface).padding(14.dp)) {
-                    moments.forEach { Text("• $it", color = Color.White, modifier = Modifier.padding(vertical = 3.dp)) }
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(ViroColors.surface).padding(14.dp)) {
+                    moments.forEach { Text("• $it", color = ViroColors.textPrimary, modifier = Modifier.padding(vertical = 3.dp)) }
                 }
             }
         }
@@ -172,17 +172,17 @@ fun ConnectionsDashboard(
         if (progress.isNotEmpty()) {
             item { SectionTitle("On the way") }
             item {
-                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(ViroColors.NavySurface).padding(14.dp)) {
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(ViroColors.surface).padding(14.dp)) {
                     progress.forEach { p ->
                         Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(p.title, color = Color.White, fontWeight = FontWeight.Medium, modifier = Modifier.width(118.dp))
+                            Text(p.title, color = ViroColors.textPrimary, fontWeight = FontWeight.Medium, modifier = Modifier.width(118.dp))
                             Text(p.detail, color = ViroColors.textSecondary, fontSize = 13.sp, modifier = Modifier.weight(1f))
                         }
                         LinearProgressIndicator(
                             progress = { (p.done.toFloat() / p.total.coerceAtLeast(1)).coerceIn(0f, 1f) },
                             modifier = Modifier.fillMaxWidth().padding(top = 4.dp).height(4.dp).clip(RoundedCornerShape(2.dp)),
                             color = ViroColors.accent,
-                            trackColor = ViroColors.NavySurfaceElevated,
+                            trackColor = ViroColors.surfaceRaised,
                         )
                     }
                 }
@@ -201,13 +201,13 @@ fun ConnectionsDashboard(
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable {
                         onOpenRelationship(r.subjectUserId, r.subjectPhone, r.displayName ?: "Contact")
-                    }.background(ViroColors.NavySurface).padding(12.dp),
+                    }.background(ViroColors.surface).padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(r.icon ?: "🤝", fontSize = 20.sp)
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(r.displayName ?: "Contact", color = Color.White, fontWeight = FontWeight.Medium)
+                        Text(r.displayName ?: "Contact", color = ViroColors.textPrimary, fontWeight = FontWeight.Medium)
                         Text(r.targetText ?: "No target", color = ViroColors.textSecondary, fontSize = 12.sp)
                     }
                     HealthPill(r.health?.code)
@@ -253,11 +253,11 @@ private fun AttentionCard(
     onDone: (() -> Unit)?,
     onCheckedIn: (() -> Unit)?,
 ) {
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(ViroColors.NavySurface).clickable(onClick = onOpen).padding(14.dp)) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(ViroColors.surface).clickable(onClick = onOpen).padding(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(a.icon ?: "❤️", fontSize = 20.sp)
             Spacer(Modifier.width(10.dp))
-            Text(a.name, color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text(a.name, color = ViroColors.textPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             HealthPill(a.code)
         }
         Text(a.text, color = ViroColors.textSecondary, modifier = Modifier.padding(top = 4.dp))
@@ -277,13 +277,13 @@ private fun AttentionCard(
 @Composable
 private fun AchievementRow(a: AchievementDto, onShare: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(ViroColors.NavySurface).padding(12.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(ViroColors.surface).padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text("✨", fontSize = 20.sp)
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(a.title, color = Color.White, fontWeight = FontWeight.SemiBold)
+            Text(a.title, color = ViroColors.textPrimary, fontWeight = FontWeight.SemiBold)
             Text(a.detail, color = ViroColors.textSecondary, fontSize = 13.sp)
         }
         IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share", tint = ViroColors.textSecondary) }

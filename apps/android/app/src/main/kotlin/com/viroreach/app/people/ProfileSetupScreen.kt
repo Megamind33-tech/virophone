@@ -100,7 +100,7 @@ fun ProfileSetupScreen(session: SessionManager, onDone: () -> Unit) {
                 Spacer(Modifier.height(ViroSpacing.sm))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { ViroCallBrand() }
                 Spacer(Modifier.height(ViroSpacing.xl))
-                Text("What's your name?", style = MaterialTheme.typography.headlineMedium, color = Color.White)
+                Text("What's your name?", style = MaterialTheme.typography.headlineMedium, color = ViroColors.textPrimary)
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "This is how you appear to the people you call and message.",
@@ -123,7 +123,7 @@ fun ProfileSetupScreen(session: SessionManager, onDone: () -> Unit) {
                 )
 
                 Spacer(Modifier.height(ViroSpacing.lg))
-                Text("Your Viro ID", style = MaterialTheme.typography.titleMedium, color = Color.White)
+                Text("Your Viro ID", style = MaterialTheme.typography.titleMedium, color = ViroColors.textPrimary)
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "People can find you by this without knowing your phone number — useful if you signed up with an email address.",
@@ -189,7 +189,7 @@ fun ProfileSetupScreen(session: SessionManager, onDone: () -> Unit) {
 @Composable
 fun MyViroIdSummary(viroId: String?, modifier: Modifier = Modifier) {
     Column(modifier) {
-        Text(viroId ?: "No Viro ID yet", color = Color.White, fontWeight = FontWeight.SemiBold)
+        Text(viroId ?: "No Viro ID yet", color = ViroColors.textPrimary, fontWeight = FontWeight.SemiBold)
         Text(
             "People can find you by this without your phone number.",
             style = MaterialTheme.typography.bodySmall,

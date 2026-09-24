@@ -198,6 +198,6 @@ fun GroupAvatar(title: String, size: androidx.compose.ui.unit.Dp) {
         Modifier.size(size).clip(CircleShape).background(memberColor(title).copy(alpha = 0.85f)),
         contentAlignment = Alignment.Center,
     ) {
-        Text(initials, color = ViroColors.NavyBackground, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.36f).sp)
+        Text(initials, color = ViroColors.background, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.36f).sp)
     }
 }

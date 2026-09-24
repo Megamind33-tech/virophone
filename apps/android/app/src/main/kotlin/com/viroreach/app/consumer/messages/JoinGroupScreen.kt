@@ -72,7 +72,7 @@ fun JoinGroupScreen(
                             Spacer(Modifier.height(ViroSpacing.md))
                             Text(
                                 p.title ?: "Group",
-                                color = Color.White,
+                                color = ViroColors.textPrimary,
                                 fontSize = 22.sp,
                                 fontWeight = FontWeight.SemiBold,
                             )

@@ -220,7 +220,7 @@ private fun HomeSectionHeader(
             title,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
-            color = Color.White,
+            color = ViroColors.textPrimary,
         )
         if (showSeeAll) {
             TextButton(onClick = onToggleSeeAll) {
@@ -354,7 +354,7 @@ private fun HomeFavoriteItem(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.labelSmall,
-            color = Color.White,
+            color = ViroColors.textPrimary,
             modifier = Modifier.clickable(onClick = onOpenDetail),
         )
         IconButton(

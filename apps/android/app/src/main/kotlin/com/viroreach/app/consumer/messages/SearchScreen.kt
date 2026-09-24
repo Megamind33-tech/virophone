@@ -64,16 +64,16 @@ fun SearchScreen(session: SessionManager, onBack: () -> Unit, onOpen: (ChatRoute
     }
 
     BackHandler { onBack() }
-    Column(Modifier.fillMaxSize().background(ViroColors.NavyBackground).systemBarsPadding().imePadding()) {
+    Column(Modifier.fillMaxSize().background(ViroColors.background).systemBarsPadding().imePadding()) {
         Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
+            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ViroColors.textPrimary) }
             OutlinedTextField(
                 value = q,
                 onValueChange = { q = it.take(100) },
                 singleLine = true,
                 placeholder = { Text("Search messages") },
                 modifier = Modifier.weight(1f).focusRequester(focus),
-                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White),
+                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = ViroColors.textPrimary, unfocusedTextColor = ViroColors.textPrimary),
             )
         }
         if (searching) LinearProgressIndicator(Modifier.fillMaxWidth(), color = ViroColors.accent)
@@ -97,11 +97,11 @@ fun SearchScreen(session: SessionManager, onBack: () -> Unit, onOpen: (ChatRoute
                     }.padding(horizontal = 16.dp, vertical = 10.dp),
                 ) {
                     Row {
-                        Text(chatName, color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1)
+                        Text(chatName, color = ViroColors.textPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1)
                         Text(SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(m.createdAt)), color = ViroColors.textSecondary, fontSize = 12.sp)
                     }
                     Text(
-                        highlight((if (m.senderUserId == me) "You: " else "") + previewOf(m), q.trim()),
+                        highlight((if (m.senderUserId == me) "You: " else "") + previewOf(m), q.trim(), ViroColors.textPrimary),
                         color = ViroColors.textSecondary,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
@@ -113,7 +113,9 @@ fun SearchScreen(session: SessionManager, onBack: () -> Unit, onOpen: (ChatRoute
     }
 }
 
-private fun highlight(text: String, term: String) = buildAnnotatedString {
+// The colour is handed in rather than read here: this builds a string, not a
+// screen, so it cannot ask the theme for anything itself.
+private fun highlight(text: String, term: String, match: androidx.compose.ui.graphics.Color) = buildAnnotatedString {
     if (term.isEmpty()) {
         append(text)
         return@buildAnnotatedString
@@ -128,7 +130,7 @@ private fun highlight(text: String, term: String) = buildAnnotatedString {
             break
         }
         append(text.substring(i, hit))
-        withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.Bold)) { append(text.substring(hit, hit + t.length)) }
+        withStyle(SpanStyle(color = match, fontWeight = FontWeight.Bold)) { append(text.substring(hit, hit + t.length)) }
         i = hit + t.length
     }
 }

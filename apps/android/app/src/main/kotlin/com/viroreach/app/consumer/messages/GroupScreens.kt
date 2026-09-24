@@ -69,7 +69,7 @@ private fun ContactPicker(
                 ) {
                     ViroAvatar(displayName = c.effectiveDisplayName, imageUrl = c.resolveAvatarUrl(), size = ViroAvatarSize.Small)
                     Spacer(Modifier.width(12.dp))
-                    Text(c.effectiveDisplayName, color = Color.White, modifier = Modifier.weight(1f))
+                    Text(c.effectiveDisplayName, color = ViroColors.textPrimary, modifier = Modifier.weight(1f))
                     Checkbox(checked = id in selected, onCheckedChange = { onToggle(id) })
                 }
             }
@@ -86,10 +86,10 @@ fun NewGroupScreen(session: SessionManager, onBack: () -> Unit, onCreated: (conv
     val selected = remember { mutableStateListOf<String>() }
     var creating by remember { mutableStateOf(false) }
     BackHandler { onBack() }
-    Column(Modifier.fillMaxSize().background(ViroColors.NavyBackground).systemBarsPadding().imePadding()) {
+    Column(Modifier.fillMaxSize().background(ViroColors.background).systemBarsPadding().imePadding()) {
         Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
-            Text("New group", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ViroColors.textPrimary) }
+            Text("New group", color = ViroColors.textPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             TextButton(
                 enabled = title.isNotBlank() && selected.isNotEmpty() && !creating,
                 onClick = {
@@ -148,17 +148,17 @@ fun GroupInfoScreen(
     }
 
     BackHandler { onBack() }
-    Column(Modifier.fillMaxSize().background(ViroColors.NavyBackground).systemBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(ViroColors.background).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
-            Text("Group info", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ViroColors.textPrimary) }
+            Text("Group info", color = ViroColors.textPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
         }
         LazyColumn(Modifier.fillMaxSize()) {
             item {
                 Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     GroupAvatar(conv?.title ?: "Group", 88.dp)
                     Spacer(Modifier.height(10.dp))
-                    Text(conv?.title ?: "Group", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                    Text(conv?.title ?: "Group", color = ViroColors.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
                     conv?.description?.let { Text(it, color = ViroColors.textSecondary) }
                     Text("${members.size} ${if (members.size == 1) "member" else "members"}", color = ViroColors.textSecondary, fontSize = 13.sp)
                     if (iAmAdmin) TextButton(onClick = { renaming = true }) { Text("Edit name and description") }
@@ -182,7 +182,7 @@ fun GroupInfoScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Link, null, tint = ViroColors.accent)
                             Spacer(Modifier.width(14.dp))
-                            Text("Invite with a link", color = Color.White, modifier = Modifier.weight(1f))
+                            Text("Invite with a link", color = ViroColors.textPrimary, modifier = Modifier.weight(1f))
                         }
                         Text(
                             inviteUrl ?: "Making a link…",
@@ -252,7 +252,7 @@ fun GroupInfoScreen(
                 ) {
                     ViroAvatar(displayName = names[m.userId] ?: "?", size = ViroAvatarSize.Small)
                     Spacer(Modifier.width(12.dp))
-                    Text(names[m.userId] ?: "Viro user", color = Color.White, modifier = Modifier.weight(1f))
+                    Text(names[m.userId] ?: "Viro user", color = ViroColors.textPrimary, modifier = Modifier.weight(1f))
                     if (m.role == "ADMIN") Text("Admin", color = ViroColors.accent, fontSize = 12.sp)
                 }
             }

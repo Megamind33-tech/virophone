@@ -1,5 +1,6 @@
 package com.viroreach.app.auth
 
+import com.viroreach.core.designsystem.ViroColors
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -71,7 +72,7 @@ fun LinkPhoneScreen(
                 Text(
                     "Add your phone number",
                     style = MaterialTheme.typography.headlineMedium,
-                    color = Color.White,
+                    color = ViroColors.textPrimary,
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
@@ -165,7 +166,7 @@ fun LinkPhoneOtpScreen(
                 Text(
                     "Confirm your number",
                     style = MaterialTheme.typography.headlineMedium,
-                    color = Color.White,
+                    color = ViroColors.textPrimary,
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(

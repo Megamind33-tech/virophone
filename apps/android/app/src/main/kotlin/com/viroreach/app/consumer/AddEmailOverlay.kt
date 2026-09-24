@@ -1,5 +1,6 @@
 package com.viroreach.app.consumer
 
+import com.viroreach.core.designsystem.ViroColors
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -120,7 +121,7 @@ fun AddEmailOverlay(
                 Text(
                     if (!linkSent) "Add an email address" else "Check your email",
                     style = MaterialTheme.typography.headlineMedium,
-                    color = Color.White,
+                    color = ViroColors.textPrimary,
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(

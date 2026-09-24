@@ -1,5 +1,6 @@
 package com.viroreach.app.auth
 
+import com.viroreach.core.designsystem.ViroColors
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -61,7 +62,7 @@ fun LoginScreen(
                 Text(
                     if (returningUser) "Welcome back" else "Enter your phone number",
                     style = MaterialTheme.typography.headlineMedium,
-                    color = Color.White,
+                    color = ViroColors.textPrimary,
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(

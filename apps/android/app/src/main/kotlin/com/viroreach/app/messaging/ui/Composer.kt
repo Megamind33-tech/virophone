@@ -146,7 +146,7 @@ fun Composer(
         }.show()
     }
 
-    Column(Modifier.fillMaxWidth().background(ViroColors.NavyBackground.copy(alpha = 0.92f))) {
+    Column(Modifier.fillMaxWidth().background(ViroColors.background.copy(alpha = 0.92f))) {
         if (replyTo != null && editing == null) {
             ContextBar(icon = Icons.Default.Reply, title = "Replying to $replyAuthor", body = previewOf(replyTo), accent = vibe.accent, onClose = onCancelReply)
         }
@@ -177,13 +177,13 @@ fun Composer(
                     Column(
                         Modifier
                             .fillMaxWidth()
-                            .background(ViroColors.NavySurface)
+                            .background(ViroColors.surface)
                             .padding(vertical = 4.dp),
                     ) {
                         matches.forEach { target ->
                             Text(
                                 target.name,
-                                color = Color.White,
+                                color = ViroColors.textPrimary,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
@@ -273,20 +273,20 @@ fun Composer(
                                     Icon(
                                         Icons.Default.EmojiEmotions,
                                         "Stickers and GIFs",
-                                        tint = if (stickersOpen) vibe.accent else ViroColors.MutedBlue,
+                                        tint = if (stickersOpen) vibe.accent else ViroColors.textSecondary,
                                     )
                                 }
                             },
                             modifier = Modifier.weight(1f).heightIn(min = 48.dp, max = 140.dp),
-                            placeholder = { Text("Message", color = ViroColors.MutedBlue) },
+                            placeholder = { Text("Message", color = ViroColors.textSecondary) },
                             shape = RoundedCornerShape(24.dp),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = ViroColors.NavySurfaceElevated,
-                                unfocusedContainerColor = ViroColors.NavySurfaceElevated,
+                                focusedContainerColor = ViroColors.surfaceRaised,
+                                unfocusedContainerColor = ViroColors.surfaceRaised,
                                 focusedBorderColor = vibe.accent.copy(alpha = 0.6f),
                                 unfocusedBorderColor = Color.Transparent,
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White,
+                                focusedTextColor = ViroColors.textPrimary,
+                                unfocusedTextColor = ViroColors.textPrimary,
                                 cursorColor = vibe.accent,
                             ),
                         )
@@ -307,7 +307,7 @@ fun Composer(
                                     ),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Icon(if (editing != null) Icons.Default.Check else Icons.Default.Send, if (editing != null) "Save edit" else "Send", tint = Color.White)
+                                Icon(if (editing != null) Icons.Default.Check else Icons.Default.Send, if (editing != null) "Save edit" else "Send", tint = ViroColors.onAccent)
                             }
                             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                                 DropdownMenuItem(text = { Text("Send later…") }, leadingIcon = { Icon(Icons.Default.Schedule, null) }, onClick = {
@@ -361,7 +361,7 @@ fun Composer(
                                 },
                             contentAlignment = Alignment.Center,
                         ) {
-                            Icon(Icons.Default.Mic, "Hold to record a voice message", tint = Color.White, modifier = Modifier.size(if (vibe.voiceFirst) 28.dp else 24.dp))
+                            Icon(Icons.Default.Mic, "Hold to record a voice message", tint = ViroColors.onAccent, modifier = Modifier.size(if (vibe.voiceFirst) 28.dp else 24.dp))
                         }
                     }
                 }
@@ -388,7 +388,7 @@ private fun RecordingBar(
     ) {
         Box(Modifier.size((10 + level * 10).dp).clip(CircleShape).background(ViroColors.consumerError))
         Spacer(Modifier.width(10.dp))
-        Text(formatDuration(elapsedMs), color = Color.White, fontWeight = FontWeight.SemiBold)
+        Text(formatDuration(elapsedMs), color = ViroColors.onAccent, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.width(12.dp))
         if (locked) {
             TextButton(onClick = onToggleViewOnce) {
@@ -399,7 +399,7 @@ private fun RecordingBar(
             Box(
                 Modifier.size(48.dp).clip(CircleShape).background(vibe.accent).clickable(onClick = onSend),
                 contentAlignment = Alignment.Center,
-            ) { Icon(Icons.Default.Send, "Send voice message", tint = Color.White) }
+            ) { Icon(Icons.Default.Send, "Send voice message", tint = ViroColors.onAccent) }
         } else {
             Text(
                 if (dragX < -40f) "Release to cancel" else "◀ Slide to cancel · ▲ lock",
@@ -414,7 +414,7 @@ private fun RecordingBar(
 @Composable
 private fun ContextBar(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, body: String, accent: Color, onClose: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().background(ViroColors.NavySurface).padding(horizontal = 12.dp, vertical = 8.dp),
+        Modifier.fillMaxWidth().background(ViroColors.surface).padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, null, tint = accent, modifier = Modifier.size(18.dp))

@@ -95,7 +95,7 @@ fun ViroCallBrand(
                 Text(
                     "People closer",
                     style = MaterialTheme.typography.labelSmall,
-                    color = ViroColors.TaglineBlue,
+                    color = ViroColors.textMuted,
                     letterSpacing = 0.5.sp,
                 )
             }
@@ -126,6 +126,7 @@ fun ViroLogoMark(
 @Composable
 fun ViroScreenBackground(content: @Composable BoxScope.() -> Unit) {
     val wallpaper = LocalViroWallpaper.current
+    val light = ViroColors.isLight
     CompositionLocalProvider(LocalContentColor provides ViroColors.textPrimary) {
         Box(modifier = Modifier.fillMaxSize()) {
             if (!wallpaper.imageUri.isNullOrBlank()) {
@@ -152,13 +153,26 @@ fun ViroScreenBackground(content: @Composable BoxScope.() -> Unit) {
                     Modifier
                         .fillMaxSize()
                         .background(
-                            Brush.verticalGradient(
-                                colorStops = arrayOf(
-                                    0f to Color(0xFF00122C).copy(alpha = (scrimAlpha * 0.55f).coerceIn(0.25f, 0.4f)),
-                                    0.45f to Color.Black.copy(alpha = scrimAlpha.coerceIn(0.3f, 0.42f)),
-                                    1f to Color(0xFF00122C).copy(alpha = (scrimAlpha * 1.05f).coerceIn(0.35f, 0.48f)),
-                                ),
-                            ),
+                            // The shade over a photo follows the appearance, because
+                            // the text above it does: a dark shade under dark text
+                            // was the one thing in light mode nobody could read.
+                            if (light) {
+                                Brush.verticalGradient(
+                                    colorStops = arrayOf(
+                                        0f to Color.White.copy(alpha = (scrimAlpha * 0.9f).coerceIn(0.55f, 0.7f)),
+                                        0.45f to Color.White.copy(alpha = scrimAlpha.coerceIn(0.6f, 0.74f)),
+                                        1f to Color.White.copy(alpha = (scrimAlpha * 1.1f).coerceIn(0.65f, 0.8f)),
+                                    ),
+                                )
+                            } else {
+                                Brush.verticalGradient(
+                                    colorStops = arrayOf(
+                                        0f to Color(0xFF00122C).copy(alpha = (scrimAlpha * 0.55f).coerceIn(0.25f, 0.4f)),
+                                        0.45f to Color.Black.copy(alpha = scrimAlpha.coerceIn(0.3f, 0.42f)),
+                                        1f to Color(0xFF00122C).copy(alpha = (scrimAlpha * 1.05f).coerceIn(0.35f, 0.48f)),
+                                    ),
+                                )
+                            },
                         ),
                 )
                 if (contrast < 1f) {
@@ -196,7 +210,7 @@ fun ViroContinueButton(
         shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = ViroColors.ElectricBlue,
-            disabledContainerColor = ViroColors.NavySurfaceElevated,
+            disabledContainerColor = ViroColors.surfaceRaised,
         ),
     ) {
         Row(
@@ -222,14 +236,14 @@ fun ViroPhoneInputCard(
         Text(
             "Phone number",
             style = MaterialTheme.typography.labelMedium,
-            color = ViroColors.MutedBlue,
+            color = ViroColors.textSecondary,
         )
         Spacer(Modifier.height(8.dp))
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
-                .background(ViroColors.NavySurfaceElevated)
+                .background(ViroColors.surfaceRaised)
                 .border(1.dp, ViroColors.ElectricBlue, RoundedCornerShape(12.dp))
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -240,20 +254,20 @@ fun ViroPhoneInputCard(
             ) {
                 Text(flagEmoji, fontSize = 20.sp)
                 Spacer(Modifier.width(8.dp))
-                Text(countryCode, color = Color.White, fontWeight = FontWeight.Medium)
-                Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = ViroColors.MutedBlue)
+                Text(countryCode, color = ViroColors.textPrimary, fontWeight = FontWeight.Medium)
+                Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = ViroColors.textSecondary)
             }
             Spacer(
                 Modifier
                     .padding(horizontal = 12.dp)
                     .width(1.dp)
                     .height(28.dp)
-                    .background(ViroColors.MutedBlue.copy(alpha = 0.4f)),
+                    .background(ViroColors.textSecondary.copy(alpha = 0.4f)),
             )
             Text(
                 phoneDigits.ifEmpty { " " },
                 modifier = Modifier.weight(1f),
-                color = Color.White,
+                color = ViroColors.textPrimary,
                 style = MaterialTheme.typography.titleMedium,
             )
         }
@@ -324,7 +338,7 @@ private fun KeypadKey(
         modifier = modifier
             .height(52.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(ViroColors.NavySurfaceElevated)
+            .background(ViroColors.surfaceRaised)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -332,9 +346,9 @@ private fun KeypadKey(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Text(digit, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Medium)
+            Text(digit, color = ViroColors.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.Medium)
             if (subLabel.isNotEmpty()) {
-                Text(subLabel, color = ViroColors.MutedBlue, fontSize = 9.sp, letterSpacing = 1.sp)
+                Text(subLabel, color = ViroColors.textSecondary, fontSize = 9.sp, letterSpacing = 1.sp)
             }
         }
     }
@@ -350,11 +364,11 @@ private fun KeypadIconKey(
         modifier = modifier
             .height(52.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(ViroColors.NavySurfaceElevated)
+            .background(ViroColors.surfaceRaised)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = "Backspace", tint = Color.White)
+        Icon(icon, contentDescription = "Backspace", tint = ViroColors.textPrimary)
     }
 }
 
@@ -374,7 +388,7 @@ fun ViroSearchBar(
         placeholder = {
             Text(
                 placeholder,
-                color = ViroColors.MutedBlue,
+                color = ViroColors.textSecondary,
                 style = MaterialTheme.typography.bodyMedium,
             )
         },
@@ -382,7 +396,7 @@ fun ViroSearchBar(
             Icon(
                 Icons.Default.Search,
                 contentDescription = null,
-                tint = ViroColors.MutedBlue,
+                tint = ViroColors.textSecondary,
                 modifier = Modifier.size(20.dp),
             )
         },
@@ -390,12 +404,12 @@ fun ViroSearchBar(
         textStyle = MaterialTheme.typography.bodyLarge,
         shape = RoundedCornerShape(16.dp),
         colors = OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = ViroColors.NavySurfaceElevated.copy(alpha = 0.94f),
-            unfocusedContainerColor = ViroColors.NavySurfaceElevated.copy(alpha = 0.88f),
+            focusedContainerColor = ViroColors.surfaceRaised.copy(alpha = 0.94f),
+            unfocusedContainerColor = ViroColors.surfaceRaised.copy(alpha = 0.88f),
             focusedBorderColor = Color.Transparent,
             unfocusedBorderColor = Color.Transparent,
-            focusedTextColor = Color.White,
-            unfocusedTextColor = Color.White,
+            focusedTextColor = ViroColors.textPrimary,
+            unfocusedTextColor = ViroColors.textPrimary,
             cursorColor = ViroColors.ElectricBlue,
         ),
     )
@@ -418,12 +432,12 @@ fun ViroFilterChipRow(
                 onClick = { onSelect(option) },
                 shape = RoundedCornerShape(20.dp),
                 color = if (isSelected) ViroColors.ElectricBlue else Color.Transparent,
-                border = if (isSelected) null else androidx.compose.foundation.BorderStroke(1.dp, ViroColors.MutedBlue),
+                border = if (isSelected) null else androidx.compose.foundation.BorderStroke(1.dp, ViroColors.textSecondary),
             ) {
                 Text(
                     option,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    color = if (isSelected) Color.White else ViroColors.MutedBlue,
+                    color = if (isSelected) ViroColors.onAccent else ViroColors.textSecondary,
                     style = MaterialTheme.typography.labelLarge,
                 )
             }
@@ -536,7 +550,7 @@ fun ViroReferenceContactRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 name,
-                color = Color.White,
+                color = ViroColors.textPrimary,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -545,7 +559,7 @@ fun ViroReferenceContactRow(
             formattedPhone?.let {
                 Text(
                     it,
-                    color = ViroColors.MutedBlue,
+                    color = ViroColors.textSecondary,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -556,23 +570,23 @@ fun ViroReferenceContactRow(
                     Modifier
                         .size(8.dp)
                         .clip(CircleShape)
-                        .background(if (onViroCall) ViroColors.GreenAvailable else ViroColors.MutedBlue),
+                        .background(if (onViroCall) ViroColors.GreenAvailable else ViroColors.textSecondary),
                 )
                 Spacer(Modifier.width(6.dp))
-                Text(statusLabel, color = ViroColors.MutedBlue, style = MaterialTheme.typography.bodySmall)
+                Text(statusLabel, color = ViroColors.textSecondary, style = MaterialTheme.typography.bodySmall)
             }
         }
         IconButton(onClick = onMessage) {
-            Icon(Icons.Default.Email, contentDescription = "Message", tint = ViroColors.MutedBlue)
+            Icon(Icons.Default.Email, contentDescription = "Message", tint = ViroColors.textSecondary)
         }
         IconButton(onClick = onCall) {
             Icon(Icons.Default.Call, contentDescription = "Call", tint = ViroColors.ElectricBlue)
         }
         IconButton(onClick = {}) {
-            Icon(Icons.Default.MoreVert, contentDescription = "More", tint = ViroColors.MutedBlue)
+            Icon(Icons.Default.MoreVert, contentDescription = "More", tint = ViroColors.textSecondary)
         }
     }
-    HorizontalDivider(color = ViroColors.NavySurfaceElevated, thickness = 0.5.dp)
+    HorizontalDivider(color = ViroColors.surfaceRaised, thickness = 0.5.dp)
 }
 
 enum class ViroCallLogDirection {
@@ -614,7 +628,7 @@ fun ViroCallLogRow(
         ViroCallLogDirection.FAILED,
         ViroCallLogDirection.MISSED,
         -> ViroColors.RedEndCall
-        else -> ViroColors.MutedBlue
+        else -> ViroColors.textSecondary
     }
     val directionIcon = when (resolvedDirection) {
         ViroCallLogDirection.OUTGOING -> Icons.AutoMirrored.Filled.CallMade
@@ -641,7 +655,7 @@ fun ViroCallLogRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 name,
-                color = Color.White,
+                color = ViroColors.textPrimary,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -666,7 +680,7 @@ fun ViroCallLogRow(
                 if (time.isNotBlank()) {
                     Text(
                         " • $time",
-                        color = ViroColors.MutedBlue,
+                        color = ViroColors.textSecondary,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
                     )
@@ -675,7 +689,7 @@ fun ViroCallLogRow(
             if (duration.isNotBlank() && duration != "—") {
                 Text(
                     duration,
-                    color = ViroColors.MutedBlue,
+                    color = ViroColors.textSecondary,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -685,7 +699,7 @@ fun ViroCallLogRow(
                 onClick = onMessage,
                 modifier = Modifier.size(40.dp),
             ) {
-                Icon(Icons.Default.Email, contentDescription = "Message", tint = ViroColors.MutedBlue)
+                Icon(Icons.Default.Email, contentDescription = "Message", tint = ViroColors.textSecondary)
             }
         }
         FilledTonalIconButton(
@@ -703,7 +717,7 @@ fun ViroCallLogRow(
                 onClick = { menuExpanded = true },
                 modifier = Modifier.size(40.dp),
             ) {
-                Icon(Icons.Default.MoreVert, contentDescription = "More", tint = ViroColors.MutedBlue)
+                Icon(Icons.Default.MoreVert, contentDescription = "More", tint = ViroColors.textSecondary)
             }
             DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                 DropdownMenuItem(
@@ -731,7 +745,7 @@ fun ViroCallLogRow(
     }
     HorizontalDivider(
         modifier = Modifier.padding(horizontal = horizontalPadding),
-        color = ViroColors.NavySurfaceElevated.copy(alpha = 0.65f),
+        color = ViroColors.surfaceRaised.copy(alpha = 0.65f),
         thickness = 0.5.dp,
     )
 }
@@ -746,8 +760,8 @@ fun ViroConsumerBottomBar(
     NavigationBar(
         modifier = modifier.fillMaxWidth(),
         windowInsets = NavigationBarDefaults.windowInsets,
-        containerColor = ViroColors.NavyBackground.copy(alpha = 0.98f),
-        contentColor = ViroColors.MutedBlue,
+        containerColor = ViroColors.background.copy(alpha = 0.98f),
+        contentColor = ViroColors.textSecondary,
         tonalElevation = 8.dp,
     ) {
         val tabs = listOf(
@@ -778,7 +792,7 @@ fun ViroConsumerBottomBar(
                             if (waiting > 0) {
                                 Badge(
                                     containerColor = ViroColors.ElectricBlue,
-                                    contentColor = Color.White,
+                                    contentColor = ViroColors.onAccent,
                                 ) {
                                     // Past a certain point the exact number
                                     // stops meaning anything and only makes
@@ -799,7 +813,7 @@ fun ViroConsumerBottomBar(
                                 iconLabel.second
                             },
                             modifier = Modifier.size(22.dp),
-                            tint = if (isSelected) ViroColors.ElectricBlue else ViroColors.MutedBlue.copy(alpha = 0.85f),
+                            tint = if (isSelected) ViroColors.ElectricBlue else ViroColors.textSecondary.copy(alpha = 0.85f),
                         )
                     }
                 },
@@ -807,15 +821,15 @@ fun ViroConsumerBottomBar(
                     Text(
                         iconLabel.second,
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (isSelected) ViroColors.ElectricBlue else ViroColors.MutedBlue.copy(alpha = 0.85f),
+                        color = if (isSelected) ViroColors.ElectricBlue else ViroColors.textSecondary.copy(alpha = 0.85f),
                     )
                 },
                 colors = NavigationBarItemDefaults.colors(
                     indicatorColor = ViroColors.ElectricBlue.copy(alpha = 0.14f),
                     selectedIconColor = ViroColors.ElectricBlue,
                     selectedTextColor = ViroColors.ElectricBlue,
-                    unselectedIconColor = ViroColors.MutedBlue.copy(alpha = 0.85f),
-                    unselectedTextColor = ViroColors.MutedBlue.copy(alpha = 0.85f),
+                    unselectedIconColor = ViroColors.textSecondary.copy(alpha = 0.85f),
+                    unselectedTextColor = ViroColors.textSecondary.copy(alpha = 0.85f),
                 ),
             )
         }
@@ -825,7 +839,7 @@ fun ViroConsumerBottomBar(
 @Composable
 fun ViroBackButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     IconButton(onClick = onClick, modifier = modifier) {
-        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = ViroColors.textPrimary)
     }
 }
 
@@ -851,12 +865,12 @@ fun ViroEndCallButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
             Icon(
                 Icons.Default.CallEnd,
                 contentDescription = "End call",
-                tint = Color.White,
+                tint = ViroColors.onAccent,
                 modifier = Modifier.size(34.dp),
             )
         }
         Spacer(Modifier.height(8.dp))
-        Text("End call", color = Color.White, style = MaterialTheme.typography.labelLarge)
+        Text("End call", color = ViroColors.textPrimary, style = MaterialTheme.typography.labelLarge)
     }
 }
 
@@ -881,21 +895,21 @@ fun ViroCallControlGrid(
                                 containerColor = if (control.isActive) {
                                     ViroColors.ElectricBlue.copy(alpha = 0.35f)
                                 } else {
-                                    ViroColors.NavySurfaceElevated
+                                    ViroColors.surfaceRaised
                                 },
                             ),
                         ) {
                             Icon(
                                 if (control.isActive) control.activeIcon else control.icon,
                                 contentDescription = control.label,
-                                tint = if (control.isActive) ViroColors.ElectricBlue else Color.White,
+                                tint = if (control.isActive) ViroColors.ElectricBlue else ViroColors.onAccent,
                                 modifier = Modifier.size(26.dp),
                             )
                         }
                         Spacer(Modifier.height(6.dp))
                         Text(
                             control.label,
-                            color = if (control.isActive) Color.White else ViroColors.MutedBlue,
+                            color = if (control.isActive) ViroColors.onAccent else ViroColors.textSecondary,
                             style = MaterialTheme.typography.labelSmall,
                             textAlign = TextAlign.Center,
                         )
@@ -923,10 +937,10 @@ fun ViroIncomingCallActions(
                 modifier = Modifier.size(76.dp),
                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = ViroColors.RedEndCall),
             ) {
-                Icon(Icons.Default.CallEnd, contentDescription = "Decline", tint = Color.White, modifier = Modifier.size(34.dp))
+                Icon(Icons.Default.CallEnd, contentDescription = "Decline", tint = ViroColors.onAccent, modifier = Modifier.size(34.dp))
             }
             Spacer(Modifier.height(8.dp))
-            Text("Decline", color = Color.White, style = MaterialTheme.typography.labelMedium)
+            Text("Decline", color = ViroColors.onAccent, style = MaterialTheme.typography.labelMedium)
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             FilledIconButton(
@@ -934,10 +948,10 @@ fun ViroIncomingCallActions(
                 modifier = Modifier.size(76.dp),
                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = ViroColors.GreenAvailable),
             ) {
-                Icon(Icons.Default.Call, contentDescription = "Accept", tint = Color.White, modifier = Modifier.size(34.dp))
+                Icon(Icons.Default.Call, contentDescription = "Accept", tint = ViroColors.onAccent, modifier = Modifier.size(34.dp))
             }
             Spacer(Modifier.height(8.dp))
-            Text("Accept", color = Color.White, style = MaterialTheme.typography.labelMedium)
+            Text("Accept", color = ViroColors.onAccent, style = MaterialTheme.typography.labelMedium)
         }
     }
 }

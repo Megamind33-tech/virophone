@@ -57,6 +57,8 @@ object ViroColors {
     val consumerWarning: Color @Composable @ReadOnlyComposable get() = LocalViroPalette.current.consumerWarning
     val consumerError: Color @Composable @ReadOnlyComposable get() = LocalViroPalette.current.consumerError
     val divider: Color @Composable @ReadOnlyComposable get() = LocalViroPalette.current.divider
+    val onAccent: Color @Composable @ReadOnlyComposable get() = LocalViroPalette.current.onAccent
+    val isLight: Boolean @Composable @ReadOnlyComposable get() = LocalViroPalette.current.isLight
 }
 
 /**
@@ -79,6 +81,10 @@ data class ViroPalette(
     val consumerWarning: Color,
     val consumerError: Color,
     val divider: Color,
+    /** Daylight, so anything drawn over a photo knows which way to shade it. */
+    val isLight: Boolean = false,
+    /** What sits on the accent colour: white in both, because the accent is a strong blue in both. */
+    val onAccent: Color = Color.White,
 )
 
 /** Viro at night, which is how it has always looked and remains the default. */
@@ -116,6 +122,7 @@ val ViroLightPalette = ViroPalette(
     consumerWarning = Color(0xFF8A6100),
     consumerError = Color(0xFFB3261E),
     divider = Color(0xFFDDE3EA),
+    isLight = true,
 )
 
 /**

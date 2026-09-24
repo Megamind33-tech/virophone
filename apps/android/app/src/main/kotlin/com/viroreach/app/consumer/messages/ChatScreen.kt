@@ -460,19 +460,19 @@ fun ChatScreen(
             else -> onBack()
         }
     }
-    Box(Modifier.fillMaxSize().background(ViroColors.NavyBackground)) {
+    Box(Modifier.fillMaxSize().background(ViroColors.background)) {
         Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
             if (searchOpen) {
-                Row(Modifier.fillMaxWidth().background(ViroColors.NavySurface).padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { searchOpen = false; searchTerm = "" }) { Icon(Icons.Default.ArrowBack, "Close search", tint = Color.White) }
+                Row(Modifier.fillMaxWidth().background(ViroColors.surface).padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { searchOpen = false; searchTerm = "" }) { Icon(Icons.Default.ArrowBack, "Close search", tint = ViroColors.textPrimary) }
                     OutlinedTextField(
                         value = searchTerm, onValueChange = { searchTerm = it.take(100) }, singleLine = true,
                         placeholder = { Text("Search in this chat") }, modifier = Modifier.weight(1f),
-                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White),
+                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = ViroColors.textPrimary, unfocusedTextColor = ViroColors.textPrimary),
                     )
                     Text(if (searchMatches.isEmpty()) "0" else "${searchIndex + 1}/${searchMatches.size}", color = ViroColors.textSecondary, modifier = Modifier.padding(horizontal = 6.dp))
-                    IconButton(onClick = { jumpToMatch(searchIndex + 1) }) { Icon(Icons.Default.KeyboardArrowUp, "Older match", tint = Color.White) }
-                    IconButton(onClick = { jumpToMatch(searchIndex - 1) }) { Icon(Icons.Default.KeyboardArrowDown, "Newer match", tint = Color.White) }
+                    IconButton(onClick = { jumpToMatch(searchIndex + 1) }) { Icon(Icons.Default.KeyboardArrowUp, "Older match", tint = ViroColors.textPrimary) }
+                    IconButton(onClick = { jumpToMatch(searchIndex - 1) }) { Icon(Icons.Default.KeyboardArrowDown, "Newer match", tint = ViroColors.textPrimary) }
                 }
             } else ChatHeader(
                 name = if (isGroup) conversation?.title ?: peerName else peerName,
@@ -1282,10 +1282,10 @@ private fun ChatHeader(
     menu: @Composable () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().background(ViroColors.NavySurface).padding(horizontal = 4.dp, vertical = 6.dp),
+        Modifier.fillMaxWidth().background(ViroColors.surface).padding(horizontal = 4.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
+        IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ViroColors.textPrimary) }
         Row(Modifier.weight(1f).clickable(onClick = onTitle), verticalAlignment = Alignment.CenterVertically) {
             Box {
                 if (isGroup) GroupAvatar(name, 40.dp)
@@ -1294,14 +1294,14 @@ private fun ChatHeader(
             }
             Spacer(Modifier.width(10.dp))
             Column {
-                Text(name, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(name, color = ViroColors.textPrimary, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 subtitle?.let { Text(it, color = if (subtitleActive) vibe.accent else ViroColors.textSecondary, fontSize = 12.sp, maxLines = 1) }
             }
         }
         onHeartbeat?.let { IconButton(onClick = it) { Text("💓", fontSize = 20.sp) } }
-        onCall?.let { IconButton(onClick = it) { Icon(Icons.Default.Call, "Call", tint = Color.White) } }
+        onCall?.let { IconButton(onClick = it) { Icon(Icons.Default.Call, "Call", tint = ViroColors.textPrimary) } }
         Box {
-            IconButton(onClick = { onMenu(true) }) { Icon(Icons.Default.MoreVert, "More", tint = Color.White) }
+            IconButton(onClick = { onMenu(true) }) { Icon(Icons.Default.MoreVert, "More", tint = ViroColors.textPrimary) }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { onMenu(false) }) { menu() }
         }
     }
@@ -1354,7 +1354,7 @@ private fun ContextStrip(text: String, vibe: Vibe, onClick: () -> Unit) {
         Modifier.fillMaxWidth().background(vibe.accent.copy(alpha = 0.12f)).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Text(text, color = ViroColors.textPrimary, fontSize = 13.sp, modifier = Modifier.weight(1f))
         Icon(Icons.Default.ChevronRight, null, tint = ViroColors.textSecondary)
     }
 }
@@ -1362,12 +1362,12 @@ private fun ContextStrip(text: String, vibe: Vibe, onClick: () -> Unit) {
 @Composable
 private fun PinnedBar(m: ChatMessage, vibe: Vibe, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().background(ViroColors.NavySurface).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp),
+        Modifier.fillMaxWidth().background(ViroColors.surface).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.Default.PushPin, null, tint = vibe.accent, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(8.dp))
-        Text(previewOf(m), color = Color.White, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(previewOf(m), color = ViroColors.textPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -1397,13 +1397,13 @@ private fun LockedChat(name: String, onUnlock: () -> Unit, onBack: () -> Unit) {
     LaunchedEffect(Unit) { onUnlock() }
     BackHandler { onBack() }
     Column(
-        Modifier.fillMaxSize().background(ViroColors.NavyBackground).padding(32.dp),
+        Modifier.fillMaxSize().background(ViroColors.background).padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Icon(Icons.Default.Lock, null, tint = ViroColors.accent, modifier = Modifier.size(48.dp))
         Spacer(Modifier.height(12.dp))
-        Text("Chat with $name is locked", color = Color.White, fontSize = 18.sp)
+        Text("Chat with $name is locked", color = ViroColors.textPrimary, fontSize = 18.sp)
         Spacer(Modifier.height(16.dp))
         Button(onClick = onUnlock) { Text("Unlock") }
         TextButton(onClick = onBack) { Text("Back") }
@@ -1421,7 +1421,7 @@ private fun CommitmentChip(s: CommitmentDetector.Suggestion, vibe: Vibe, onTap: 
         Text("📌", fontSize = 16.sp)
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
-            Text(s.chip, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Text(s.chip, color = ViroColors.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
             Text("“${s.action}” · ${s.whenLabel}", color = ViroColors.textSecondary, fontSize = 12.sp, maxLines = 1)
         }
         IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.Close, "Not now", tint = ViroColors.textSecondary) }
@@ -1479,7 +1479,7 @@ private fun MessageActionsSheet(
 ) {
     var more by remember { mutableStateOf(false) }
     Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(20.dp), color = ViroColors.NavySurface) {
+        Surface(shape = RoundedCornerShape(20.dp), color = ViroColors.surface) {
             Column(Modifier.padding(14.dp)) {
                 if (!msg.deleted && !msg.isPending) {
                     if (!more) {
@@ -1488,7 +1488,7 @@ private fun MessageActionsSheet(
                                 Text(e, fontSize = 28.sp, modifier = Modifier.clip(CircleShape).clickable { onReact(e) }.padding(4.dp))
                             }
                             item {
-                                IconButton(onClick = { more = true }) { Icon(Icons.Default.Add, "More reactions", tint = Color.White) }
+                                IconButton(onClick = { more = true }) { Icon(Icons.Default.Add, "More reactions", tint = ViroColors.textPrimary) }
                             }
                         }
                     } else {
@@ -1501,7 +1501,7 @@ private fun MessageActionsSheet(
                     HorizontalDivider(Modifier.padding(vertical = 8.dp), color = ViroColors.divider)
                 }
                 @Composable
-                fun row(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, key: String, color: Color = Color.White) {
+                fun row(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, key: String, color: Color = ViroColors.textPrimary) {
                     Row(
                         Modifier.fillMaxWidth().clickable { onAction(key) }.padding(vertical = 11.dp, horizontal = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1704,7 +1704,7 @@ private fun PhotoSendDialog(
 ) {
     var caption by remember { mutableStateOf("") }
     Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(20.dp), color = ViroColors.NavySurface) {
+        Surface(shape = RoundedCornerShape(20.dp), color = ViroColors.surface) {
             Column(Modifier.padding(14.dp)) {
                 AsyncImage(model = file, contentDescription = null, modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp).clip(RoundedCornerShape(12.dp)))
                 Spacer(Modifier.height(8.dp))
@@ -1831,7 +1831,7 @@ private fun ShareContactDialog(
                                     }
                                     .padding(vertical = 10.dp),
                             ) {
-                                Text(c.effectiveDisplayName, color = Color.White)
+                                Text(c.effectiveDisplayName, color = ViroColors.textPrimary)
                                 val line = c.phoneE164 ?: if (c.userId != null) "On Viro" else null
                                 line?.let { Text(it, color = ViroColors.textSecondary, fontSize = 13.sp) }
                             }
@@ -1866,10 +1866,10 @@ private fun ShareLocationDialog(
                 Spacer(Modifier.height(12.dp))
                 Text(
                     "Send my current location",
-                    color = Color.White,
+                    color = ViroColors.textPrimary,
                     modifier = Modifier.fillMaxWidth().clickable { onSendOnce() }.padding(vertical = 12.dp),
                 )
-                HorizontalDivider(color = ViroColors.NavySurfaceElevated)
+                HorizontalDivider(color = ViroColors.surfaceRaised)
                 Text(
                     "Share live for…",
                     color = ViroColors.textMuted,
@@ -1879,7 +1879,7 @@ private fun ShareLocationDialog(
                 com.viroreach.app.messaging.location.ViroLocation.LIVE_CHOICES.forEach { (seconds, label) ->
                     Text(
                         label,
-                        color = Color.White,
+                        color = ViroColors.textPrimary,
                         modifier = Modifier.fillMaxWidth().clickable { onShareLive(seconds) }.padding(vertical = 12.dp),
                     )
                 }

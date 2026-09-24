@@ -1,5 +1,6 @@
 package com.viroreach.app.auth
 
+import com.viroreach.core.designsystem.ViroColors
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -31,7 +32,7 @@ fun OtpScreen(
         ) {
             Spacer(Modifier.height(ViroSpacing.xl))
             ViroCallBrand(modifier = Modifier.fillMaxWidth())
-            Text("Enter verification code", style = MaterialTheme.typography.headlineMedium, color = Color.White)
+            Text("Enter verification code", style = MaterialTheme.typography.headlineMedium, color = ViroColors.textPrimary)
             Text(
                 "Sent to $phoneE164",
                 style = MaterialTheme.typography.bodyLarge,
@@ -83,7 +84,7 @@ internal fun OtpDigitRow(otp: String) {
             Text(
                 text = digit,
                 style = MaterialTheme.typography.headlineMedium,
-                color = Color.White,
+                color = ViroColors.textPrimary,
                 modifier = Modifier.weight(1f),
             )
         }
