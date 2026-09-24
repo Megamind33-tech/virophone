@@ -27,7 +27,12 @@ PROJECT="${VIRO_FIREBASE_PROJECT:-viro-8a}"
 
 # Either a group alias (preferred once there's more than a couple of testers)
 # or a comma-separated list of addresses.
-TESTER_GROUP="${VIRO_TESTER_GROUP:-}"
+# Everyone in the "Viro Testers" group (alias: testers) gets every build.
+# It used to go to one address — the owner — so nobody else was ever assigned
+# a release, and Firebase will not show or offer a download to anybody who has
+# not been. People join the group themselves through an invite link made in
+# the Firebase console; after that every new build reaches them on its own.
+TESTER_GROUP="${VIRO_TESTER_GROUP:-testers}"
 TESTERS="${VIRO_TESTERS:-chansamosty11@gmail.com}"
 
 NOTES="${1:-$(git -C "$ROOT" log -1 --pretty=%s)}"
