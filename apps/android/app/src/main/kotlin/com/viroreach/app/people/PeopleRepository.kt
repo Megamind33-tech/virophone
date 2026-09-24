@@ -53,6 +53,19 @@ class PeopleRepository(context: Context, private val api: () -> ViroApiService) 
 
     suspend fun update(body: UpdateMeBody): Result<MeResponse> = call { api().updateMe(body) }.onSuccess { _me.value = it }
 
+    /**
+     * Replace one topic of "about you", then keep the local copy in step so
+     * the screen that saved it shows what the server kept — which may be
+     * tidier than what was typed, since blanks and repeats are dropped.
+     */
+    suspend fun setAboutYou(topic: String, entries: List<String>, visibility: String?): Result<com.viroreach.core.network.AboutYouTopicDto> =
+        call { api().setAboutYou(topic, com.viroreach.core.network.AboutYouTopicBody(entries, visibility)) }
+            .onSuccess { saved ->
+                _me.value = _me.value?.let { me ->
+                    me.copy(aboutYou = me.aboutYou.filter { it.topic != saved.topic } + saved)
+                }
+            }
+
     suspend fun find(query: String): Result<FoundPerson?> = call { api().findPerson(query.trim()).person }
 
     suspend fun connect(userId: String): Result<ConnectionDto> = call { api().inviteConnection(ConnectionInviteBody(userId)) }

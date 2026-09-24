@@ -119,6 +119,10 @@ interface ViroApiService {
     @GET("api/v1/me/profile/{userId}")
     suspend fun publicProfile(@Path("userId") userId: String): PublicProfileDto
 
+    /** Replace one topic of "about you". An empty list clears it. */
+    @PUT("api/v1/me/about-you/{topic}")
+    suspend fun setAboutYou(@Path("topic") topic: String, @Body body: AboutYouTopicBody): AboutYouTopicDto
+
     /** Is this Viro ID valid and free for me? Always carries a few free suggestions. */
     @GET("api/v1/me/viro-id/check")
     suspend fun checkViroId(@Query("id") id: String?, @Query("name") name: String?): ViroIdCheck
@@ -299,7 +303,22 @@ data class MeResponse(
     val lastSeenVisibility: String? = null,
     /** False until the one-time name + Viro ID step is done. Null from an older server: treat as done. */
     val profileCompleted: Boolean? = null,
+    /** Every topic, answered or not, with how each is set. Empty from an older server. */
+    val aboutYou: List<AboutYouTopicDto> = emptyList(),
+    /** "YYYY-MM-DD". Only ever sent back to its owner. */
+    val birthDate: String? = null,
+    /** Who may see the birthday — day and month only. */
+    val birthdayVisibility: String? = null,
 )
+
+/** One thing somebody has said about themselves, and who may read it. */
+data class AboutYouTopicDto(
+    val topic: String,
+    val entries: List<String> = emptyList(),
+    val visibility: String? = null,
+)
+
+data class AboutYouTopicBody(val entries: List<String>, val visibility: String? = null)
 data class ViroIdCheck(
     val viroId: String?,
     val valid: Boolean,
@@ -347,6 +366,9 @@ data class UpdateMeBody(
     val aboutVisibility: String? = null,
     val photoVisibility: String? = null,
     val lastSeenVisibility: String? = null,
+    /** "YYYY-MM-DD"; an empty string removes it. */
+    val birthDate: String? = null,
+    val birthdayVisibility: String? = null,
 )
 data class BlockUserBody(val blockedUserId: String)
 data class BlockedUser(val blockedUserId: String)
@@ -498,4 +520,8 @@ data class PublicProfileDto(
     val avatarUrl: String?,
     val about: String?,
     val lastSeenAt: String?,
+    /** Only the topics they have answered and allow me to read. */
+    val aboutYou: List<AboutYouTopicDto> = emptyList(),
+    /** "MM-DD" — never the year — or null if they have not shared it. */
+    val birthday: String? = null,
 )

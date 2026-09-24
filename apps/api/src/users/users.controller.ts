@@ -1,3 +1,4 @@
+import { AboutYouService } from './about-you.service';
 import {
   Controller,
   Get,
@@ -11,12 +12,13 @@ import {
   Query,
   UploadedFile,
   UseInterceptors,
+  Put,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { IsString, IsOptional, IsIn, IsBoolean, MaxLength, ValidateIf } from 'class-validator';
+import { IsString, IsOptional, IsIn, IsBoolean, MaxLength, ValidateIf, IsArray, ArrayMaxSize } from 'class-validator';
 
 class UpdateMeDto {
   @IsString()
@@ -57,12 +59,39 @@ class UpdateMeDto {
   @IsString() @IsOptional() @IsIn(['EVERYONE', 'CONTACTS', 'NOBODY']) aboutVisibility?: string;
   @IsString() @IsOptional() @IsIn(['EVERYONE', 'CONTACTS', 'NOBODY']) photoVisibility?: string;
   @IsString() @IsOptional() @IsIn(['EVERYONE', 'CONTACTS', 'NOBODY']) lastSeenVisibility?: string;
+
+  /** "YYYY-MM-DD", or null to remove it. Checked properly in the service. */
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @IsOptional()
+  @MaxLength(10)
+  birthDate?: string | null;
+
+  /** Who may see the birthday — the day and month, never the year. */
+  @IsString() @IsOptional() @IsIn(['EVERYONE', 'CONTACTS', 'NOBODY']) birthdayVisibility?: string;
+}
+
+/**
+ * One topic of "about you". The entries are tidied and bounded by the service;
+ * this only makes sure they arrived as a list of strings of sane size.
+ */
+class AboutYouTopicDto {
+  @IsArray()
+  @ArrayMaxSize(32)
+  @IsString({ each: true })
+  @MaxLength(400, { each: true })
+  entries!: string[];
+
+  @IsString() @IsOptional() @IsIn(['EVERYONE', 'CONTACTS', 'NOBODY']) visibility?: string;
 }
 
 @Controller('api/v1/me')
 @UseGuards(JwtAuthGuard)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly aboutYou: AboutYouService,
+  ) {}
 
   @Get()
   async getMe(@Req() req: { user: { sub: string } }) {
@@ -79,6 +108,19 @@ export class UsersController {
   @Get("profile/:userId")
   async publicProfile(@Req() req: { user: { sub: string } }, @Param("userId") userId: string) {
     return this.usersService.publicProfile(req.user.sub, userId);
+  }
+
+  /**
+   * Replace one topic — interests, strengths, weaknesses, fears, dreams or
+   * goals. An empty list clears it.
+   */
+  @Put('about-you/:topic')
+  async setAboutYou(
+    @Req() req: { user: { sub: string } },
+    @Param('topic') topic: string,
+    @Body() body: AboutYouTopicDto,
+  ) {
+    return this.aboutYou.set(req.user.sub, topic, body.entries, body.visibility);
   }
 
   @Get('export')

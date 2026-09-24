@@ -61,6 +61,15 @@ fun YouScreen(
     var showBackup by remember { mutableStateOf(false) }
     var callingPrivacyExpanded by remember { mutableStateOf(false) }
     var editingAbout by remember { mutableStateOf<String?>(null) }
+    var editingAboutYou by remember { mutableStateOf(false) }
+    if (editingAboutYou) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { editingAboutYou = false },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            com.viroreach.app.people.AboutYouEditor(session = session, onDone = { editingAboutYou = false })
+        }
+    }
     var visibilityFor by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         viewModel.refresh()
@@ -197,6 +206,11 @@ fun YouScreen(
                     // second set inside Viro would have to be obeyed at every
                     // point a notification is posted, and would quietly
                     // disagree with the ones underneath it.
+                    SettingsRowClickable(
+                        label = "About you",
+                        value = "Edit",
+                        onClick = { editingAboutYou = true },
+                    )
                     SettingsRowClickable(
                         label = "Notifications",
                         value = "Manage",

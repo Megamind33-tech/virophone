@@ -299,6 +299,17 @@ fun ContactDetailScreen(
                         Text(it, color = ViroColors.textSecondary, style = MaterialTheme.typography.labelMedium)
                     }
                 }
+                // What they have chosen to let this person know about them.
+                // Only answered topics, only as each one allows — and nothing
+                // at all across a block, which the server already enforces.
+                publicProfile?.let { p ->
+                    com.viroreach.app.people.AboutYouSection(
+                        name = p.displayName ?: profile.effectiveDisplayName,
+                        aboutYou = p.aboutYou,
+                        birthday = p.birthday,
+                        modifier = Modifier.padding(top = ViroSpacing.lg),
+                    )
+                }
                 Spacer(Modifier.height(ViroSpacing.lg))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     ProfileActionChip("Call", Icons.Default.Call, onCall)
@@ -418,7 +429,7 @@ private fun ProfileActionChip(
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         FilledIconButton(
             onClick = onClick,
-            colors = IconButtonDefaults.filledIconButtonColors(containerColor = ViroColors.NavySurfaceElevated),
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = ViroColors.surfaceRaised),
         ) {
             Icon(icon, contentDescription = label, tint = ViroColors.accent)
         }

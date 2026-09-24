@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { UsersService } from './users.service';
 import { VisibilityService } from './visibility.service';
+import { AboutYouService } from './about-you.service';
 import { UsersController } from './users.controller';
 import { ContactMatch } from '../database/entities/contact-match.entity';
 import { EmailIdentity } from '../database/entities/email-identity.entity';
@@ -36,7 +37,7 @@ import { Message } from '../database/entities/message.entity';
     ]),
   ],
   controllers: [UsersController],
-  providers: [UsersService, VisibilityService],
+  providers: [UsersService, VisibilityService, AboutYouService],
   exports: [UsersService, VisibilityService],
 })
 export class UsersModule {}

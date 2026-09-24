@@ -18,6 +18,8 @@ import { ConversationParticipant } from '../database/entities/conversation-parti
 import { Message } from '../database/entities/message.entity';
 import { normalizeViroId, formatViroId } from '../common/utils/viro-id.util';
 import { ViroException } from '../common/exceptions/viro.exception';
+import { AboutYouService } from './about-you.service';
+import { birthdayOf, readBirthDate } from './about-you';
 import {
   avatarFilePath,
   extensionForMime,
@@ -44,6 +46,7 @@ export class UsersService {
     @InjectRepository(Message) private readonly msgRepo: Repository<Message>,
     @InjectRepository(ContactMatch) private readonly matchRepo: Repository<ContactMatch>,
     private readonly visibility: VisibilityService,
+    private readonly aboutYou: AboutYouService,
   ) {}
 
   async getMe(userId: string) {
@@ -68,6 +71,11 @@ export class UsersService {
       aboutVisibility: profile.aboutVisibility,
       photoVisibility: profile.photoVisibility,
       lastSeenVisibility: profile.lastSeenVisibility,
+      // Their own, in full: every topic with how it is set, so the screen
+      // can show what they have not answered as well as what they have.
+      aboutYou: await this.aboutYou.mine(userId),
+      birthDate: profile.birthDate ? String(profile.birthDate).slice(0, 10) : null,
+      birthdayVisibility: profile.birthdayVisibility,
     };
   }
 
@@ -82,6 +90,8 @@ export class UsersService {
     aboutVisibility?: string;
     photoVisibility?: string;
     lastSeenVisibility?: string;
+    birthDate?: string | null;
+    birthdayVisibility?: string;
   }) {
     const profile = await this.profileRepo.findOne({ where: { userId } });
     if (!profile) {
@@ -110,6 +120,24 @@ export class UsersService {
         throw new ViroException('VALIDATION_ERROR', 'Choose everyone, my contacts, or nobody.', HttpStatus.BAD_REQUEST);
       }
       (profile as unknown as Record<string, string>)[key] = choice;
+    }
+    if (updates.birthDate !== undefined) {
+      if (updates.birthDate === null || updates.birthDate === '') {
+        profile.birthDate = null;
+      } else {
+        const read = readBirthDate(updates.birthDate, new Date());
+        if ('problem' in read) {
+          throw new ViroException('VALIDATION_ERROR', read.problem, HttpStatus.BAD_REQUEST);
+        }
+        profile.birthDate = read.date.toISOString().slice(0, 10);
+      }
+    }
+    if (updates.birthdayVisibility !== undefined) {
+      const choice = String(updates.birthdayVisibility).toUpperCase();
+      if (!VISIBILITY_CHOICES.includes(choice as never)) {
+        throw new ViroException('VALIDATION_ERROR', 'Choose everyone, my contacts, or nobody.', HttpStatus.BAD_REQUEST);
+      }
+      profile.birthdayVisibility = choice;
     }
     if (updates.avatarUrl !== undefined) profile.avatarUrl = updates.avatarUrl;
     if (updates.allowCallsFromViroId !== undefined) {
@@ -204,13 +232,17 @@ export class UsersService {
       ],
     });
     const hidden = !!blocked;
-    const [showPhoto, showAbout, showLastSeen] = hidden
-      ? [false, false, false]
+    const [showPhoto, showAbout, showLastSeen, showBirthday] = hidden
+      ? [false, false, false, false]
       : await Promise.all([
           this.visibility.canSee(viewerId, ownerId, profile.photoVisibility),
           this.visibility.canSee(viewerId, ownerId, profile.aboutVisibility),
           this.visibility.canSeeLastSeen(viewerId, profile),
+          this.visibility.canSee(viewerId, ownerId, profile.birthdayVisibility),
         ]);
+    // Nothing at all across a block, in either direction — the same answer
+    // the photo and the about line already give.
+    const aboutYou = hidden ? [] : await this.aboutYou.visibleTo(viewerId, ownerId);
     return {
       userId: ownerId,
       displayName: profile.displayName,
@@ -218,6 +250,10 @@ export class UsersService {
       avatarUrl: showPhoto ? publicAvatarUrl(profile.avatarUrl) : null,
       about: showAbout ? profile.about : null,
       lastSeenAt: showLastSeen ? profile.lastSeenAt?.toISOString() ?? null : null,
+      aboutYou,
+      // Day and month only. The year is how old somebody is, and that is
+      // theirs to tell.
+      birthday: showBirthday ? birthdayOf(profile.birthDate) : null,
     };
   }
 
@@ -298,8 +334,14 @@ export class UsersService {
       profile.avatarUrl = null;
       profile.viroId = null;
       profile.viroIdNormalized = null;
+      // Deleting is a soft delete — the row stays — so nothing cascades and
+      // everything personal has to be cleared by hand. The about line used to
+      // be missed here and survived the account it belonged to.
+      profile.about = null;
+      profile.birthDate = null;
       await this.profileRepo.save(profile);
     }
+    await this.aboutYou.wipe(userId);
 
     const phones = await this.phoneRepo.find({ where: { userId } });
     for (const phone of phones) {

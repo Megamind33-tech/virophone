@@ -50,6 +50,17 @@ export class Profile {
   @Column({ name: 'profile_completed_at', type: 'timestamptz', nullable: true })
   profileCompletedAt!: Date | null;
 
+  /**
+   * When they were born, as "YYYY-MM-DD". Held, never shown: at most the day
+   * and month are shared, and only as [birthdayVisibility] allows.
+   */
+  @Column({ name: 'birth_date', type: 'date', nullable: true })
+  birthDate!: string | null;
+
+  /** EVERYONE | CONTACTS | NOBODY — who may see the birthday (never the year). */
+  @Column({ name: 'birthday_visibility', type: 'varchar', length: 16, default: 'NOBODY' })
+  birthdayVisibility!: string;
+
   /** Whether an exact, verified email match can find this person in Find people. */
   @Column({ name: 'discoverable_by_email', type: 'boolean', default: true })
   discoverableByEmail!: boolean;

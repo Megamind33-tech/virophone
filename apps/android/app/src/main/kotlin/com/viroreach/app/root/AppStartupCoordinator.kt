@@ -7,6 +7,12 @@ enum class AppStartupState {
     Preparing,
     /** Signed in, but the one-time name + Viro ID step hasn't been done. */
     ProfileSetup,
+    /**
+     * Straight after ProfileSetup, and only then: the chance to say who you
+     * are. Everyone else reaches the same questions from You, so nobody who
+     * already has an account is stopped at the door to answer them.
+     */
+    AboutYou,
     Authenticated,
 }
 

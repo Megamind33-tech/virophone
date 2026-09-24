@@ -57,6 +57,10 @@ fun ViroReachRoot() {
         )
         AppStartupState.ProfileSetup -> com.viroreach.app.people.ProfileSetupScreen(
             session = session,
+            onDone = { startupState = AppStartupState.AboutYou },
+        )
+        AppStartupState.AboutYou -> com.viroreach.app.people.AboutYouSetupScreen(
+            session = session,
             onDone = { startupState = AppStartupState.Authenticated },
         )
         AppStartupState.Unauthenticated -> AuthFlow(
