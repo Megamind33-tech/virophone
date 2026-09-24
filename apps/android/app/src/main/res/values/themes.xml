@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+        The window Viro opens into is Viro navy, the same colour as the opening
+        screen drawn on top of it. It used to be the stock Material grey, so
+        opening went grey, then navy: a flash before anything had happened.
+    -->
     <style name="Theme.ViroReach" parent="android:Theme.Material.NoActionBar">
-        <item name="android:statusBarColor">#121212</item>
-        <item name="android:navigationBarColor">#121212</item>
+        <item name="android:windowBackground">@color/viro_opening</item>
+        <item name="android:statusBarColor">@color/viro_opening</item>
+        <item name="android:navigationBarColor">@color/viro_opening</item>
     </style>
 </resources>

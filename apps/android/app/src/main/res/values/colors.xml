@@ -7,4 +7,8 @@
     <color name="ic_launcher_foreground">#4FC3F7</color>
     <!-- Tint behind the notification icon in the shade; the mark's blue. -->
     <color name="notification_accent">#1565F5</color>
+    <!-- Viro navy: the window, the Android 12 splash and the opening screen,
+         so opening is one surface from the tap onwards. Matches
+         ViroColors.NavyBackground. -->
+    <color name="viro_opening">#00122C</color>
 </resources>

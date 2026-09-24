@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Android 12 and later show their own splash before the app draws: the
+        launcher icon on a plain background. That background is Viro navy too,
+        so the system splash, the window and the opening screen are one surface
+        and the logo appears to carry straight on into its own animation.
+    -->
+    <style name="Theme.ViroReach" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/viro_opening</item>
+        <item name="android:statusBarColor">@color/viro_opening</item>
+        <item name="android:navigationBarColor">@color/viro_opening</item>
+        <item name="android:windowSplashScreenBackground">@color/viro_opening</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/viro_opening</item>
+    </style>
+</resources>

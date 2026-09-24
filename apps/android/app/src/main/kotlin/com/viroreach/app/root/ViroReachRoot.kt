@@ -51,9 +51,16 @@ fun ViroReachRoot() {
     }
 
     when (startupState) {
-        AppStartupState.RestoringSession -> StartupLoadingScreen()
-        AppStartupState.Preparing -> StartupLoadingScreen(
-            message = "Getting your contacts and calls ready…",
+        // One branch for both, so the opening screen is the same screen
+        // throughout and its arrival plays once. Two branches would be two
+        // screens as far as Compose is concerned, and the logo would arrive,
+        // vanish and arrive again the moment restoring turned into preparing.
+        AppStartupState.RestoringSession, AppStartupState.Preparing -> OpeningScreen(
+            message = if (startupState == AppStartupState.Preparing) {
+                "Getting your contacts and calls ready…"
+            } else {
+                "Restoring secure session…"
+            },
         )
         AppStartupState.ProfileSetup -> com.viroreach.app.people.ProfileSetupScreen(
             session = session,
@@ -77,17 +84,3 @@ fun ViroReachRoot() {
     }
 }
 
-@Composable
-private fun StartupLoadingScreen(message: String = "Restoring secure session…") {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(ViroSpacing.lg),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        // The logo alone: no wordmark, no spinner, no second mark. The
-        // message still reaches screen readers.
-        ViroLogoMark(modifier = Modifier.semantics { contentDescription = message })
-    }
-}
