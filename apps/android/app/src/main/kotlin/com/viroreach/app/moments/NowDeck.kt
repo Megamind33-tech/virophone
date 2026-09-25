@@ -138,8 +138,10 @@ private val MediaCardHeight = 500.dp
 private val TextCardHeight = 330.dp
 private val ThumbShape = RoundedCornerShape(20.dp)
 
-private val StatusStyle = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 28.sp, lineHeight = 34.sp)
-private val NameStyle = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 17.sp, lineHeight = 22.sp)
+// The person and the invitation lead; the activity wording supports rather
+// than shouts, so the card reads human first.
+private val StatusStyle = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 26.sp, lineHeight = 32.sp)
+private val NameStyle = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 18.sp, lineHeight = 23.sp)
 private val ContextStyle = TextStyle(fontWeight = FontWeight.Normal, fontSize = 16.sp, lineHeight = 22.sp)
 private val MetaStyle = TextStyle(fontWeight = FontWeight.Normal, fontSize = 13.sp, lineHeight = 18.sp)
 private val ActionStyle = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 16.sp, lineHeight = 20.sp)
@@ -298,11 +300,19 @@ internal fun NowMomentDeck(
                     .heightIn(max = maxHeight),
             )
         } else {
-            val desired = if (entries.any { it.moment.thumbnailRes() != null }) MediaCardHeight else TextCardHeight
-            val cardHeight = min(maxHeight - Peek - PageGap, desired).coerceAtLeast(MinCardHeight)
+            // Each card carries its own height: a Moment with a photograph
+            // needs more room than one of words alone. The pager's slot is the
+            // tallest card, and a shorter one simply shows more of the next
+            // card beneath it — instead of every card inheriting the tallest
+            // height and words floating in half a card of nothing.
+            val bounded = maxHeight - Peek - PageGap
+            val heightOf = { e: NowEntry ->
+                min(bounded, if (e.moment.thumbnailRes() != null) MediaCardHeight else TextCardHeight).coerceAtLeast(MinCardHeight)
+            }
+            val tallest = entries.maxOf(heightOf)
             VerticalPager(
                 state = pager,
-                pageSize = PageSize.Fixed(cardHeight),
+                pageSize = PageSize.Fixed(tallest),
                 pageSpacing = PageGap,
                 contentPadding = PaddingValues(bottom = Peek),
                 beyondBoundsPageCount = 1,
@@ -311,7 +321,7 @@ internal fun NowMomentDeck(
                     state = pager,
                     snapAnimationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
                 ),
-                modifier = Modifier.fillMaxWidth().height(cardHeight + PageGap + Peek),
+                modifier = Modifier.fillMaxWidth().height(tallest + PageGap + Peek),
             ) { page ->
                 val entry = entries[page]
                 NowMomentCard(
@@ -330,7 +340,8 @@ internal fun NowMomentDeck(
                     onDecline = { onDecline(entry) },
                     modifier = Modifier
                         .padding(horizontal = NowGutter)
-                        .fillMaxSize()
+                        .fillMaxWidth()
+                        .height(heightOf(entry))
                         .graphicsLayer {
                             // Read here, in the layer, so swiping redraws
                             // rather than recomposes.

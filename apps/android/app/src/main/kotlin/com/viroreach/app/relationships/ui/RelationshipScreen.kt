@@ -297,6 +297,8 @@ private fun MomentRow(t: TimelineItemDto) {
         "COMMITMENT_DONE" -> "✅"
         "CHECKIN" -> "🤝"
         "FIRST" -> "✨"
+        "KEEPSAKE" -> "💫"
+        "KEPT_MESSAGE" -> "🔖"
         else -> "•"
     }
     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {

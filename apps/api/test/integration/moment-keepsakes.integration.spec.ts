@@ -240,4 +240,33 @@ describe('Moment keepsakes: an ending that leaves nothing unless asked', () => {
     await http().delete(`/api/v1/moments/keepsakes/${kept.id}`).set(auth(b)).expect(200);
     expect(await keptBy(b)).toEqual([]);
   });
+
+  it('a kept Moment and a kept message both turn up in the relationship story', async () => {
+    const m = await create();
+    await join(b, m.id);
+    await http().delete(`/api/v1/moments/${m.id}`).set(auth(a)).expect(200);
+    const ending = await endingOf(b, m.id);
+    await http().post(`/api/v1/moments/${m.id}/keepsakes`).set(auth(b))
+      .send({ offerIds: [ending.offers[0].id] }).expect(200);
+
+    const sent = await http().post('/api/v1/messages').set(auth(a))
+      .send({ toUserId: b.userId, body: 'Remember this', clientMsgId: `keep-${Date.now()}` }).expect(201);
+    await http().put(`/api/v1/messages/${sent.body.message.id}/star`).set(auth(b)).expect(200);
+
+    const rel = await http().put('/api/v1/relationships').set(auth(b)).send({
+      subjectUserId: a.userId, displayName: 'Alex', relationshipType: 'FRIEND',
+    }).expect(200);
+    const tl = await http().get(`/api/v1/relationships/${rel.body.id}/timeline`).set(auth(b)).expect(200);
+    const kinds = tl.body.items.map((i: any) => i.kind);
+    expect(kinds).toContain('KEEPSAKE');
+    expect(kinds).toContain('KEPT_MESSAGE');
+    const keepsake = tl.body.items.find((i: any) => i.kind === 'KEEPSAKE');
+    expect(keepsake.detail).toBe('Cooking together');
+    // A stranger's timeline never sees b's kept things.
+    const none = await http().put('/api/v1/relationships').set(auth(stranger)).send({
+      subjectUserId: a.userId, displayName: 'A', relationshipType: 'FRIEND',
+    }).expect(200);
+    const tl2 = await http().get(`/api/v1/relationships/${none.body.id}/timeline`).set(auth(stranger)).expect(200);
+    expect(tl2.body.items.some((i: any) => i.kind === 'KEEPSAKE' || i.kind === 'KEPT_MESSAGE')).toBe(false);
+  });
 });

@@ -11,6 +11,7 @@ import {
 } from '../database/entities/relationship.entity';
 import { Profile } from '../database/entities/profile.entity';
 import { ViroException } from '../common/exceptions/viro.exception';
+import { decryptText } from '../common/crypto/field-cipher';
 import { LoopsService, LoopStateDto } from './loops.service';
 import {
   WEEKDAY_NAMES,
@@ -1083,6 +1084,22 @@ export class RelationshipsService {
         const mins = c.secs && c.secs > 0 ? Math.max(1, Math.round(c.secs / 60)) : null;
         push(new Date(c.at), 'CALL', 'Voice call', mins ? `${mins} min` : null);
       }
+      // What this person chose to keep from Moments the two of them shared.
+      // A kept memory belongs to the story of the relationship, not to a list
+      // nobody shows; titles are metadata the server can read (they are
+      // decrypted here exactly as the keepsakes endpoint does).
+      const keepsakes: { at: Date; kind: string; title: string; detail: string | null }[] = await this.relRepo.query(
+        `SELECT k.kept_at AS at, k.kind, k.title, k.detail
+         FROM moment_keepsakes k
+         JOIN moment_keepsake_audience a ON a.moment_id = k.moment_id AND a.user_id = $2
+         WHERE k.user_id = $1
+         ORDER BY k.kept_at DESC LIMIT 30`,
+        [ownerId, rel.subjectUserId],
+      );
+      for (const k of keepsakes) {
+        const label = k.kind === 'DECISION' ? 'Kept a decision made together' : k.kind === 'MEDIA' ? 'Kept from a Moment' : 'Kept a Moment together';
+        push(new Date(k.at), 'KEEPSAKE', label, decryptText(k.detail ?? k.title));
+      }
       const [a, b] = [ownerId, rel.subjectUserId].sort();
       const conv: { id: string }[] = await this.relRepo.query('SELECT id FROM conversations WHERE dm_key = $1', [`${a}:${b}`]);
       if (conv[0]) {
@@ -1093,6 +1110,18 @@ export class RelationshipsService {
         );
         for (const p of photos) push(new Date(p.at), 'PHOTO', 'Shared photo');
         for (const l of await this.loops.completedIn(conv[0].id)) push(l.doneAt, 'LOOP', `${l.title} completed`);
+        // Messages this person deliberately kept in that conversation. Only
+        // the fact of keeping reaches the timeline — the words themselves are
+        // sealed to the phones, and the server cannot and should not read
+        // them back here.
+        const kept: { at: Date; mine: boolean }[] = await this.relRepo.query(
+          `SELECT s.created_at AS at, m.sender_user_id = $2 AS mine
+           FROM message_stars s JOIN messages m ON m.id = s.message_id
+           WHERE s.user_id = $2 AND m.conversation_id = $1 AND m.deleted_at IS NULL
+           ORDER BY s.created_at DESC LIMIT 20`,
+          [conv[0].id, ownerId],
+        );
+        for (const k of kept) push(new Date(k.at), 'KEPT_MESSAGE', k.mine ? 'Kept your own message' : 'Kept a message from them');
         const first: { at: Date }[] = await this.relRepo.query(
           `SELECT MIN(created_at) AS at FROM messages WHERE conversation_id = $1 AND type <> 'SYSTEM'`,
           [conv[0].id],
