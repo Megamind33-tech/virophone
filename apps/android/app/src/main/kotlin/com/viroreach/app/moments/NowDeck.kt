@@ -44,6 +44,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -72,10 +75,12 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
 import com.viroreach.app.moments.engine.MomentMood
 import com.viroreach.app.moments.engine.momentActivityPhoto
@@ -106,6 +111,15 @@ internal data class NowEntry(
     val invitationId: String? = null,
 )
 
+/**
+ * The picture a Moment carries: its activity's photograph. Moments are
+ * served without any image of their own (shared films and songs live inside
+ * the room, as files, not on Now), so this is the one visual there is. Words
+ * written by hand, and activities with only a drawing, stay text.
+ */
+internal fun MomentDto.thumbnailRes(): Int? =
+    if (composition() == MomentComposition.WORDS) null else momentActivityPhoto(intent)
+
 /** Where a knock on a given Moment stands, as far as this device knows. */
 internal enum class KnockState { AVAILABLE, SENDING, SENT }
 
@@ -113,11 +127,16 @@ private val CardShape = RoundedCornerShape(28.dp)
 private val ActionShape = RoundedCornerShape(16.dp)
 private val DockShape = RoundedCornerShape(20.dp)
 
+/** One gutter for header, deck and composer, so their left edges line up. */
+internal val NowGutter = 24.dp
 /** How much of the next card stays in view beneath the active one. */
-private val Peek = 52.dp
+private val Peek = 44.dp
 private val PageGap = 12.dp
-private val MinCardHeight = 300.dp
-private val MaxCardHeight = 440.dp
+private val MinCardHeight = 280.dp
+/** What a card needs when it carries its activity's photograph, and when it doesn't. */
+private val MediaCardHeight = 500.dp
+private val TextCardHeight = 330.dp
+private val ThumbShape = RoundedCornerShape(20.dp)
 
 private val StatusStyle = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 28.sp, lineHeight = 34.sp)
 private val NameStyle = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 17.sp, lineHeight = 22.sp)
@@ -151,14 +170,14 @@ internal fun MomentDto.personalMessage(): String? =
 
 @Composable
 internal fun NowHeader(modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 12.dp)) {
+    Column(modifier.fillMaxWidth().padding(start = NowGutter, end = NowGutter, top = 12.dp, bottom = 20.dp)) {
         Text(
             "Now",
             color = ViroColors.textPrimary,
             style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 32.sp, lineHeight = 38.sp, letterSpacing = (-0.4).sp),
             modifier = Modifier.semantics { heading() },
         )
-        Spacer(Modifier.height(2.dp))
+        Spacer(Modifier.height(8.dp))
         Text(
             "Moments from your people",
             color = ViroColors.textMuted,
@@ -256,7 +275,13 @@ internal fun NowMomentDeck(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    BoxWithConstraints(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    // Top-aligned and as tall as its content, never centred in whatever height
+    // is left: the deck starts right under the header and the composer
+    // follows it, so the screen reads as one surface.
+    BoxWithConstraints(modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        // A photograph takes a share of the height, within reason, so a tall
+        // phone shows more of the Moment rather than more empty background.
+        val thumbHeight = (maxHeight * 0.28f).coerceIn(140.dp, 190.dp)
         if (entries.size == 1) {
             val entry = entries[0]
             NowMomentCard(
@@ -264,15 +289,17 @@ internal fun NowMomentDeck(
                 clock = clock,
                 knock = knockState(entry.moment.id),
                 stretch = false,
+                thumbHeight = thumbHeight,
                 onBeWith = { onBeWith(entry) },
                 onKnock = { onKnock(entry) },
                 onDecline = { onDecline(entry) },
                 modifier = Modifier
-                    .padding(horizontal = 16.dp)
-                    .heightIn(max = min(maxHeight, MaxCardHeight)),
+                    .padding(horizontal = NowGutter)
+                    .heightIn(max = maxHeight),
             )
         } else {
-            val cardHeight = (maxHeight - Peek - PageGap).coerceIn(MinCardHeight, MaxCardHeight)
+            val desired = if (entries.any { it.moment.thumbnailRes() != null }) MediaCardHeight else TextCardHeight
+            val cardHeight = min(maxHeight - Peek - PageGap, desired).coerceAtLeast(MinCardHeight)
             VerticalPager(
                 state = pager,
                 pageSize = PageSize.Fixed(cardHeight),
@@ -292,6 +319,7 @@ internal fun NowMomentDeck(
                     clock = clock,
                     knock = knockState(entry.moment.id),
                     stretch = true,
+                    thumbHeight = thumbHeight,
                     onBeWith = {
                         // A card still peeking comes forward first; only the
                         // one in front is a door.
@@ -301,7 +329,7 @@ internal fun NowMomentDeck(
                     onKnock = { onKnock(entry) },
                     onDecline = { onDecline(entry) },
                     modifier = Modifier
-                        .padding(horizontal = 16.dp)
+                        .padding(horizontal = NowGutter)
                         .fillMaxSize()
                         .graphicsLayer {
                             // Read here, in the layer, so swiping redraws
@@ -339,12 +367,18 @@ internal fun NowMomentCard(
     clock: () -> Long,
     knock: KnockState,
     stretch: Boolean,
+    thumbHeight: Dp,
     onBeWith: () -> Unit,
     onKnock: () -> Unit,
     onDecline: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val m = entry.moment
+    val thumb = m.thumbnailRes()
+    // A picture that will not load is simply not there: the card falls back
+    // to its text-only shape rather than showing a broken image.
+    var thumbFailed by remember(m.id, thumb) { mutableStateOf(false) }
+    val showThumb = thumb != null && !thumbFailed
     val light = ViroColors.isLight
     val cardColor = if (light) ViroColors.surface.copy(alpha = 0.97f) else ViroColors.surface.copy(alpha = 0.94f)
     val edge = if (light) ViroColors.divider else Color.White.copy(alpha = 0.08f)
@@ -365,12 +399,31 @@ internal fun NowMomentCard(
                     .padding(20.dp),
             ) {
                 CardTopRow(entry, clock, onDecline)
-                Spacer(Modifier.height(18.dp))
+                if (showThumb) {
+                    Spacer(Modifier.height(14.dp))
+                    MomentThumbnail(
+                        m = m,
+                        res = thumb!!,
+                        onFailed = { thumbFailed = true },
+                        // In a stack every card is the same height; the
+                        // picture takes up whatever the words leave.
+                        modifier = if (stretch) Modifier.weight(1f).heightIn(min = 96.dp) else Modifier.height(thumbHeight),
+                    )
+                    Spacer(Modifier.height(14.dp))
+                } else {
+                    LaunchedEffect(m.id, thumbFailed) {
+                        NowTrace.card(m, thumbnailPresent = false, loadState = if (thumb == null) "none" else "failed")
+                    }
+                    // In a stack beside cards with pictures, the words sit in
+                    // the middle of the card like a quote rather than leaving
+                    // a hole under them.
+                    if (stretch) Spacer(Modifier.weight(1f).heightIn(min = 18.dp)) else Spacer(Modifier.height(18.dp))
+                }
                 Text(
                     m.activity(),
                     color = ViroColors.textPrimary,
                     style = StatusStyle,
-                    maxLines = 3,
+                    maxLines = if (showThumb) 2 else 3,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -381,18 +434,72 @@ internal fun NowMomentCard(
                         "“$words”",
                         color = ViroColors.textPrimary.copy(alpha = 0.86f),
                         style = ContextStyle,
-                        maxLines = 3,
+                        maxLines = if (showThumb) 2 else 3,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
                 WhoIsHere(m, ViroColors.textMuted)
-                if (stretch) Spacer(Modifier.weight(1f).heightIn(min = 20.dp)) else Spacer(Modifier.height(24.dp))
+                if (stretch && !showThumb) Spacer(Modifier.weight(1f).heightIn(min = 20.dp)) else Spacer(Modifier.height(20.dp))
                 CardActions(m, clock, knock, firstName, onBeWith, onKnock)
             }
             // The one mark that says the Moment is alive, along the top edge.
             MomentPresenceEdge(
                 intent = m.intent ?: "BE",
                 modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 28.dp),
+            )
+        }
+    }
+}
+
+/**
+ * The Moment's picture, inside the card: full width, cropped, never
+ * stretched. A quiet surface holds its place while it loads so nothing
+ * jumps, and a failure hands the card back its text-only shape.
+ */
+@Composable
+private fun MomentThumbnail(m: MomentDto, res: Int, onFailed: () -> Unit, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var loadState by remember(res) { mutableStateOf("loading") }
+    val request = remember(res) {
+        // Decoded at card size, not at the photograph's own, and cached by
+        // Coil for the next time this Moment comes round.
+        ImageRequest.Builder(context).data(res).size(1080, 720).crossfade(200).build()
+    }
+    Box(
+        modifier
+            .fillMaxWidth()
+            .clip(ThumbShape)
+            .background(ViroColors.textPrimary.copy(alpha = 0.06f)),
+    ) {
+        AsyncImage(
+            model = request,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.matchParentSize(),
+            onState = { state ->
+                when (state) {
+                    is AsyncImagePainter.State.Success -> loadState = "loaded"
+                    is AsyncImagePainter.State.Error -> {
+                        loadState = "failed"
+                        onFailed()
+                    }
+                    else -> Unit
+                }
+            },
+        )
+    }
+    LaunchedEffect(m.id, loadState) { NowTrace.card(m, thumbnailPresent = true, loadState = loadState) }
+}
+
+/** Development-only: what each card is showing and why. No URLs, no content. */
+internal object NowTrace {
+    fun card(m: MomentDto, thumbnailPresent: Boolean, loadState: String) {
+        if (!com.viroreach.app.BuildConfig.DEBUG) return
+        runCatching {
+            android.util.Log.d(
+                "ViroNow",
+                "moment=${m.id} hasMedia=${m.thumbnailRes() != null} thumbnailPresent=$thumbnailPresent " +
+                    "mediaType=${m.intent ?: m.type} loadState=$loadState",
             )
         }
     }
@@ -579,7 +686,7 @@ internal fun NowCardSkeleton(modifier: Modifier = Modifier) {
         color = ViroColors.surface.copy(alpha = 0.9f),
         border = BorderStroke(1.dp, if (ViroColors.isLight) ViroColors.divider else Color.White.copy(alpha = 0.06f)),
         modifier = modifier
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = NowGutter)
             .fillMaxWidth()
             .semantics { contentDescription = "Loading Moments" },
     ) {
@@ -719,7 +826,7 @@ internal fun NowComposer(onOpenMoment: () -> Unit, modifier: Modifier = Modifier
 @Composable
 internal fun NowDock(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp),
+        modifier.fillMaxWidth().padding(start = NowGutter, end = NowGutter, top = 20.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         content = content,
     )

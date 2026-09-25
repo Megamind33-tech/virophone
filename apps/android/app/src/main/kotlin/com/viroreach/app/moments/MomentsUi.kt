@@ -189,7 +189,9 @@ fun NowScreen(
         NowBackdrop(intentKey = active?.intent, modifier = Modifier.fillMaxSize())
         Column(Modifier.fillMaxSize()) {
             NowHeader()
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            // As tall as the deck needs and no taller, under the header, with
+            // the composer straight after it — never centred in empty space.
+            Box(Modifier.weight(1f, fill = false).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
                 when {
                     deck.isNotEmpty() -> NowMomentDeck(
                         entries = deck,
