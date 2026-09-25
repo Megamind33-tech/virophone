@@ -171,14 +171,23 @@ internal fun MomentDto.personalMessage(): String? =
 // ---------------------------------------------------------------------------
 
 @Composable
-internal fun NowHeader(modifier: Modifier = Modifier) {
+internal fun NowHeader(modifier: Modifier = Modifier, onKept: (() -> Unit)? = null) {
     Column(modifier.fillMaxWidth().padding(start = NowGutter, end = NowGutter, top = 12.dp, bottom = 20.dp)) {
-        Text(
-            "Now",
-            color = ViroColors.textPrimary,
-            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 32.sp, lineHeight = 38.sp, letterSpacing = (-0.4).sp),
-            modifier = Modifier.semantics { heading() },
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Now",
+                color = ViroColors.textPrimary,
+                style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 32.sp, lineHeight = 38.sp, letterSpacing = (-0.4).sp),
+                modifier = Modifier.weight(1f).semantics { heading() },
+            )
+            // The way back to what this person kept from Moments that ended:
+            // a quiet door, never a badge counting anything.
+            if (onKept != null) {
+                TextButton(onClick = onKept, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                    Text("Kept", color = ViroColors.textMuted, style = MetaStyle)
+                }
+            }
+        }
         Spacer(Modifier.height(8.dp))
         Text(
             "Moments from your people",

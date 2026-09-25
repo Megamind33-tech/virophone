@@ -130,6 +130,11 @@ fun NowScreen(
     // A knock that did not go through, said once in plain words and then let go.
     var knockNotice by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(knockNotice) { if (knockNotice != null) { delay(4000); knockNotice = null } }
+    // What this person kept from Moments that ended. Fetched when the sheet
+    // opens, not carried the whole time: kept things change rarely, and
+    // leaving Now closes the sheet like every other one here.
+    var keptOpen by remember { mutableStateOf(false) }
+    var keptList by remember { mutableStateOf<List<com.viroreach.core.network.MomentKeepsakeDto>?>(null) }
     LaunchedEffect(repo) {
         // Coming back to the tab reuses what is already here; only a list that
         // has actually gone stale is fetched again on the way in.
@@ -188,7 +193,7 @@ fun NowScreen(
       ViroScreenBackground {
         NowBackdrop(intentKey = active?.intent, modifier = Modifier.fillMaxSize())
         Column(Modifier.fillMaxSize()) {
-            NowHeader()
+            NowHeader(onKept = { keptOpen = true })
             // As tall as the deck needs and no taller, under the header, with
             // the composer straight after it — never centred in empty space.
             Box(Modifier.weight(1f, fill = false).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
@@ -268,6 +273,17 @@ fun NowScreen(
             }
         }
       }
+
+        if (keptOpen) {
+            LaunchedEffect(Unit) { keptList = repo.keepsakes() }
+            KeptMemoriesSheet(
+                kept = keptList,
+                onForget = { id ->
+                    scope.launch { repo.forgetKeepsake(id).onSuccess { keptList = repo.keepsakes() } }
+                },
+                onDismiss = { keptOpen = false; keptList = null },
+            )
+        }
 
         if (create) {
             val ctx = androidx.compose.ui.platform.LocalContext.current
@@ -742,6 +758,90 @@ private fun KeepsakeChoice(
                 color = ViroColors.BlueAccent,
                 style = MaterialTheme.typography.titleMedium,
             )
+        }
+    }
+}
+
+/**
+ * What this person chose to keep from Moments that ended. Each row says what
+ * it was, who was there, and when it happened — a kept memory is the evening
+ * and the people, never a file with a date. Forgetting is theirs alone and
+ * touches nobody else's copy.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun KeptMemoriesSheet(
+    kept: List<com.viroreach.core.network.MomentKeepsakeDto>?,
+    onForget: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = ViroColors.surface,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
+            Text("Kept memories", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "What you chose to keep from Moments you were in.",
+                color = ViroColors.textMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(12.dp))
+            when {
+                kept == null -> Row(
+                    Modifier.fillMaxWidth().padding(vertical = 28.dp),
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    CircularProgressIndicator(color = ViroColors.accent, modifier = Modifier.size(26.dp))
+                }
+                kept.isEmpty() -> Text(
+                    "Nothing kept yet. When a Moment ends, you can keep what it meant — with who was there and when.",
+                    color = ViroColors.textMuted,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(vertical = 28.dp),
+                )
+                else -> LazyColumn(Modifier.heightIn(max = 460.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(kept, key = { it.id }) { k ->
+                        val day = runCatching {
+                            java.time.LocalDate.parse(k.happenedAt.substringBefore('T'))
+                                .format(java.time.format.DateTimeFormatter.ofPattern("d MMM uuuu"))
+                        }.getOrDefault("")
+                        val who = k.withPeople.joinToString(", ").takeIf { it.isNotBlank() }
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = ViroColors.surfaceRaised,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        k.title.ifBlank { "A Moment together" },
+                                        color = ViroColors.textPrimary,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    val contextLine = listOfNotNull(who?.let { "with $it" }, day.takeIf { it.isNotBlank() }).joinToString(" · ")
+                                    if (contextLine.isNotBlank()) {
+                                        Text(contextLine, color = ViroColors.textMuted, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                                IconButton(onClick = { onForget(k.id) }) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Forget this memory",
+                                        tint = ViroColors.textMuted,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(20.dp))
         }
     }
 }
