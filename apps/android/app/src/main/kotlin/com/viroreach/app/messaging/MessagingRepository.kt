@@ -49,6 +49,7 @@ import com.viroreach.core.network.StickerRef
 import com.viroreach.core.network.VoteBody
 import com.viroreach.feature.calling.CallManager
 import com.viroreach.feature.calling.SignalingConnectionState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -236,6 +237,9 @@ class MessagingRepository(
         val userId = tokenStore.getUserId() ?: return
         val deviceId = tokenStore.getDeviceId() ?: return
         if (e2ee.ensureRegistered(userId, deviceId)) {
+            // Anything typed while the keys were still being set up — right
+            // after signing in — goes now, not at the next reconnect.
+            scope.launch { flushOutbox() }
             // Anything that arrived before this phone had keys can open now.
             retryPendingDecryption("registered", everything = true)
             repairUnrecoveredSealed()
@@ -396,6 +400,9 @@ class MessagingRepository(
         val newSessions = mutableSetOf<String>()
         val resends = mutableListOf<String>()
         var written: List<MessageEntity> = emptyList()
+        // Rows that were still sealed on this phone before this pass: only
+        // those can be news when they open.
+        val wasSealed = mutableSetOf<String>()
         ingestMutex.withLock {
             val rows = mutableListOf<MessageEntity>()
             // In the server's order, so that within one batch the message that
@@ -412,6 +419,7 @@ class MessagingRepository(
                 // The outbox copy is replaced by the server's.
                 // REPLACE on the unique clientMsgId swaps the outbox row atomically
                 // when upsert succeeds. Never delete it before decoding its reply.
+                if (existing?.type == TYPE_ENCRYPTED) wasSealed += dto.id
                 rows += ingest(dto, existing, source, settled, handovers, newSessions, resends)
             }
             dao.upsertMessages(rows)
@@ -425,7 +433,7 @@ class MessagingRepository(
         // in the key store and the queue entries can go.
         if (settled.isNotEmpty()) dao.deletePending(settled)
         handovers.forEach { e2ee.forgetOpened(it) }
-        if (source.startsWith(RETRY)) announceLateOpenings(written)
+        if (source.startsWith(RETRY)) announceLateOpenings(written.filter { it.id in wasSealed })
         // Something waiting in the chat on screen just opened: now the
         // receipt that was held back can go.
         openConversationId?.let { open ->
@@ -904,14 +912,21 @@ class MessagingRepository(
             "message.new", "message.updated" -> {
                 val obj = p.optJSONObject("message") ?: return
                 val dto = ChatJson.gson.fromJson(obj.toString(), MsgDto::class.java)
+                // The same message reaches this phone more than once — the
+                // socket, the sync after every reconnect and sign-in, the chat's
+                // backstop poll. It is counted and announced only the first
+                // time it lands here, never again.
+                val seenBefore = dao.message(dto.id) != null
                 if (dao.conversation(dto.conversationId) == null) {
                     // First message in a conversation this phone has not seen.
+                    // The sync brings the server's unread count with it, which
+                    // already includes this one.
                     syncNow()
-                    if (dao.message(dto.id) != null) announceIfIncoming(type, dto)
+                    if (!seenBefore && dao.message(dto.id) != null) announceIfIncoming(type, dto, countUnread = false)
                     return
                 }
                 upsertMessages(listOf(dto), "websocket")
-                announceIfIncoming(type, dto)
+                if (!seenBefore) announceIfIncoming(type, dto)
             }
             "message.resend-request" -> scope.launch { answerResendRequest(p) }
             "message.hidden" -> p.optString("messageId").takeIf { it.isNotBlank() }?.let { dao.deleteMessages(listOf(it)) }
@@ -964,7 +979,7 @@ class MessagingRepository(
         }
     }
 
-    private suspend fun announceIfIncoming(type: String, dto: MsgDto) {
+    private suspend fun announceIfIncoming(type: String, dto: MsgDto, countUnread: Boolean = true) {
         if (type != "message.new") return
         // A sealed reaction arrives as a message and is not one: no badge, no
         // notification, nothing in the chat.
@@ -981,7 +996,7 @@ class MessagingRepository(
             markRead(dto.conversationId)
         } else {
             val conv = dao.conversation(dto.conversationId)
-            if (conv != null) dao.upsertConversations(listOf(conv.copy(unread = conv.unread + 1)))
+            if (conv != null && countUnread) dao.upsertConversations(listOf(conv.copy(unread = conv.unread + 1)))
             val msg = dao.message(dto.id)?.toChat(me) ?: return
             // Still being opened: the notification waits for the words, and
             // is posted by the retry that opens it.
@@ -1186,16 +1201,31 @@ class MessagingRepository(
 
     suspend fun flushOutbox() = outboxMutex.withLock {
         for (row in dao.outbox()) {
+            // Only what is still waiting: a row the ingest path has since
+            // replaced with the server's copy is sent, not sent again.
+            val current = dao.message(row.id) ?: continue
+            if (current.status != "SENDING" && current.status != "FAILED") continue
             try {
-                sendOne(row)
+                sendOne(current)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 val failure = ApiDiagnostics.parseFailure("POST", "/api/v1/messages", e)
                 Log.w(TAG, "OUTBOX_SEND_FAILED ${failure.summary()}")
-                // 4xx will not fix itself; show it as failed. Network errors retry.
+                // 4xx will not fix itself; show it as failed. Anything else retries.
                 val permanent = failure.httpStatus in 400..499
-                dao.upsertMessages(listOf(row.copy(status = if (permanent) "FAILED" else "SENDING")))
+                // Written only if the row is still the outbox copy: a late
+                // failure must not turn a message that did go out back into one
+                // that is "sending".
+                dao.message(current.id)?.takeIf { it.status == "SENDING" || it.status == "FAILED" }?.let {
+                    dao.upsertMessages(listOf(it.copy(status = if (permanent) "FAILED" else "SENDING")))
+                }
                 if (permanent) _lastError.value = failure.message
-                if (!permanent) break
+                // No connection: nothing behind it will get through either, and
+                // the next reconnect flushes again. Any other failure belongs to
+                // this one message — the ones queued after it still go, the way
+                // one stuck message never holds up a whole chat on WhatsApp.
+                if (e is java.io.IOException) break
             }
         }
     }

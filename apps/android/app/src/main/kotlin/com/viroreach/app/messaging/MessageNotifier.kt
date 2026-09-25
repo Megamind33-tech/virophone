@@ -18,6 +18,10 @@ import com.viroreach.core.database.ConversationEntity
  */
 class MessageNotifier(private val context: Context) {
     private val lines = mutableMapOf<String, MutableList<String>>()
+    /** Messages already in a notification: shown once, however often they arrive. */
+    private val shown = object : LinkedHashMap<String, Boolean>(64, 0.75f, false) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>?) = size > 500
+    }
 
     fun ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -32,6 +36,10 @@ class MessageNotifier(private val context: Context) {
     fun show(conversation: ConversationEntity?, senderName: String, message: ChatMessage) {
         if (!ReminderNotifications.canPost(context)) return
         if ((conversation?.mutedUntil ?: 0L) > System.currentTimeMillis()) return
+        synchronized(shown) {
+            if (shown.containsKey(message.id)) return
+            shown[message.id] = true
+        }
         ensureChannel()
         val secret = conversation?.locked == true || conversation?.kind == "PRIVATE" || message.viewOnce
         val text = when {

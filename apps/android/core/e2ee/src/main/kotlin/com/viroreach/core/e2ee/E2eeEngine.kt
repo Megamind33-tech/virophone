@@ -35,6 +35,9 @@ import org.signal.libsignal.protocol.state.SignedPreKeyRecord
 /** One sealed copy of a message, addressed to one device. */
 data class SealedEnvelope(val deviceId: String, val ciphertext: String, val type: Int)
 
+/** None of a recipient's devices could be sealed for right now; the message waits and tries again. */
+class SealUnavailableException : IllegalStateException("Waiting for their phone")
+
 /**
  * Why a sealed copy could not be opened, and whether trying again later can
  * change that. Classified from libsignal's own exceptions, never guessed from
@@ -372,27 +375,52 @@ class E2eeEngine internal constructor(
             val store = storeOf(own)
             val out = mutableListOf<SealedEnvelope>()
             for (userId in (recipientUserIds + myUserId).distinct()) {
-                val deviceIds = devicesOf(userId).filter { it != own.deviceId }
+                val mine = userId == myUserId
+                // My own other devices are a courtesy: a copy for them must
+                // never be the reason the person I am writing to gets nothing.
+                val deviceIds = try {
+                    devicesOf(userId).filter { it != own.deviceId }
+                } catch (e: Exception) {
+                    if (mine) continue else throw e
+                }
                 // Someone in the chat cannot receive this at all: fall back
                 // rather than send a message half the room cannot open.
-                if (deviceIds.isEmpty() && userId != myUserId) return@withContext emptyList()
+                if (deviceIds.isEmpty() && !mine) return@withContext emptyList()
 
                 // Only devices with no session yet need a bundle, and fetching
                 // one spends a prekey — so ask about exactly those.
                 val strangers = deviceIds.filter { !store.containsSession(SignalProtocolAddress(it, DEVICE_NUMBER)) }
                 if (strangers.isNotEmpty()) {
-                    val bundles = api.bundles(userId, strangers.joinToString(",")).devices.orEmpty()
+                    val bundles = try {
+                        api.bundles(userId, strangers.joinToString(",")).devices.orEmpty()
+                    } catch (e: Exception) {
+                        if (mine) emptyList() else throw e
+                    }
                     for (device in bundles) {
-                        startSession(store, SignalProtocolAddress(device.deviceId, DEVICE_NUMBER), device)
+                        // One device with a bad or stale bundle — an old sign-in
+                        // nobody uses any more — is skipped, not allowed to
+                        // stop the message reaching every other device.
+                        runCatching { startSession(store, SignalProtocolAddress(device.deviceId, DEVICE_NUMBER), device) }
+                            .onFailure { Log.w(TAG, "skipped a device with an unusable bundle: ${it.javaClass.simpleName}") }
                     }
                 }
+                var reached = 0
                 for (deviceId in deviceIds) {
                     val address = SignalProtocolAddress(deviceId, DEVICE_NUMBER)
                     if (!store.containsSession(address)) continue
-                    store.rememberOwner(deviceId, userId)
-                    val sealed = SessionCipher(store, address).encrypt(plaintext.toByteArray(Charsets.UTF_8))
+                    val sealed = runCatching {
+                        store.rememberOwner(deviceId, userId)
+                        SessionCipher(store, address).encrypt(plaintext.toByteArray(Charsets.UTF_8))
+                    }.getOrElse {
+                        Log.w(TAG, "could not seal for one device: ${it.javaClass.simpleName}")
+                        null
+                    } ?: continue
                     out += SealedEnvelope(deviceId, sealed.serialize().b64(), sealed.type)
+                    reached++
                 }
+                // Sent with no copy any of their phones can open, the message
+                // would look delivered and never arrive. It waits instead.
+                if (!mine && reached == 0) throw SealUnavailableException()
             }
             out
         }

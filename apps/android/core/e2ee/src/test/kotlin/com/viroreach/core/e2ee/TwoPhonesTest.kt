@@ -341,4 +341,28 @@ class TwoPhonesTest {
             E2eeDatabase.useAccount(null)
         }
     }
+
+    @Test fun `a stale device with unusable keys does not stop the message`() = runBlocking {
+        val (a, b) = phones()
+        // Old sign-ins left behind on both accounts, whose published keys no
+        // longer make a session: one of Bob's, and one of Alice's own.
+        for ((user, device) in listOf("bob" to "b-old", "alice" to "a-old")) {
+            val good = server.published.getValue(if (user == "bob") "b1" else "a1")
+            server.published[device] = good.copy(identityKey = "AAAA")
+            server.owner[device] = user
+        }
+        val sealed = a.engine.seal("alice", listOf("bob"), "still gets there")
+        assertEquals(listOf("b1"), sealed.map { it.deviceId })
+        expect(b, Wire("m${++seq}", a, sealed), "still gets there")
+    }
+
+    @Test fun `nothing is sent when none of their devices can be sealed for`() = runBlocking {
+        val (a, _) = phones()
+        server.published["b1"] = server.published.getValue("b1").copy(identityKey = "AAAA")
+        try {
+            a.engine.seal("alice", listOf("bob"), "waits")
+            fail("sealed with no copy Bob could open")
+        } catch (_: SealUnavailableException) {
+        }
+    }
 }
