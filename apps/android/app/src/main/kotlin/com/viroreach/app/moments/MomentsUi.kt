@@ -23,6 +23,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -52,13 +54,12 @@ private val types = listOf("FREE" to "Free", "BREAK" to "Break", "LISTENING" to 
     "WATCHING" to "Watching", "GAMING" to "Gaming", "WORKING" to "Working", "CUSTOM" to "Custom")
 val momentReactions = listOf("❤️", "😂", "🔥", "👏", "👍")
 
-/** Consumer surfaces use Viro's navy palette in both app theme modes. Keep
- *  Material controls legible on those surfaces when the system uses light mode. */
+/** Controls follow the selected appearance; artwork owns its own contrast. */
 @Composable
 fun MomentsTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(
-        primary = ViroColors.BlueAccent,
-        onPrimary = ViroColors.NavyBackground,
+        primary = ViroColors.accent,
+        onPrimary = ViroColors.onAccent,
         background = ViroColors.background,
         onBackground = ViroColors.textPrimary,
         surface = ViroColors.surface,
@@ -74,6 +75,7 @@ fun MomentsTheme(content: @Composable () -> Unit) {
 /** NOW — the live-activity destination. Owns Moments only: conversations,
  *  calls and the contact directory each keep their own destination. */
 @Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 fun NowScreen(
     session: SessionManager,
     onCall: (String?, String?, String) -> Unit,
@@ -123,6 +125,7 @@ fun NowScreen(
     var roomId by rememberSaveable { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
+    val knocked = remember { mutableStateListOf<String>() }
     LaunchedEffect(repo) {
         repo.refresh(); repo.refreshInvitations(); session.promotions.refresh()
         var ticks = 0
@@ -143,9 +146,11 @@ fun NowScreen(
     // Who is holding a door open for this person specifically. That Moment
     // leads, because being asked outranks being available.
     val invitedIds = remember(invitations) { invitations.map { it.moment.id }.toSet() }
-    val featured = peers.firstOrNull { it.id in invitedIds } ?: peers.firstOrNull()
-    val secondary = peers.filter { it.id != featured?.id && it.id !in invitedIds }
-    val pendingInvites = invitations.filter { it.moment.id != featured?.id }
+    val deck = peers.sortedByDescending { it.id in invitedIds }
+    val pager = rememberPagerState(pageCount = { deck.size })
+    val featured = deck.getOrNull(pager.currentPage)
+    val secondary = emptyList<MomentDto>()
+    val pendingInvites = invitations.filter { invite -> peers.none { it.id == invite.moment.id } }
 
     MomentsTheme {
       ViroScreenBackground {
@@ -153,7 +158,7 @@ fun NowScreen(
             Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp)) {
                 Text("Now", color = ViroColors.textPrimary, style = MaterialTheme.typography.headlineMedium)
                 Text(
-                    if (peers.isEmpty() && own == null) "Nobody's around just now" else "Your people are around",
+                    if (!loaded && peers.isEmpty()) "Checking Moments…" else if (peers.isEmpty() && own == null) "It's quiet right now" else "Moments from your people",
                     color = ViroColors.textMuted,
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -179,18 +184,35 @@ fun NowScreen(
                 }
 
                 if (featured != null) {
-                    item(key = "featured-" + featured.id) {
+                    item(key = "moment-deck") {
+                        HorizontalPager(state = pager, key = { deck[it].id }, pageSpacing = 12.dp) { page ->
+                        val featured = deck[page]
                         FeaturedMoment(
                             m = featured,
                             clock = clock,
                             invited = featured.id in invitedIds,
                             busy = busy,
+                            knockSent = featured.id in knocked,
+                            onReact = { emoji -> scope.launch {
+                                repo.cheer(featured.id, if (featured.myReaction == emoji) null else emoji)
+                                    .onFailure { actionError = it.message }
+                            } },
                             onStepIn = { actionError = null; roomId = featured.id },
                             onKnock = {
                                 actionError = null
                                 busy = true
-                                scope.launch { repo.knock(featured.id).onFailure { actionError = it.message }; busy = false }
+                                scope.launch {
+                                    repo.knock(featured.id).onSuccess { knocked.add(featured.id) }.onFailure { actionError = it.message }
+                                    busy = false
+                                }
                             },
+                        )
+                        }
+                        if (deck.size > 1) Text(
+                            "${pager.currentPage + 1} of ${deck.size} · Swipe for more Moments",
+                            color = ViroColors.textMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 8.dp),
                         )
                     }
                 }
@@ -233,7 +255,7 @@ fun NowScreen(
                                 )
                                 Spacer(Modifier.height(6.dp))
                                 Text(
-                                    "Open a Moment for them.",
+                                    "Share what you're doing. Company can start here.",
                                     color = ViroColors.textMuted,
                                     style = MaterialTheme.typography.bodyMedium,
                                 )
@@ -401,7 +423,7 @@ fun NowScreen(
     roomId?.let { id ->
         MomentRoomScreen(
             session = session,
-            room = session.openMomentRoom(id),
+            room = remember(session, id) { session.openMomentRoom(id) },
             onBack = { roomId = null },
             onCall = onCall,
             onOpenChat = onOpenChat,
@@ -995,14 +1017,23 @@ internal fun InviteSheet(session: SessionManager, momentId: String, onDismiss: (
 /** Listens for knocks anywhere in the app: the host answers from wherever
  *  they are, and accepting launches the existing call flow (§34). */
 @Composable
-fun MomentKnockListener(session: SessionManager, onCall: (String?, String?, String) -> Unit) {
+fun MomentKnockListener(session: SessionManager, onCall: (String?, String?, String) -> Unit, onMessage: (String, String) -> Unit) {
     val repo = session.moments
     var knock by remember { mutableStateOf<Map<String, Any?>?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var responseError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(repo) {
         repo.frames.collect { (type, payload) ->
-            if (type == "moment.knock") knock = payload
+            if (type == "moment.knock") { knock = payload; responseError = null }
+            if (type == "moment.knock-answered" && payload["momentId"] == knock?.get("momentId") &&
+                payload["knockerUserId"] == knock?.get("knockerUserId")) knock = null
+        }
+    }
+    LaunchedEffect(repo) {
+        while (true) {
+            if (knock == null && !busy) repo.pendingKnock()?.let { knock = it; responseError = null }
+            delay(30_000)
         }
     }
     knock?.let { payload ->
@@ -1012,18 +1043,31 @@ fun MomentKnockListener(session: SessionManager, onCall: (String?, String?, Stri
         val told = payload["told"] as? String
         AlertDialog(onDismissRequest = { if (!busy) knock = null }, containerColor = ViroColors.surface,
             title = { Text(told ?: "$knockerName wants to talk", color = ViroColors.textPrimary) },
-            text = { Text("They knocked on your Moment.", color = ViroColors.textMuted) },
+            text = { Column {
+                Text(payload["context"] as? String ?: "They knocked on your Moment.", color = ViroColors.textMuted)
+                responseError?.let { Text(it, color = ViroColors.consumerError) }
+                TextButton(enabled = !busy && momentId != null && knockerId != null, onClick = {
+                    busy = true
+                    scope.launch {
+                        repo.respondToKnock(momentId!!, knockerId!!, true)
+                            .onSuccess { knock = null; onMessage(knockerId, knockerName) }
+                            .onFailure { responseError = "Couldn't answer. Try again." }
+                        busy = false
+                    }
+                }) { Text("Message") }
+            } },
             confirmButton = {
                 TextButton(enabled = !busy, onClick = {
                     busy = true
                     scope.launch {
                         if (momentId != null && knockerId != null) {
                             session.moments.respondToKnock(momentId, knockerId, true)
+                                .onSuccess { knock = null; onCall(knockerId, null, knockerName) }
+                                .onFailure { responseError = "Couldn't answer. Try again." }
                         }
-                        knock = null; busy = false
-                        if (knockerId != null) onCall(knockerId, null, knockerName)
+                        busy = false
                     }
-                }) { Text("Accept", color = ViroColors.BlueAccent) }
+                }) { Text("Talk now", color = ViroColors.accent) }
             },
             dismissButton = {
                 TextButton(enabled = !busy, onClick = {
@@ -1031,8 +1075,10 @@ fun MomentKnockListener(session: SessionManager, onCall: (String?, String?, Stri
                     scope.launch {
                         if (momentId != null && knockerId != null) {
                             session.moments.respondToKnock(momentId, knockerId, false)
+                                .onSuccess { knock = null }
+                                .onFailure { responseError = "Couldn't dismiss. Try again." }
                         }
-                        knock = null; busy = false
+                        busy = false
                     }
                 }) { Text("Not now", color = ViroColors.textMuted) }
             })
@@ -1062,7 +1108,7 @@ private fun MomentPage(title: String, onBack: () -> Unit, content: androidx.comp
 }
 
 /** What the host said, or a plain line when they said nothing. */
-private fun MomentDto.invitation(): String = invitationText?.takeIf { it.isNotBlank() } ?: "Come join me"
+private fun MomentDto.invitation(): String = headline()
 
 /** "Cooking dinner · 28 min left", rather than a timer pill off on its own. */
 private fun MomentDto.line(clock: Long): String {
@@ -1144,22 +1190,28 @@ private fun FeaturedMoment(
     clock: Long,
     invited: Boolean,
     busy: Boolean,
+    knockSent: Boolean,
+    onReact: (String) -> Unit,
     onStepIn: () -> Unit,
     onKnock: () -> Unit,
 ) {
+    val words = m.composition() == MomentComposition.WORDS
+    val ink = if (words) ViroColors.textPrimary else androidx.compose.ui.graphics.Color.White
+    var reactionsOpen by remember(m.id) { mutableStateOf(false) }
     Surface(
         shape = RoundedCornerShape(24.dp),
         color = ViroColors.surfaceRaised,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Box(Modifier.fillMaxWidth().height(320.dp).clickable(onClick = onStepIn)) {
-            com.viroreach.app.moments.engine.MomentActivityArt(m.intent ?: "BE", Modifier.fillMaxSize())
+        Box(Modifier.fillMaxWidth().heightIn(min = if (words) 240.dp else 320.dp).clickable(onClick = onStepIn)) {
+            if (!words) {
+            com.viroreach.app.moments.engine.MomentActivityArt(m.intent ?: "BE", Modifier.matchParentSize())
             // Only behind the words, so the scene keeps its own light.
             Box(
-                Modifier.align(Alignment.BottomStart).fillMaxWidth().fillMaxHeight(0.72f)
+                Modifier.matchParentSize()
                     .background(
                         androidx.compose.ui.graphics.Brush.verticalGradient(
-                            0f to androidx.compose.ui.graphics.Color.Transparent,
+                            0f to androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f),
                             0.55f to androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f),
                             1f to androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.85f),
                         ),
@@ -1169,6 +1221,7 @@ private fun FeaturedMoment(
                 intent = m.intent ?: "BE",
                 modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(),
             )
+            }
             if (invited) {
                 Surface(
                     shape = RoundedCornerShape(50),
@@ -1184,35 +1237,41 @@ private fun FeaturedMoment(
                 }
             }
 
-            Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(18.dp)) {
+            Column(Modifier.fillMaxWidth().padding(18.dp).padding(top = if (invited) 38.dp else 0.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     MomentAvatar(m)
                     Spacer(Modifier.width(10.dp))
                     Text(
                         m.displayName,
-                        color = androidx.compose.ui.graphics.Color.White,
+                        color = ink,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
                     )
+                    Text(m.age(clock), color = ink.copy(alpha = 0.75f), style = MaterialTheme.typography.labelSmall)
                 }
                 Spacer(Modifier.height(10.dp))
                 // The loudest thing on the card: what they actually said.
                 Text(
                     m.invitation(),
-                    color = androidx.compose.ui.graphics.Color.White,
+                    color = ink,
                     style = MaterialTheme.typography.headlineSmall,
-                    maxLines = 3,
+                    maxLines = if (words) 5 else 3,
                     overflow = TextOverflow.Ellipsis,
                 )
+                m.cardContext()?.let { context ->
+                    Spacer(Modifier.height(6.dp))
+                    Text(context, color = ink.copy(alpha = 0.85f), style = MaterialTheme.typography.bodyLarge)
+                }
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     LiveDot()
                     Spacer(Modifier.width(6.dp))
                     Text(
                         m.line(clock),
-                        color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.72f),
+                        color = ink.copy(alpha = 0.72f),
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -1223,16 +1282,16 @@ private fun FeaturedMoment(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             m.displayName.substringBefore(' ') + " is ",
-                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.72f),
+                            color = ink.copy(alpha = 0.72f),
                             style = MaterialTheme.typography.bodySmall,
                         )
                         com.viroreach.app.moments.engine.MoodTag(
                             mood,
-                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.88f),
+                            color = ink.copy(alpha = 0.88f),
                         )
                     }
                 }
-                WhoIsHere(m, androidx.compose.ui.graphics.Color.White.copy(alpha = 0.72f))
+                WhoIsHere(m, ink.copy(alpha = 0.72f))
                 Spacer(Modifier.height(14.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Button(
@@ -1240,13 +1299,23 @@ private fun FeaturedMoment(
                         enabled = !busy,
                         modifier = Modifier.heightIn(min = 46.dp),
                     ) {
-                        Text("Step in", fontWeight = FontWeight.SemiBold)
+                        Text(if (m.composition() == MomentComposition.COMPANY) "Be with them" else "Join", fontWeight = FontWeight.SemiBold)
                     }
                     // Only where the room actually takes a knock.
-                    if (m.allowVoice) {
+                    if (m.endsAt() > clock) {
                         Spacer(Modifier.width(8.dp))
-                        TextButton(onClick = onKnock, enabled = !busy, modifier = Modifier.heightIn(min = 46.dp)) {
-                            Text("Knock", color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f))
+                        TextButton(onClick = onKnock, enabled = !busy && !knockSent, modifier = Modifier.heightIn(min = 46.dp)) {
+                            Text(if (knockSent) "Knock sent" else "Knock", color = ink.copy(alpha = 0.85f))
+                        }
+                    }
+                    Box {
+                        TextButton(onClick = { reactionsOpen = true }) {
+                            Text(m.myReaction ?: "React", color = ink.copy(alpha = 0.85f))
+                        }
+                        DropdownMenu(expanded = reactionsOpen, onDismissRequest = { reactionsOpen = false }) {
+                            for (emoji in momentReactions) DropdownMenuItem(text = { Text(emoji) }, onClick = {
+                                reactionsOpen = false; onReact(emoji)
+                            })
                         }
                     }
                 }
@@ -1327,13 +1396,15 @@ private fun SecondaryMoment(m: MomentDto, clock: Long, onOpen: () -> Unit) {
         color = ViroColors.surfaceRaised,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(Modifier.height(108.dp).clickable(onClick = onOpen), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.width(108.dp).fillMaxHeight()) {
+        Row(Modifier.heightIn(min = 108.dp).clickable(onClick = onOpen), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(78.dp).height(108.dp)) {
+                if (m.composition() != MomentComposition.WORDS) {
                 com.viroreach.app.moments.engine.MomentActivityArt(m.intent ?: "BE", Modifier.fillMaxSize())
                 MomentPresenceEdge(
                     intent = m.intent ?: "BE",
                     modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(),
                 )
+                }
                 Box(Modifier.align(Alignment.Center)) { MomentAvatar(m) }
             }
             Column(Modifier.weight(1f).padding(horizontal = 14.dp, vertical = 12.dp)) {
@@ -1345,6 +1416,7 @@ private fun SecondaryMoment(m: MomentDto, clock: Long, onOpen: () -> Unit) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                Text(m.age(clock), color = ViroColors.textMuted, style = MaterialTheme.typography.labelSmall)
                 Text(
                     m.invitation(),
                     color = ViroColors.textPrimary,
@@ -1785,6 +1857,7 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
     val intents = com.viroreach.app.moments.engine.MomentIntent.offered()
     var intentKey by rememberSaveable { mutableStateOf(intents.firstOrNull()?.key ?: "BE") }
     var somethingElse by rememberSaveable { mutableStateOf(false) }
+    var focus by rememberSaveable { mutableStateOf<String?>(null) }
     var duration by rememberSaveable { mutableIntStateOf(30) }
     var audience by rememberSaveable { mutableStateOf("CONNECTIONS") }
     var text by rememberSaveable { mutableStateOf("") }
@@ -1807,8 +1880,15 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         LazyColumn(Modifier.fillMaxWidth().imePadding(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
-                Text("What would you like to do together?", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
-                Text("A room opens around it. You can change it once you're in.", color = ViroColors.textMuted)
+                Text("What kind of Moment are you in?", color = ViroColors.textPrimary, style = MaterialTheme.typography.titleLarge)
+                Text("Share what you're doing, or invite some company.", color = ViroColors.textMuted)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (label in listOf("Studying", "Working")) {
+                        FilterChip(selected = focus == label, onClick = {
+                            focus = label; intentKey = "STAY"; somethingElse = false
+                        }, label = { Text(label) })
+                    }
+                }
             }
             // Two to a row, each showing the room it opens. A column of
             // identical rectangles told you nothing about the difference
@@ -1822,9 +1902,9 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
                         ActivityTile(
                             intentKey = intent.key,
                             label = intent.label,
-                            chosen = !somethingElse && intentKey == intent.key,
+                            chosen = focus == null && !somethingElse && intentKey == intent.key,
                             modifier = Modifier.weight(1f),
-                        ) { intentKey = intent.key; somethingElse = false }
+                        ) { intentKey = intent.key; somethingElse = false; focus = null }
                     }
                     // An odd one out keeps its half rather than stretching
                     // across the row and looking like a different kind of thing.
@@ -1837,7 +1917,7 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
                     label = "Something else",
                     chosen = somethingElse,
                     modifier = Modifier.fillMaxWidth(),
-                    onClick = { somethingElse = true },
+                    onClick = { somethingElse = true; focus = null },
                 )
                 if (somethingElse) {
                     Spacer(Modifier.height(8.dp))
@@ -1898,7 +1978,10 @@ private fun CreateMomentSheet(onDismiss: () -> Unit, onStart: (CreateMomentBody)
                     onClick = {
                         val intent = com.viroreach.app.moments.engine.MomentIntent.of(intentKey)
                         onStart(
-                            if (somethingElse) {
+                            if (focus != null) {
+                                CreateMomentBody("WORKING", focus, audience, duration, intent = "STAY",
+                                    invitationText = invitation.trim().ifBlank { null }, mood = moodKey)
+                            } else if (somethingElse) {
                                 // Their own words, in a room shaped for being together.
                                 CreateMomentBody(
                                     "CUSTOM", text.trim(), audience, duration, intent = "BE",

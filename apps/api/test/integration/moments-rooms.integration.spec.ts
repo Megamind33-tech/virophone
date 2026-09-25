@@ -138,9 +138,9 @@ describe('Viro Now Phase 2: rooms, chat, reactions, knocks and invitations', () 
     await http().post(`/api/v1/moments/${m.id}/messages/${otherMsg.id}/react`).set(auth(a)).send({ emoji: '👍' }).expect(404);
   });
 
-  it('knocks on Free Moments only, notifies only the host, and records the response', async () => {
+  it('knocks on visible Moments, notifies only the host, and records the response', async () => {
     const watching = await create();
-    await http().post(`/api/v1/moments/${watching.id}/knock`).set(auth(b)).expect(400); // not FREE
+    await http().post(`/api/v1/moments/${watching.id}/knock`).set(auth(b)).expect(200);
     // One active Moment per host (Phase 1): close the first before the next.
     await http().delete(`/api/v1/moments/${watching.id}`).set(auth(a)).expect(200);
     const m = await create(a, { type: 'FREE' });
@@ -161,6 +161,24 @@ describe('Viro Now Phase 2: rooms, chat, reactions, knocks and invitations', () 
     expect((await http().get(`/api/v1/moments/${m.id}/knocks`).set(auth(a)).expect(200)).body.knocks).toEqual([]);
     // Answering twice is not an error state the host can act on again.
     await http().post(`/api/v1/moments/${m.id}/knocks/${b.userId}/respond`).set(auth(a)).send({ accept: false }).expect(404);
+    spy.mockRestore();
+  });
+
+  it('keeps Study context through Now, Knock, response and the real lifecycle', async () => {
+    const m = await create(a, { type: 'WORKING', text: 'Studying', intent: 'STAY', mood: 'SAD' });
+    const now = (await http().get('/api/v1/moments/now').set(auth(b)).expect(200)).body;
+    expect(now.moments).toEqual(expect.arrayContaining([expect.objectContaining({ id: m.id, text: 'Studying', intent: 'STAY' })]));
+    const spy = jest.spyOn(app.get(RealtimeRegistry), 'deliverToUser');
+    await http().post(`/api/v1/moments/${m.id}/knock`).set(auth(b)).expect(200);
+    const notice = spy.mock.calls.find(c => c[1]?.type === 'moment.knock')?.[1].payload as Record<string, unknown> | undefined;
+    expect(notice?.context).toContain('your “Studying” Moment');
+    expect(notice?.told).not.toContain('low');
+    await http().post(`/api/v1/moments/${m.id}/knocks/${b.userId}/respond`).set(auth(a)).send({ accept: true }).expect(200);
+    expect(spy.mock.calls.filter(c => c[1]?.type === 'moment.knock-answered').map(c => c[0])).toEqual([a.userId, b.userId]);
+    await join(b, m.id);
+    expect((await roomOf(b, m.id)).moment.id).toBe(m.id);
+    await http().delete(`/api/v1/moments/${m.id}`).set(auth(a)).expect(200);
+    await roomOf(b, m.id, 404);
     spy.mockRestore();
   });
 
@@ -327,7 +345,7 @@ describe('Viro Now Phase 2: rooms, chat, reactions, knocks and invitations', () 
     // one would be told it had ended again each time round.
     const m = await create();
     await join(b, m.id);
-    await http().post(`/api/v1/moments/${m.id}/end`).set(auth(a)).expect(200);
+    await http().delete(`/api/v1/moments/${m.id}`).set(auth(a)).expect(200);
     const [closed] = (await db.query(`SELECT cleaned_at FROM moments WHERE id = $1`, [m.id])).rows;
     expect(closed.cleaned_at).not.toBeNull();
 

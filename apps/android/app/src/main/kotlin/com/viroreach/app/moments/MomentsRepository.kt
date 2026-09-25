@@ -115,7 +115,7 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
     suspend fun onFrame(type: String, payload: Map<String, Any?>) {
         _frames.emit(type to payload)
         when (type) {
-            "moment.invited" -> { refresh(); refreshInvitations() }
+            "moment.invited", "moment.knock", "moment.knock-answered" -> { refresh(); refreshInvitations() }
             "moment.created", "moment.updated", "moment.ended", "moment.expired" -> {
                 refresh()
                 refreshInvitations()
@@ -171,12 +171,28 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
             .onFailure { if (it is CancellationException) throw it }
 
     suspend fun knock(id: String): Result<Unit> = action { api.knock(id) }
+    /** Recover a persisted knock after an offline push or process restart. */
+    suspend fun pendingKnock(): Map<String, Any?>? {
+        val account = userId() ?: return null
+        refresh()
+        val own = moments.value.firstOrNull { it.creatorUserId == account } ?: return null
+        return try {
+            val pending = api.knocks(own.id).knocks.firstOrNull() ?: return null
+            if (userId() != account) return null
+            mapOf("momentId" to own.id, "knockerUserId" to pending.knockerUserId,
+                "knockerName" to pending.knockerName,
+                "told" to "${pending.knockerName} wants to join you",
+                "context" to "They saw your “${own.activity()}” Moment and are around.")
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { null }
+    }
     suspend fun invite(momentId: String, userId: String): Result<Unit> =
         runCatching { api.invite(momentId, InviteBody(userId)) }
             .onFailure { if (it is CancellationException) throw it }
     suspend fun respondToKnock(momentId: String, knockerId: String, accept: Boolean): Result<Unit> =
         runCatching { api.respondToKnock(momentId, knockerId, KnockResponseBody(accept)) }
             .onFailure { if (it is CancellationException) throw it }
+            .also { if (it.isSuccess) refreshInvitations() }
     private suspend fun <T> action(onSuccess: (T) -> Unit = {}, block: suspend () -> T): Result<T> {
         val account = userId() ?: return Result.failure(IllegalStateException("Sign in to use Moments."))
         return try {

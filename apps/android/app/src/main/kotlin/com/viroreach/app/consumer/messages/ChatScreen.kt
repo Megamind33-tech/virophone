@@ -185,6 +185,8 @@ fun ChatScreen(
 
     // ---- local UI state -----------------------------------------------------
     val listState = rememberLazyListState()
+    var loadingHistory by remember(cid) { mutableStateOf(false) }
+    var historyExhausted by remember(cid) { mutableStateOf(false) }
     var replyTo by remember { mutableStateOf<ChatMessage?>(null) }
     var editing by remember { mutableStateOf<ChatMessage?>(null) }
     var actionsFor by remember { mutableStateOf<ChatMessage?>(null) }
@@ -268,7 +270,7 @@ fun ChatScreen(
         onDispose { session.voicePlayer.nextAfter = null }
     }
 
-    LaunchedEffect(messages.size, loops.size) {
+    LaunchedEffect(messages.lastOrNull()?.id, loops.size) {
         // The real count, after layout: day separators, Loop cards and the
         // typing row all add items, so an estimate could aim past the end.
         delay(50)
@@ -574,6 +576,23 @@ fun ChatScreen(
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 10.dp),
                 contentPadding = PaddingValues(vertical = 8.dp),
             ) {
+                item(key = "older-history") {
+                    if (!historyExhausted && cid != null && !cid.startsWith("peer:")) {
+                        TextButton(
+                            enabled = !loadingHistory,
+                            onClick = {
+                                loadingHistory = true
+                                scope.launch {
+                                    repo.loadOlder(cid, messages.minOfOrNull { it.createdAt } ?: System.currentTimeMillis())
+                                        .onSuccess { historyExhausted = it < 60 }
+                                        .onFailure { Toast.makeText(context, "Couldn't load older messages. Try again.", Toast.LENGTH_SHORT).show() }
+                                    loadingHistory = false
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(if (loadingHistory) "Loading history…" else "Load older messages") }
+                    }
+                }
                 if (messages.isEmpty() && loops.isEmpty()) {
                     item {
                         EmptyChat(peerName, isPrivate, peerUserId != null, vibe)
@@ -1182,7 +1201,7 @@ private fun listItemsCount(messages: List<ChatMessage>, loops: List<LoopDto>): I
 /** List position of message [i], counting the day separators before it. */
 private fun itemIndexOf(messages: List<ChatMessage>, i: Int): Int {
     val days = messages.take(i + 1).map { Date(it.createdAt).toInstant().atZone(ZoneId.systemDefault()).toLocalDate() }.distinct().size
-    return i + days
+    return i + days + 1 // The history loader is the first list item.
 }
 
 private fun dayLabel(d: LocalDate): String {

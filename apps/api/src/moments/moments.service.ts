@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { roomMessages } from './room-messages';
-import { moodInvitation } from './mood-words';
+import { knockNotice, moodInvitation } from './mood-words';
 import { DataSource } from 'typeorm';
 import { RealtimeRegistry } from '../realtime/realtime.registry';
 import { PushService } from '../push/push.service';
@@ -449,25 +449,22 @@ export class MomentsService {
   async knock(userId: string, id: string) {
     const moment = await this.liveMoment(userId, id);
     if (moment.creator_user_id === userId) throw new BadRequestException('You host this Moment.');
-    if (moment.type !== 'FREE') throw new BadRequestException('This Moment is not open to calls.');
     if (await this.isParticipant(id, userId)) throw new BadRequestException('You are already in this room.');
     await this.db.query(`INSERT INTO moment_knocks (moment_id, knocker_user_id) VALUES ($1,$2)
       ON CONFLICT (moment_id, knocker_user_id) DO UPDATE SET status = 'PENDING' RETURNING id`, [id, userId]);
     const name = await this.nameOf(userId);
-    const told = moodInvitation(
-      name,
-      moment.mood,
-      moment.intent ?? intentForLegacyType(moment.type),
-      moment.invitation_text,
-    );
+    // Who is at the door, and only that. The Moment's mood is the host's
+    // own; the knocker has said nothing about how they feel. See knockNotice.
+    const activity = moment.text?.trim() || ({ WORKING: 'Working', WATCHING: 'Watching', LISTENING: 'Listening', GAMING: 'Gaming', BREAK: 'Taking a break' }[moment.type as string]) || 'your Moment';
+    const told = knockNotice(name, activity);
     const delivered = await this.realtime.deliverToUser(moment.creator_user_id, {
       type: 'moment.knock', payload: {
         momentId: id,
         knockerUserId: userId,
         knockerName: name,
-        activity: moment.text?.trim() || moment.type,
-        mood: moment.mood ?? null,
+        activity,
         told: told.title,
+        context: told.body,
       } });
     if (!delivered) {
       await this.push.sendToUser(moment.creator_user_id, {
@@ -490,11 +487,14 @@ export class MomentsService {
   }
 
   async respondToKnock(userId: string, id: string, knockerId: string, accept: boolean) {
+    await this.liveMoment(userId, id);
     const [moment] = await this.db.query(`SELECT 1 AS one FROM moments WHERE id = $2 AND creator_user_id = $1`, [userId, id]);
     if (!moment) throw new NotFoundException('Moment unavailable.');
     const updated = this.rowsOf(await this.db.query(`UPDATE moment_knocks SET status = $3
       WHERE moment_id = $1 AND knocker_user_id = $2 AND status = 'PENDING' RETURNING id`, [id, knockerId, accept ? 'ACCEPTED' : 'DISMISSED']));
     if (updated.length === 0) throw new NotFoundException('No pending knock from this person.');
+    await this.realtime.deliverToUser(userId, { type: 'moment.knock-answered', payload: { momentId: id, knockerUserId: knockerId, accept } });
+    await this.realtime.deliverToUser(knockerId, { type: 'moment.knock-answered', payload: { momentId: id, knockerUserId: knockerId, accept } });
     return { success: true };
   }
 

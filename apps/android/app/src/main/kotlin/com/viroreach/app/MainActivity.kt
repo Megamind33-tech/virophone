@@ -103,6 +103,7 @@ class MainActivity : FragmentActivity() {
 
     /** A notification tap, or a shared Viro ID link: open a chat, Connections, or Add people. */
     private fun handleOpenIntent(intent: Intent?) {
+        if (intent == null) return
         if (intent?.action == Intent.ACTION_VIEW) {
             com.viroreach.app.people.ViroLinks.groupCodeFromUrl(intent.dataString)?.let { code ->
                 AppNavigation.request(AppNavigation.Target(screen = OPEN_JOIN_GROUP, query = code))
@@ -115,7 +116,11 @@ class MainActivity : FragmentActivity() {
                 return
             }
         }
-        val target = intent?.getStringExtra(EXTRA_OPEN) ?: return
+        val target = intent?.getStringExtra(EXTRA_OPEN) ?: when (intent?.getStringExtra("type")) {
+            "moment-invite" -> OPEN_INBOX
+            "moment-knock" -> OPEN_NOW
+            else -> return
+        }
         AppNavigation.request(
             AppNavigation.Target(
                 screen = target,
@@ -125,6 +130,7 @@ class MainActivity : FragmentActivity() {
             ),
         )
         intent.removeExtra(EXTRA_OPEN)
+        intent.removeExtra("type")
     }
 
     private fun handleIncomingCallIntent(intent: Intent?) {
@@ -140,6 +146,8 @@ class MainActivity : FragmentActivity() {
         const val EXTRA_PEER_USER_ID = "extra_peer_user_id"
         const val EXTRA_CONVERSATION_ID = "extra_conversation_id"
         const val OPEN_CHAT = "chat"
+        const val OPEN_INBOX = "inbox"
+        const val OPEN_NOW = "now"
         const val OPEN_CONNECTIONS = "connections"
         const val OPEN_CONNECTIONS_REQUESTS = "connection_requests"
         const val OPEN_FIND_PEOPLE = "find_people"

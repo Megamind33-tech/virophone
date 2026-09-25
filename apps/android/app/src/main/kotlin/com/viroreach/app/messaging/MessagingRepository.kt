@@ -259,14 +259,18 @@ class MessagingRepository(
     }
 
     suspend fun syncNow(): Boolean = syncMutex.withLock {
-        if (tokenStore.getUserId().isNullOrBlank()) return@withLock false
+        val account = tokenStore.getUserId()?.takeIf { it.isNotBlank() } ?: return@withLock false
         try {
             var cursor = dao.kv(KEY_CURSOR)?.value
             val initial = cursor == null
             var pages = 0
             while (true) {
                 val res = api.sync(cursor)
-                apply(res.conversations.orEmpty(), res.messages.orEmpty(), pruneConversations = true)
+                if (tokenStore.getUserId() != account) return@withLock false
+                // An absent snapshot is not an authoritative empty inbox.
+                val snapshot = requireNotNull(res.conversations) { "Incomplete conversation sync" }
+                val messages = requireNotNull(res.messages) { "Incomplete message sync" }
+                apply(snapshot, messages, pruneConversations = true)
                 cursor = res.serverTime
                 dao.putKv(KvEntity(KEY_CURSOR, cursor))
                 pages++
@@ -285,9 +289,12 @@ class MessagingRepository(
         val me = myUserId()
         if (pruneConversations) {
             val live = convs.map { it.id }.toSet()
-            val gone = dao.allConversations().map { it.id }.filter { it !in live }
+            val gone = dao.allConversations().map { it.id }.filter {
+                it !in live && !it.startsWith(PLACEHOLDER)
+            }
             if (gone.isNotEmpty()) {
-                gone.forEach { dao.deleteConversationMessages(it) }
+                // Pending sends belong to this phone until acknowledged.
+                gone.forEach { dao.deleteMessagesUpTo(it, Long.MAX_VALUE) }
                 dao.deleteConversations(gone)
                 gone.forEach { _conversationGone.tryEmit(it) }
             }
@@ -321,7 +328,8 @@ class MessagingRepository(
             val existing = dao.message(dto.id)
                 ?: dto.clientMsgId?.let { dao.byClientMsgId(it) }
             // The outbox copy is replaced by the server's.
-            if (existing != null && existing.id != dto.id) dao.deleteMessages(listOf(existing.id))
+            // REPLACE on the unique clientMsgId swaps the outbox row atomically
+            // when upsert succeeds. Never delete it before decoding its reply.
             opened(dto, existing).toEntity(existing)
         }
         dao.upsertMessages(rows)
@@ -1507,13 +1515,13 @@ class MessagingRepository(
     }
 
     /** Older page for scrolling back beyond what sync kept. */
-    suspend fun loadOlder(conversationId: String, beforeMs: Long): Int {
-        if (conversationId.startsWith(PLACEHOLDER)) return 0
+    suspend fun loadOlder(conversationId: String, beforeMs: Long): Result<Int> {
+        if (conversationId.startsWith(PLACEHOLDER)) return Result.success(0)
         return runCatching {
             val page = api.history(conversationId, 60, Instant.ofEpochMilli(beforeMs).toString())
             upsertMessages(page)
             page.size
-        }.getOrDefault(0)
+        }
     }
 
     fun clearError() {

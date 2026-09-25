@@ -94,7 +94,7 @@ fun MessagesInboxScreen(
     momentId?.let { id ->
         MomentRoomScreen(
             session = session,
-            room = session.openMomentRoom(id),
+            room = remember(session, id) { session.openMomentRoom(id) },
             onBack = { momentId = null },
             onCall = onCall,
             onOpenChat = { peer, name ->

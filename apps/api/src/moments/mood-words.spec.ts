@@ -1,4 +1,4 @@
-import { moodInvitation } from './mood-words';
+import { knockNotice, moodInvitation } from './mood-words';
 
 describe('what the people you chose are told', () => {
   it('joins how you are to what you are asking for', () => {
@@ -35,5 +35,23 @@ describe('what the people you chose are told', () => {
   it('survives a mood or intent it has never heard of', () => {
     expect(moodInvitation('Mosty', 'PUZZLED' as never, 'BE').title).toBe('Mosty would like some company');
     expect(moodInvitation('Mosty', 'SAD', 'KNITTING' as never).title).toBe('Mosty is a bit low and would like some company');
+  });
+});
+
+describe('what a host is told when somebody knocks', () => {
+  it('says who is at the door', () => {
+    expect(knockNotice('Natasha').title).toBe('Natasha wants to join you');
+  });
+
+  it('never tells the host that the visitor feels the way the host does', () => {
+    // The bug this exists for: a knock notice was built with moodInvitation,
+    // the knocker's name and the host's own mood, so a host feeling low was
+    // told "Natasha is a bit low and would like to talk" about somebody who had
+    // said nothing of the kind. A knock carries no mood, so none is named.
+    const told = knockNotice('Natasha');
+    const text = told.title + ' ' + told.body;
+    for (const feeling of ['good spirits', 'a bit low', 'wound up', 'all over the place']) {
+      expect(text).not.toContain(feeling);
+    }
   });
 });

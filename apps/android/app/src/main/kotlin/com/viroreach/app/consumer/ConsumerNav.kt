@@ -362,6 +362,15 @@ fun ConsumerNav(
     LaunchedEffect(pendingNav) {
         val target = com.viroreach.app.AppNavigation.consume() ?: return@LaunchedEffect
         when (target.screen) {
+            com.viroreach.app.MainActivity.OPEN_INBOX -> {
+                overlay = ConsumerOverlay.None
+                tab = ViroConsumerTab.Chats
+                connectionsRequested = false
+            }
+            com.viroreach.app.MainActivity.OPEN_NOW -> {
+                overlay = ConsumerOverlay.None
+                tab = ViroConsumerTab.Now
+            }
             com.viroreach.app.MainActivity.OPEN_CONNECTIONS -> {
                 overlay = ConsumerOverlay.None
                 tab = ViroConsumerTab.Chats
@@ -1361,6 +1370,10 @@ fun ConsumerNav(
             // accepting launches the ordinary call flow from right here.
             com.viroreach.app.moments.MomentKnockListener(
                 session = session,
+                onMessage = { peer, name ->
+                    chatRoute = ChatRoute(peerUserId = peer, peerName = name)
+                    overlay = ConsumerOverlay.Chat
+                },
                 onCall = { peer, phone, name ->
                     beginCall(CallPresentation(displayName = name, phoneE164 = phone))
                     withMic { scope.launch { runCatching { session.placeOutgoingCall(phone, name, peer) } } }
@@ -1372,5 +1385,3 @@ fun ConsumerNav(
     }
 
 }
-
-

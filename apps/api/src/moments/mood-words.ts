@@ -72,3 +72,21 @@ export function moodInvitation(
     body: invitationText?.trim() || 'Tap to step in.',
   };
 }
+
+/**
+ * What a host is told when somebody knocks on their Moment: who is at the door,
+ * and nothing about how anybody feels.
+ *
+ * moodInvitation is the wrong tool here and must not be reached for. It writes
+ * "<name> is <how they feel>", and for a knock the only mood to hand is the
+ * Moment's — which the host set about themselves. Joining the two told a host
+ * who was feeling low that the person knocking was low, with the host's own
+ * invitation line as though the visitor had written it. The knocker has said
+ * nothing about how they feel, so nothing is said.
+ */
+export function knockNotice(knockerName: string, activity?: string): Told {
+  return {
+    title: `${knockerName} wants to join you`,
+    body: activity ? `${knockerName} saw ${activity === 'your Moment' ? activity : `your “${activity}” Moment`} and is around.` : 'They knocked on your Moment. Tap to answer.',
+  };
+}

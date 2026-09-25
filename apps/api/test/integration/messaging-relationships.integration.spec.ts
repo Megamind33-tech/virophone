@@ -261,6 +261,21 @@ describe('Messaging v2 and relationships end-to-end', () => {
     await http().patch(`/api/v1/messages/conversations/${cid}/settings`).set(as(bob)).send({ disappearingSeconds: null });
   });
 
+  it('ordinary messages survive sweeps and remain reachable in older history after disappearing is off', async () => {
+    if (skip()) return;
+    await http().patch(`/api/v1/messages/conversations/${cid}/settings`).set(as(bob))
+      .send({ clearDisappearing: true }).expect(200);
+    const permanent = await send(alice, { conversationId: cid, body: 'keep this conversation' });
+    expect(permanent.message.expiresAt).toBeNull();
+    await sql(`UPDATE messages SET created_at = NOW() - interval '1 year' WHERE id = $1`, [permanent.message.id]);
+    await app.get(MessagesService).sweep();
+    const stored = await sql('SELECT expires_at FROM messages WHERE id = $1', [permanent.message.id]);
+    expect(stored).toEqual([{ expires_at: null }]);
+    const old = await http().get(`/api/v1/messages/conversations/${cid}`)
+      .query({ before: new Date(Date.now() - 86400000).toISOString(), limit: 60 }).set(as(bob)).expect(200);
+    expect(old.body.some((m: any) => m.id === permanent.message.id)).toBe(true);
+  });
+
   it('private sessions delete themselves at the chosen time', async () => {
     if (skip()) return;
     const p = await http().post('/api/v1/messages/private').set(as(alice)).send({ toUserId: bob.userId, durationSeconds: 3600 });

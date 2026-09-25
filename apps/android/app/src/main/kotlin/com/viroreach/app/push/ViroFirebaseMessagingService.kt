@@ -42,12 +42,18 @@ class ViroFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
-        if (data["type"] == "moment-invite") {
+        if (data["type"] == "moment-invite" || data["type"] == "moment-knock") {
             val session = SessionManager.get(applicationContext)
             scope.launch {
                 session.moments.refreshInvitations()
                 runCatching { session.callManager.ensureSignalingReady() }
             }
+            val isKnock = data["type"] == "moment-knock"
+            val id = (data["type"].orEmpty() + data["momentId"].orEmpty()).hashCode()
+            ReminderNotifications.post(applicationContext, id, ReminderScheduler.CH_NORMAL,
+                message.notification?.title ?: data["title"] ?: if (isKnock) "Someone knocked on your Moment" else "Someone asked for you",
+                message.notification?.body ?: data["body"].orEmpty(),
+                ReminderNotifications.openIntent(applicationContext, if (isKnock) MainActivity.OPEN_NOW else MainActivity.OPEN_INBOX, requestCode = id))
             return
         }
         if (data["type"] == "message" || data["type"] == "loop") {
