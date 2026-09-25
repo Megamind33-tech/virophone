@@ -155,7 +155,14 @@ fun MessageRow(
                     .clip(shape)
                     .background(bubbleColor)
                     .then(
-                        if (msg.deleted) Modifier.background(ViroColors.surface.copy(alpha = 0.5f), shape) else Modifier,
+                        // A sealed message still being opened sits quietly
+                        // in its place, the way a deleted one does, rather
+                        // than as a full bubble shouting about itself.
+                        if (msg.deleted || msg.type == "ENCRYPTED") {
+                            Modifier.background(ViroColors.surface.copy(alpha = 0.5f), shape)
+                        } else {
+                            Modifier
+                        },
                     )
                     .combinedClickable(
                         onClick = {
@@ -225,18 +232,16 @@ fun MessageRow(
                             onStopSharing = callbacks.onStopSharingLocation,
                         )
                     } ?: Text("Location", color = Color.White, fontSize = 16.sp)
-                    // Sealed, and this phone has no way to open it: sent before
-                    // this device existed, or already opened once. Saying so is
-                    // better than an empty bubble.
-                    msg.type == "ENCRYPTED" -> Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Lock, null, tint = ViroColors.textSecondary, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            "Waiting for this message",
-                            color = ViroColors.textSecondary,
-                            fontStyle = FontStyle.Italic,
-                        )
-                    }
+                    // Sealed and not opened yet. Almost always this is a moment
+                    // while the retry queue gets to it, and it is replaced in
+                    // place when it opens; only a message this phone can never
+                    // open (sealed before it was signed in) says so.
+                    msg.type == "ENCRYPTED" -> Text(
+                        if (msg.isUnavailable) "Not available on this phone" else "Decrypting message…",
+                        color = ViroColors.textSecondary,
+                        fontSize = 14.sp,
+                        fontStyle = FontStyle.Italic,
+                    )
                     msg.type == "CONTACT" -> msg.contactCard?.let { card ->
                         ContactContent(
                             card = card,

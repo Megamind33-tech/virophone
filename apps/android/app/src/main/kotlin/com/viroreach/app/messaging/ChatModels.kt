@@ -62,8 +62,14 @@ data class ChatMessage(
     val outboxStatus: String?,
     val localMediaPath: String?,
     val poll: PollDto? = null,
+    /** For a sealed message this phone has not opened: PENDING or UNAVAILABLE. */
+    val cryptoState: String? = null,
 ) {
     val isPending: Boolean get() = outboxStatus != null
+    /** Sealed and still being opened in the background — shown as a quiet placeholder. */
+    val isDecrypting: Boolean get() = type == "ENCRYPTED" && cryptoState != CRYPTO_UNAVAILABLE
+    /** Sealed for good as far as this phone is concerned. */
+    val isUnavailable: Boolean get() = type == "ENCRYPTED" && cryptoState == CRYPTO_UNAVAILABLE
     val effect: String? get() = metadata["effect"] as? String
     val event: String? get() = metadata["event"] as? String
     val loopId: String? get() = metadata["loopId"] as? String
@@ -156,6 +162,7 @@ data class ConversationItem(
     val pinnedAt: Long? = null,
     val unreadMarked: Boolean = false,
     val mentionedUnread: Boolean = false,
+    val lastCryptoState: String? = null,
 ) {
     val isPrivate: Boolean get() = kind == "PRIVATE"
     val isGroup: Boolean get() = kind == "GROUP"
@@ -267,6 +274,7 @@ internal fun MessageEntity.toChat(myUserId: String?): ChatMessage = ChatMessage(
     outboxStatus = status,
     localMediaPath = localMediaPath,
     poll = pollJson?.let { runCatching { ChatJson.gson.fromJson(it, PollDto::class.java) }.getOrNull() },
+    cryptoState = cryptoState,
 )
 
 internal fun ConversationRow.toItem(myUserId: String?): ConversationItem = ConversationItem(
@@ -298,13 +306,20 @@ internal fun ConversationRow.toItem(myUserId: String?): ConversationItem = Conve
     pinnedAt = pinnedAt,
     unreadMarked = unreadMarked,
     mentionedUnread = mentionedUnread,
+    lastCryptoState = lastCryptoState,
 )
+
+/** A sealed message that is queued to be opened again. */
+const val CRYPTO_PENDING = "PENDING"
+/** A sealed message this phone can never open: sealed before it existed, or its key is spent. */
+const val CRYPTO_UNAVAILABLE = "UNAVAILABLE"
 
 /** One line for the inbox: what the last message was, in words. */
 fun ConversationItem.preview(): String = when {
     lastMessageId == null -> if (isPrivate) "Private session started" else ""
     lastDeleted -> "This message was deleted"
-    lastType == "ENCRYPTED" -> "🔒 Waiting for this message"
+    lastType == "ENCRYPTED" && lastCryptoState == CRYPTO_UNAVAILABLE -> "Message not available on this phone"
+    lastType == "ENCRYPTED" -> "Decrypting message…"
     lastType == "VOICE" -> "🎤 Voice message"
     lastType == "IMAGE" -> if (lastBody.isNullOrBlank()) "📷 Photo" else "📷 $lastBody"
     lastType == "LOOP" -> "🔁 ${lastBody ?: "Loop"}"

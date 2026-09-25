@@ -113,6 +113,27 @@ data class RemoteIdentityEntity(
     override fun hashCode(): Int = address.hashCode()
 }
 
+
+/**
+ * A message this device has already opened, kept until the chat database has
+ * the result.
+ *
+ * Opening a sealed message moves the ratchet on, and the ratchet is saved
+ * here, in this database; the readable result is saved in another one. If the
+ * app died between the two, the message could never be opened again — the key
+ * for it is already gone. So the result is written in the same transaction as
+ * the ratchet, and dropped once the chat has it.
+ *
+ * Plaintext is kept only as long as that handover takes, and only on this
+ * phone, which already keeps every opened message in the chat database.
+ */
+@Entity(tableName = "opened_messages")
+data class OpenedMessageEntity(
+    @PrimaryKey val messageId: String,
+    val plaintext: String,
+    val openedAt: Long,
+)
+
 /**
  * A sender key: how a group message is encrypted once rather than once per
  * member. Nothing writes these until groups are encrypted, but the protocol
@@ -139,6 +160,21 @@ interface E2eeDao {
 
     @Query("DELETE FROM sender_keys")
     fun wipeSenderKeys()
+
+    @Query("SELECT * FROM opened_messages WHERE messageId = :messageId")
+    fun openedMessage(messageId: String): OpenedMessageEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun saveOpenedMessage(row: OpenedMessageEntity)
+
+    @Query("DELETE FROM opened_messages WHERE messageId = :messageId")
+    fun deleteOpenedMessage(messageId: String)
+
+    @Query("DELETE FROM opened_messages WHERE openedAt < :before")
+    fun deleteOpenedBefore(before: Long)
+
+    @Query("DELETE FROM opened_messages")
+    fun wipeOpenedMessages()
 
     @Query("SELECT * FROM own_identity WHERE id = 1")
     fun ownIdentity(): OwnIdentityEntity?
@@ -235,8 +271,10 @@ interface E2eeDao {
         KyberPreKeyEntity::class,
         RemoteIdentityEntity::class,
         SenderKeyEntity::class,
+        OpenedMessageEntity::class,
     ],
-    version = 2,
+    // v3: opened_messages, so a crash between opening and saving loses nothing.
+    version = 3,
     exportSchema = false,
 )
 abstract class E2eeDatabase : RoomDatabase() {
@@ -256,6 +294,17 @@ abstract class E2eeDatabase : RoomDatabase() {
             }
         }
 
+        /** Adds the handover table for opened messages; nothing existing changes. */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `opened_messages` (" +
+                        "`messageId` TEXT NOT NULL, `plaintext` TEXT NOT NULL, `openedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`messageId`))",
+                )
+            }
+        }
+
         fun get(context: Context): E2eeDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -265,7 +314,7 @@ abstract class E2eeDatabase : RoomDatabase() {
                 )
                     // Deliberately no destructive fallback: see the note at the
                     // top of this file. Losing this file loses the chats.
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { instance = it }
             }

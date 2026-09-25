@@ -2,12 +2,15 @@ package com.viroreach.app.messaging
 
 import android.content.Context
 import android.util.Log
+import com.viroreach.core.e2ee.DecryptFailure
 import com.viroreach.core.e2ee.E2eeEngine
+import com.viroreach.core.e2ee.OpenResult
 import com.viroreach.core.e2ee.MediaCrypto
 import com.viroreach.core.database.ConversationEntity
 import com.viroreach.core.database.KvEntity
 import com.viroreach.core.database.MessageEntity
 import com.viroreach.core.database.MessagingDatabase
+import com.viroreach.core.database.PendingDecryptionEntity
 import com.viroreach.core.network.ApiDiagnostics
 import com.viroreach.core.network.EnvelopeBody
 import com.viroreach.core.network.ViroKeysApi
@@ -108,6 +111,21 @@ class MessagingRepository(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val syncMutex = Mutex()
     private val outboxMutex = Mutex()
+    /**
+     * One message at a time through read → open → write.
+     *
+     * The same message reaches this phone more than once — on the socket, in
+     * the next sync, in the open chat's backstop poll, echoed back to its
+     * sender — and those used to run side by side. Two of them could read "not
+     * here yet" together; the first opened it and moved the ratchet on, the
+     * second failed to open it again and wrote the sealed copy over the
+     * readable one. Held for the whole of each batch, so that cannot happen.
+     */
+    private val ingestMutex = Mutex()
+    /** One retry pass at a time; a timer tick skips one already running, an event waits for it. */
+    private val retryMutex = Mutex()
+    /** The one-off repair of sealed rows kept from before the retry queue existed. */
+    private val repaired = java.util.concurrent.atomic.AtomicBoolean(false)
     val media = MediaFiles(appContext, http, baseUrl)
 
     private val _typing = MutableStateFlow<Map<String, TypingState>>(emptyMap())
@@ -188,6 +206,12 @@ class MessagingRepository(
         scope.launch {
             while (true) {
                 runCatching { dao.deleteExpired(System.currentTimeMillis()) }
+                // Anything in the retry queue whose next attempt is due. A
+                // single indexed query when there is nothing to do.
+                runCatching {
+                    val due = dao.nextPendingAt()
+                    if (due != null && due <= System.currentTimeMillis()) retryPendingDecryption("timer")
+                }
                 val now = System.currentTimeMillis()
                 _typing.value = _typing.value.filterValues { now - it.at < TYPING_TTL_MS }
                 _present.value = _present.value.filterValues { now - it < PRESENT_TTL_MS }
@@ -204,7 +228,11 @@ class MessagingRepository(
     private suspend fun setUpEncryption() {
         val userId = tokenStore.getUserId() ?: return
         val deviceId = tokenStore.getDeviceId() ?: return
-        e2ee.ensureRegistered(userId, deviceId)
+        if (e2ee.ensureRegistered(userId, deviceId)) {
+            // Anything that arrived before this phone had keys can open now.
+            retryPendingDecryption("registered", everything = true)
+            repairUnrecoveredSealed()
+        }
     }
 
     suspend fun refreshFeatures() {
@@ -278,6 +306,7 @@ class MessagingRepository(
             }
             if (initial) Log.i(TAG, "SYNC_INITIAL_DONE")
             _lastError.value = null
+            scope.launch { retryPendingDecryption("sync") }
             true
         } catch (e: Exception) {
             Log.w(TAG, "SYNC_FAILED ${e.message}")
@@ -319,24 +348,60 @@ class MessagingRepository(
                 }
             }
         }
-        upsertMessages(msgs)
+        upsertMessages(msgs, "sync")
     }
 
-    private suspend fun upsertMessages(msgs: List<MsgDto>) {
+    /**
+     * The one way a message from the server becomes a row on this phone —
+     * live frames, sync, history pages, search results and retries alike.
+     *
+     * Deduplicated on the server's id (or the outbox's clientMsgId), opened
+     * at most once, and written with the state it is really in.
+     */
+    private suspend fun upsertMessages(msgs: List<MsgDto>, source: String = "api") {
         if (msgs.isEmpty()) return
-        val rows = msgs.map { dto ->
-            val existing = dao.message(dto.id)
-                ?: dto.clientMsgId?.let { dao.byClientMsgId(it) }
-            // The outbox copy is replaced by the server's.
-            // REPLACE on the unique clientMsgId swaps the outbox row atomically
-            // when upsert succeeds. Never delete it before decoding its reply.
-            opened(dto, existing).toEntity(existing)
+        val settled = mutableListOf<String>()
+        val handovers = mutableListOf<String>()
+        val newSessions = mutableSetOf<String>()
+        var written: List<MessageEntity> = emptyList()
+        ingestMutex.withLock {
+            val rows = mutableListOf<MessageEntity>()
+            // In the server's order, so that within one batch the message that
+            // starts a session is opened before those that depend on it.
+            for (dto in msgs.distinctBy { it.id }.sortedBy { parseIso(it.createdAt) ?: 0L }) {
+                val existing = dao.message(dto.id)
+                    ?: dto.clientMsgId?.let { dao.byClientMsgId(it) }
+                // A retry for a message that has since gone (deleted, cleared,
+                // expired) must not bring it back.
+                if (source.startsWith(RETRY) && existing == null) {
+                    dao.deletePending(listOf(dto.id))
+                    continue
+                }
+                // The outbox copy is replaced by the server's.
+                // REPLACE on the unique clientMsgId swaps the outbox row atomically
+                // when upsert succeeds. Never delete it before decoding its reply.
+                rows += ingest(dto, existing, source, settled, handovers, newSessions)
+            }
+            dao.upsertMessages(rows)
+            written = rows
+            // An encrypted reaction arrives as a message; what it means is a change
+            // to another one. Applied after the rows are in, so the reaction is
+            // never lost if the app stops between the two.
+            rows.filter { it.type == TYPE_REACTION }.forEach { applySealedReaction(it) }
         }
-        dao.upsertMessages(rows)
-        // An encrypted reaction arrives as a message; what it means is a change
-        // to another one. Applied after the rows are in, so the reaction is
-        // never lost if the app stops between the two.
-        rows.filter { it.type == TYPE_REACTION }.forEach { applySealedReaction(it) }
+        // Only now that the chat holds the readable copy: the handover rows
+        // in the key store and the queue entries can go.
+        if (settled.isNotEmpty()) dao.deletePending(settled)
+        handovers.forEach { e2ee.forgetOpened(it) }
+        if (source.startsWith(RETRY)) announceLateOpenings(written)
+        // A new session with somebody's device is exactly what anything of
+        // theirs still waiting was waiting for.
+        if (newSessions.isNotEmpty()) {
+            scope.launch {
+                newSessions.forEach { retryPendingDecryption("session", fromDevice = it) }
+                e2ee.topUpSoon()
+            }
+        }
     }
 
     /**
@@ -357,29 +422,137 @@ class MessagingRepository(
     }
 
     /**
-     * Turns a sealed message into a readable one, once.
-     *
-     * A sealed copy can only be opened a single time — the ratchet moves on —
-     * so a message this phone has already opened keeps the text it holds
-     * rather than being opened again. That matters because the same message
-     * arrives twice in the ordinary course of things: once on the socket and
-     * once in the next sync.
-     *
-     * When it cannot be opened the message stays sealed and the chat shows
-     * that it could not be read, which is the truth.
+     * Messages the retry queue has just opened, told about the way they would
+     * have been on arrival — their notification was held back while they
+     * were still sealed. Old ones stay quiet: a message from yesterday
+     * opening now is not news.
      */
-    private suspend fun opened(dto: MsgDto, existing: MessageEntity?): MsgDto {
-        if (dto.type != TYPE_ENCRYPTED) return dto
+    private fun announceLateOpenings(rows: List<MessageEntity>) {
+        val me = myUserId()
+        val now = System.currentTimeMillis()
+        for (row in rows) {
+            if (row.type == TYPE_ENCRYPTED || row.type == TYPE_REACTION || row.type == "SYSTEM") continue
+            if (row.senderUserId == me || row.deletedAt != null) continue
+            if (now - row.createdAt > LATE_NOTIFY_MS) continue
+            if (openConversationId == row.conversationId) continue
+            _incoming.tryEmit(row.conversationId to row.toChat(me))
+        }
+    }
+
+    /**
+     * One message, from the server's copy to the row this phone keeps.
+     *
+     * A sealed message is opened here, once. What it cannot open yet it does
+     * not lose: the ciphertext goes to the retry queue and the row waits in
+     * its place in the chat. What it can never open is said plainly.
+     */
+    private suspend fun ingest(
+        dto: MsgDto,
+        existing: MessageEntity?,
+        source: String,
+        settled: MutableList<String>,
+        handovers: MutableList<String>,
+        newSessions: MutableSet<String>,
+    ): MessageEntity {
+        if (dto.type != TYPE_ENCRYPTED) {
+            if (existing?.type == TYPE_ENCRYPTED) settled += dto.id
+            return dto.toEntity(existing)
+        }
+        val me = myUserId()
+        val direction = if (dto.senderUserId == me) "out" else "in"
         // Already opened once. Everything but the votes is kept as it was;
         // those keep arriving, because the server counts them without being
         // able to read the poll.
-        if (existing != null && existing.type != TYPE_ENCRYPTED) return asOpenedBefore(dto, existing)
+        if (existing != null && existing.type != TYPE_ENCRYPTED) {
+            if (source.startsWith(RETRY)) settled += dto.id
+            // Unless it has been edited since: an edit is new words sealed
+            // again, and the only way to read them is to open the new copy.
+            // If that fails, the words already here stay rather than being
+            // swapped for a placeholder.
+            val editedAt = parseIso(dto.editedAt)
+            if (dto.senderUserId != me && dto.deletedAt == null && editedAt != null && editedAt > (existing.editedAt ?: 0L)) {
+                val mine = e2ee.myDeviceId()
+                val copy = mine?.let { id -> dto.envelopes?.firstOrNull { it.deviceId == id } }
+                val from = dto.senderDeviceId
+                if (copy != null && from != null) {
+                    val key = dto.id + "@" + editedAt
+                    val edit = e2ee.openMessage(key, dto.senderUserId, from, copy.ciphertext, copy.type ?: 1)
+                    if (edit is OpenResult.Opened) {
+                        handovers += key
+                        CryptoTrace.log(dto.id, dto.conversationId, from, direction, source, "DECRYPTED", "EDIT")
+                        return withPayload(dto, edit.plaintext).toEntity(existing)
+                    }
+                    CryptoTrace.log(dto.id, dto.conversationId, from, direction, source, "EDIT_NOT_OPENED", (edit as OpenResult.Failed).failure.name)
+                }
+            }
+            return asOpenedBefore(dto, existing).toEntity(existing)
+        }
+        // Deleted for everyone: nothing left to open, and nothing to wait for.
+        if (dto.deletedAt != null) {
+            settled += dto.id
+            return dto.toEntity(existing)
+        }
+        dto.senderDeviceId?.let { e2ee.noteSenderDevice(dto.senderUserId, it) }
+        val myDeviceId = e2ee.myDeviceId()
+        val senderDeviceId = dto.senderDeviceId
+        val envelope = myDeviceId?.let { mine -> dto.envelopes?.firstOrNull { it.deviceId == mine } }
 
-        val myDeviceId = e2ee.myDeviceId() ?: return dto
-        val envelope = dto.envelopes?.firstOrNull { it.deviceId == myDeviceId } ?: return dto
-        val senderDeviceId = dto.senderDeviceId ?: return dto
-        val plain = e2ee.open(dto.senderUserId, senderDeviceId, envelope.ciphertext, envelope.type ?: 1)
-            ?: return dto
+        if (myDeviceId != null && (envelope == null || senderDeviceId == null)) {
+            // Sealed for other devices only: before this phone was signed in,
+            // or on another phone of the sender's. No retry can change that,
+            // and this is not a failure to dress up as waiting.
+            settled += dto.id
+            CryptoTrace.log(dto.id, dto.conversationId, senderDeviceId, direction, source, CRYPTO_UNAVAILABLE, "NOT_ADDRESSED_TO_THIS_DEVICE")
+            return dto.toEntity(existing).copy(cryptoState = CRYPTO_UNAVAILABLE)
+        }
+        val result = if (myDeviceId == null) {
+            OpenResult.Failed(DecryptFailure.NOT_REGISTERED)
+        } else {
+            e2ee.openMessage(dto.id, dto.senderUserId, senderDeviceId!!, envelope!!.ciphertext, envelope.type ?: 1)
+        }
+        return when (result) {
+            is OpenResult.Opened -> {
+                settled += dto.id
+                handovers += dto.id
+                if (result.newSession) newSessions += senderDeviceId!!
+                CryptoTrace.log(dto.id, dto.conversationId, senderDeviceId, direction, source, "DECRYPTED")
+                withPayload(dto, result.plaintext).toEntity(existing)
+            }
+            is OpenResult.Failed -> {
+                if (!result.failure.retryable) {
+                    settled += dto.id
+                    CryptoTrace.log(dto.id, dto.conversationId, senderDeviceId, direction, source, CRYPTO_UNAVAILABLE, result.failure.name)
+                    return dto.toEntity(existing).copy(cryptoState = CRYPTO_UNAVAILABLE)
+                }
+                val now = System.currentTimeMillis()
+                val before = dao.pending(dto.id)
+                val attempts = (before?.attempts ?: 0) + 1
+                val firstSeenAt = before?.firstSeenAt ?: now
+                dao.savePending(
+                    PendingDecryptionEntity(
+                        messageId = dto.id,
+                        conversationId = dto.conversationId,
+                        senderUserId = dto.senderUserId,
+                        senderDeviceId = senderDeviceId,
+                        messageJson = ChatJson.gson.toJson(PendingDecryption.forQueue(dto, myDeviceId)),
+                        reason = result.failure.name,
+                        attempts = attempts,
+                        nextRetryAt = PendingDecryption.nextRetryAt(attempts, now),
+                        gaveUp = PendingDecryption.givesUp(
+                            attempts, firstSeenAt, now,
+                            alwaysRecoverable = result.failure == DecryptFailure.NOT_REGISTERED,
+                        ),
+                        firstSeenAt = firstSeenAt,
+                    ),
+                )
+                CryptoTrace.log(dto.id, dto.conversationId, senderDeviceId, direction, source, "PENDING_DECRYPTION", result.failure.name, attempts)
+                dto.toEntity(existing).copy(cryptoState = CRYPTO_PENDING)
+            }
+        }
+    }
+
+    /** The server's copy with what was inside the seal put back. */
+    private suspend fun withPayload(dto: MsgDto, plain: String): MsgDto {
         // A message sealed before messages carried their own shape was just
         // text, and still opens as text.
         val payload = SealedMessage.unpack(plain) ?: return dto.copy(type = "TEXT", body = plain)
@@ -391,6 +564,82 @@ class MessagingRepository(
             poll = pollFrom(payload.meta, dto),
             replyTo = quotedFrom(dto),
         )
+    }
+
+    /**
+     * Tries the retry queue again.
+     *
+     * Runs through [upsertMessages], the same path as everything else, so a
+     * message that opens here lands exactly as it would have on arrival — in
+     * its own place in the chat, since its row keeps the server's time.
+     *
+     * @param fromDevice only what came from this device, including anything
+     *   scheduled retries have given up on: a new session with it is the one
+     *   thing that can still change the answer.
+     * @param everything every retryable entry, due or not.
+     */
+    suspend fun retryPendingDecryption(trigger: String, fromDevice: String? = null, everything: Boolean = false) {
+        // A tick of the timer or a sync has nothing to add to a pass already
+        // running. A new session or registration does: it waits its turn.
+        val event = fromDevice != null || everything
+        if (event) retryMutex.lock() else if (!retryMutex.tryLock()) return
+        try {
+            val rows = when {
+                fromDevice != null -> dao.pendingFromDevice(fromDevice)
+                everything -> dao.pendingRetryable(RETRY_BATCH)
+                else -> dao.pendingDue(System.currentTimeMillis(), RETRY_BATCH)
+            }
+            if (rows.isEmpty()) return
+            val dtos = rows.mapNotNull { row ->
+                runCatching { ChatJson.gson.fromJson(row.messageJson, MsgDto::class.java) }.getOrNull()
+                    ?: run { dao.deletePending(listOf(row.messageId)); null }
+            }
+            // Oldest first: the message that sets up a session comes before
+            // the ones that need it, so a stretch delivered out of order
+            // opens in one pass.
+            upsertMessages(dtos.sortedBy { parseIso(it.createdAt) ?: 0L }, "$RETRY$trigger")
+        } catch (e: Exception) {
+            Log.w(TAG, "PENDING_RETRY_FAILED trigger=$trigger ${e.javaClass.simpleName}")
+        } finally {
+            retryMutex.unlock()
+        }
+    }
+
+    /**
+     * Sealed rows kept from before this phone held on to ciphertext.
+     *
+     * They were written with nothing to retry from. The server still has
+     * their envelopes, so each conversation's stretch of them is fetched once
+     * more and put through the ordinary path: whatever can open now opens,
+     * and whatever cannot is marked as unavailable rather than waiting
+     * forever for something that is not coming.
+     */
+    private suspend fun repairUnrecoveredSealed() {
+        if (!repaired.compareAndSet(false, true)) return
+        runCatching {
+            for (gap in dao.unrecoveredSealed()) {
+                if (gap.conversationId.startsWith(PLACEHOLDER)) continue
+                var before = gap.newest + 1
+                for (page in 0 until REPAIR_PAGES) {
+                    // A network failure ends the repair without settling
+                    // anything: offline is not the same as "not coming back".
+                    val batch = api.history(gap.conversationId, 60, Instant.ofEpochMilli(before).toString())
+                    if (batch.isEmpty()) break
+                    upsertMessages(batch, "repair")
+                    val oldest = batch.mapNotNull { parseIso(it.createdAt) }.minOrNull() ?: break
+                    if (oldest <= gap.oldest) break
+                    before = oldest
+                }
+                // The server's pages were read: whatever is still without a
+                // state was not among them, and is not coming back.
+                dao.settleUnrecoveredSealed(gap.conversationId, CRYPTO_UNAVAILABLE)
+            }
+        }.onFailure {
+            // Tried again at the next registration check (next launch or sign-in).
+            repaired.set(false)
+            if (it is kotlinx.coroutines.CancellationException) throw it
+            Log.w(TAG, "SEALED_REPAIR_FAILED ${it.javaClass.simpleName}")
+        }
     }
 
     /**
@@ -463,7 +712,7 @@ class MessagingRepository(
                     if (dao.message(dto.id) != null) announceIfIncoming(type, dto)
                     return
                 }
-                upsertMessages(listOf(dto))
+                upsertMessages(listOf(dto), "websocket")
                 announceIfIncoming(type, dto)
             }
             "message.hidden" -> p.optString("messageId").takeIf { it.isNotBlank() }?.let { dao.deleteMessages(listOf(it)) }
@@ -535,6 +784,9 @@ class MessagingRepository(
             val conv = dao.conversation(dto.conversationId)
             if (conv != null) dao.upsertConversations(listOf(conv.copy(unread = conv.unread + 1)))
             val msg = dao.message(dto.id)?.toChat(me) ?: return
+            // Still being opened: the notification waits for the words, and
+            // is posted by the retry that opens it.
+            if (msg.type == TYPE_ENCRYPTED) return
             _incoming.tryEmit(dto.conversationId to msg)
         }
     }
@@ -547,6 +799,9 @@ class MessagingRepository(
      */
     fun openChat(conversationId: String) {
         openConversationId = conversationId
+        // Someone looking at the chat is the best reason to try anything
+        // still sealed again, whatever its schedule says.
+        scope.launch { retryPendingDecryption("chat-open", everything = true) }
         openPoller?.cancel()
         openPoller = scope.launch {
             if (!conversationId.startsWith(PLACEHOLDER)) markRead(conversationId)
@@ -999,19 +1254,30 @@ class MessagingRepository(
 
         // The server's copy has no body; this phone keeps what it just sent,
         // because nothing can give it back later.
-        dao.deleteMessages(listOf(row.id))
-        dao.upsertMessages(
-            listOf(
-                res.message.toEntity(row).copy(
-                    type = row.type,
-                    body = row.body,
-                    metadataJson = row.metadataJson,
-                    mediaJson = mediaRef?.let { ChatJson.toJson(SealedMessage.mediaDto(it, row.type)) },
-                    pollJson = row.pollJson,
-                    localMediaPath = row.localMediaPath,
+        //
+        // Under the ingestion lock: the server also sends this message back
+        // to this phone on the socket, and that copy is sealed only for the
+        // other devices. Between the delete and the write below, it used to
+        // find neither the outbox row nor the sent one, fail to open a
+        // message that was never addressed here, and write the sealed copy
+        // over my own words — "Waiting for this message" on something I had
+        // just typed.
+        ingestMutex.withLock {
+            dao.deleteMessages(listOf(row.id))
+            dao.upsertMessages(
+                listOf(
+                    res.message.toEntity(row).copy(
+                        type = row.type,
+                        body = row.body,
+                        metadataJson = row.metadataJson,
+                        mediaJson = mediaRef?.let { ChatJson.toJson(SealedMessage.mediaDto(it, row.type)) },
+                        pollJson = row.pollJson,
+                        localMediaPath = row.localMediaPath,
+                        cryptoState = null,
+                    ),
                 ),
-            ),
-        )
+            )
+        }
         if (toUserId != null) {
             syncNow()
             dao.moveMessages(convId, res.conversationId)
@@ -1482,7 +1748,7 @@ class MessagingRepository(
         if (remote.isNotEmpty()) {
             // Keep them so tapping a result can open the chat at that message.
             val known = remote.filter { dao.conversation(it.conversationId) != null }
-            upsertMessages(known.filter { dao.message(it.id) == null })
+            upsertMessages(known.filter { dao.message(it.id) == null }, "search")
         }
         val merged = (local + remote.map { it.toEntity(null).toChat(myUserId()) }).distinctBy { it.id }
         return merged.sortedByDescending { it.createdAt }
@@ -1519,7 +1785,7 @@ class MessagingRepository(
         if (conversationId.startsWith(PLACEHOLDER)) return Result.success(0)
         return runCatching {
             val page = api.history(conversationId, 60, Instant.ofEpochMilli(beforeMs).toString())
-            upsertMessages(page)
+            upsertMessages(page, "history")
             page.size
         }
     }
@@ -1537,6 +1803,14 @@ class MessagingRepository(
         const val TYPE_REACTION = "REACTION"
         const val LOCAL = "local:"
         private const val KEY_CURSOR = "sync_cursor"
+        /** Source prefix for anything coming out of the pending-decryption queue. */
+        private const val RETRY = "retry:"
+        /** How many queued messages one retry pass takes on. */
+        private const val RETRY_BATCH = 200
+        /** How far back the one-off repair looks per conversation, in pages of 60. */
+        private const val REPAIR_PAGES = 10
+        /** A message opened later than this after it was sent is not announced. */
+        private const val LATE_NOTIFY_MS = 6 * 60 * 60 * 1000L
         /** Where an opened Loop answer is kept: a sealed thing opens once. */
         private const val LOOP_ANSWER_KEY = "loop_answer:"
         private const val PRESENT_EVERY_MS = 20_000L

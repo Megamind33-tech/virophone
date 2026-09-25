@@ -57,6 +57,38 @@ data class MessageEntity(
     /** A file on this phone: the recording/photo before upload, or a cached download. */
     val localMediaPath: String? = null,
     val pollJson: String? = null,
+    /**
+     * Where a sealed message stands on this phone, when it is not simply
+     * readable: PENDING while it waits to be opened (the retry queue has its
+     * ciphertext), UNAVAILABLE when this phone can never open it — it was
+     * sealed before this phone was set up, or its key is already spent.
+     * Null for everything readable. Only ever read with type = ENCRYPTED.
+     */
+    val cryptoState: String? = null,
+)
+
+/**
+ * A sealed message waiting to be opened.
+ *
+ * The message itself stays in the chat, in its place, while this row keeps
+ * what is needed to try again: the server's copy of it (with this device's
+ * ciphertext), why the last attempt failed and when the next one is due.
+ * Nothing is ever dropped because it could not be opened yet.
+ */
+@Entity(tableName = "pending_decryption", indices = [Index("nextRetryAt"), Index("senderDeviceId")])
+data class PendingDecryptionEntity(
+    @PrimaryKey val messageId: String,
+    val conversationId: String,
+    val senderUserId: String,
+    val senderDeviceId: String?,
+    /** The message as the server sent it, envelopes trimmed to this device's. */
+    val messageJson: String,
+    val reason: String,
+    val attempts: Int,
+    val nextRetryAt: Long,
+    /** Out of automatic retries; still retried when the sender's session changes. */
+    val gaveUp: Boolean,
+    val firstSeenAt: Long,
 )
 
 @Entity(tableName = "conversations", indices = [Index("peerUserId")])
@@ -100,6 +132,9 @@ data class ConversationEntity(
 @Entity(tableName = "kv")
 data class KvEntity(@PrimaryKey val key: String, val value: String)
 
+/** Sealed messages in one conversation that this phone holds without their ciphertext. */
+data class SealedGap(val conversationId: String, val oldest: Long, val newest: Long, val count: Int)
+
 data class ConversationRow(
     val id: String,
     val kind: String,
@@ -129,6 +164,7 @@ data class ConversationRow(
     val lastAt: Long?,
     val lastDeleted: Long?,
     val lastStatus: String?,
+    val lastCryptoState: String? = null,
 )
 
 @Dao
@@ -139,7 +175,8 @@ interface MessagingDao {
                c.mutedUntil, c.clearedAt, c.disappearingSeconds, c.expiresAt, c.peerLastReadAt,
                c.peerLastDeliveredAt, c.pinnedCsv, c.locked, c.archived, c.pinnedAt, c.unreadMarked, c.mentionedUnread,
                m.id AS lastId, m.body AS lastBody, m.type AS lastType, m.senderUserId AS lastSender,
-               m.createdAt AS lastAt, m.deletedAt AS lastDeleted, m.status AS lastStatus
+               m.createdAt AS lastAt, m.deletedAt AS lastDeleted, m.status AS lastStatus,
+               m.cryptoState AS lastCryptoState
         FROM conversations c
         LEFT JOIN messages m ON m.id = (
             -- The inbox shows the last thing said. A sealed reaction is carried
@@ -249,6 +286,43 @@ interface MessagingDao {
     @Query("SELECT MIN(createdAt) FROM messages WHERE conversationId = :conversationId AND type != 'SYSTEM'")
     suspend fun firstMessageAt(conversationId: String): Long?
 
+    @Query("SELECT * FROM pending_decryption WHERE gaveUp = 0 AND nextRetryAt <= :now ORDER BY firstSeenAt ASC LIMIT :limit")
+    suspend fun pendingDue(now: Long, limit: Int): List<PendingDecryptionEntity>
+
+    @Query("SELECT * FROM pending_decryption WHERE gaveUp = 0 ORDER BY firstSeenAt ASC LIMIT :limit")
+    suspend fun pendingRetryable(limit: Int): List<PendingDecryptionEntity>
+
+    @Query("SELECT * FROM pending_decryption WHERE senderDeviceId = :deviceId ORDER BY firstSeenAt ASC")
+    suspend fun pendingFromDevice(deviceId: String): List<PendingDecryptionEntity>
+
+    @Query("SELECT MIN(nextRetryAt) FROM pending_decryption WHERE gaveUp = 0")
+    suspend fun nextPendingAt(): Long?
+
+    @Query("SELECT * FROM pending_decryption WHERE messageId = :messageId")
+    suspend fun pending(messageId: String): PendingDecryptionEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun savePending(row: PendingDecryptionEntity)
+
+    @Query("DELETE FROM pending_decryption WHERE messageId IN (:ids)")
+    suspend fun deletePending(ids: List<String>)
+
+    /** Sealed rows from before the retry queue existed: no ciphertext kept on this phone. */
+    @Query(
+        """
+        SELECT conversationId, MIN(createdAt) AS oldest, MAX(createdAt) AS newest, COUNT(*) AS count
+        FROM messages WHERE type = 'ENCRYPTED' AND cryptoState IS NULL AND deletedAt IS NULL
+        GROUP BY conversationId
+        """,
+    )
+    suspend fun unrecoveredSealed(): List<SealedGap>
+
+    @Query("UPDATE messages SET cryptoState = :state WHERE type = 'ENCRYPTED' AND cryptoState IS NULL AND conversationId = :conversationId")
+    suspend fun settleUnrecoveredSealed(conversationId: String, state: String)
+
+    @Query("DELETE FROM pending_decryption")
+    suspend fun wipePending()
+
     @Query("SELECT * FROM kv WHERE `key` = :key")
     suspend fun kv(key: String): KvEntity?
 
@@ -266,6 +340,7 @@ interface MessagingDao {
 
     @Transaction
     suspend fun wipeAll() {
+        wipePending()
         wipeMessages()
         wipeConversations()
         wipeKv()
@@ -273,9 +348,10 @@ interface MessagingDao {
 }
 
 @Database(
-    entities = [MessageEntity::class, ConversationEntity::class, KvEntity::class],
+    entities = [MessageEntity::class, ConversationEntity::class, KvEntity::class, PendingDecryptionEntity::class],
     // v2: polls, group roles and descriptions. v5: the encrypted flag.
-    version = 5,
+    // v6: the pending-decryption queue and each message's crypto state.
+    version = 6,
     exportSchema = false,
 )
 abstract class MessagingDatabase : RoomDatabase() {
@@ -299,6 +375,27 @@ abstract class MessagingDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Sealed messages stop being thrown away when they cannot be opened
+         * yet. Existing rows keep everything they hold; sealed ones from before
+         * this get a null state, which is what marks them for one repair pass
+         * against the server's copy.
+         */
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN cryptoState TEXT")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `pending_decryption` (" +
+                        "`messageId` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `senderUserId` TEXT NOT NULL, " +
+                        "`senderDeviceId` TEXT, `messageJson` TEXT NOT NULL, `reason` TEXT NOT NULL, " +
+                        "`attempts` INTEGER NOT NULL, `nextRetryAt` INTEGER NOT NULL, `gaveUp` INTEGER NOT NULL, " +
+                        "`firstSeenAt` INTEGER NOT NULL, PRIMARY KEY(`messageId`))",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_pending_decryption_nextRetryAt` ON `pending_decryption` (`nextRetryAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_pending_decryption_senderDeviceId` ON `pending_decryption` (`senderDeviceId`)")
+            }
+        }
+
         fun get(context: Context): MessagingDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -306,7 +403,7 @@ abstract class MessagingDatabase : RoomDatabase() {
                     MessagingDatabase::class.java,
                     "viro_messaging.db",
                 )
-                    .addMigrations(MIGRATION_4_5)
+                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6)
                     // Only for a version pair with no migration above — which
                     // now means a bug, not a plan.
                     .fallbackToDestructiveMigration()

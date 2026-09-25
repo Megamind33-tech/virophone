@@ -36,6 +36,37 @@ import org.signal.libsignal.protocol.state.SignedPreKeyRecord
 data class SealedEnvelope(val deviceId: String, val ciphertext: String, val type: Int)
 
 /**
+ * Why a sealed copy could not be opened, and whether trying again later can
+ * change that. Classified from libsignal's own exceptions, never guessed from
+ * a message string.
+ */
+enum class DecryptFailure(val retryable: Boolean) {
+    /** This device has no keys yet — registration has not finished. */
+    NOT_REGISTERED(true),
+    /** No session with the sender's device yet; the message that starts it may still be on its way. */
+    MISSING_SESSION(true),
+    /** The session does not match the message: often a race with the message that sets it up. */
+    SESSION_MISMATCH(true),
+    /** The prekey the sender used is not here (yet, or any more). */
+    UNKNOWN_PREKEY(true),
+    /** Local storage or anything unexpected. Worth another go. */
+    TRANSIENT(true),
+    /** Opened before, and nothing of that was kept — the key for it is gone. */
+    ALREADY_OPENED(false),
+    /** A protocol version this build does not speak. */
+    UNSUPPORTED_VERSION(false),
+    /** Not a sealed message at all. */
+    CORRUPTED(false),
+}
+
+/** The outcome of opening one sealed copy. */
+sealed class OpenResult {
+    /** [newSession] is true when this message set up a session with its sender's device. */
+    data class Opened(val plaintext: String, val newSession: Boolean) : OpenResult()
+    data class Failed(val failure: DecryptFailure) : OpenResult()
+}
+
+/**
  * End-to-end encryption on this phone.
  *
  * The protocol itself is libsignal's — X3DH with a Kyber prekey to start a
@@ -50,7 +81,10 @@ class E2eeEngine(
     context: Context,
     private val api: ViroKeysApi,
 ) {
-    private val dao = E2eeDatabase.get(context).dao()
+    private val db = E2eeDatabase.get(context)
+    private val dao = db.dao()
+    /** When one-time prekeys were last checked outside registration. */
+    @Volatile private var lastTopUpCheck = 0L
     private val lock = Mutex()
     /** Who has which devices, so sealing is not a network round trip per message. */
     private val deviceCache = java.util.concurrent.ConcurrentHashMap<String, CachedDevices>()
@@ -76,6 +110,9 @@ class E2eeEngine(
                     // again — so ask again here, with the keys it already has
                     // rather than a new identity, which would set off the
                     // safety-number warning on every phone it talks to.
+                    // A handover row older than a week was never collected: the
+                    // chat it was for is long settled one way or the other.
+                    dao.deleteOpenedBefore(System.currentTimeMillis() - OPENED_RETENTION_MS)
                     val ready = if (existing.publishedAt == 0L) republish(existing) else existing
                     rotateIfStale(ready)
                     topUpIfLowInternal()
@@ -223,6 +260,20 @@ class E2eeEngine(
         )
     }
 
+    /**
+     * Checks the one-time prekey pool again, at most every few minutes.
+     *
+     * Every new session somebody starts with this device spends one, so it is
+     * asked after each message that started one — not only at launch — and the
+     * pool is refilled well before it runs dry.
+     */
+    suspend fun topUpSoon() {
+        val now = System.currentTimeMillis()
+        if (now - lastTopUpCheck < TOP_UP_INTERVAL_MS) return
+        lastTopUpCheck = now
+        topUpIfLow()
+    }
+
     /** Publishes more one-time prekeys when the server is running low on them. */
     suspend fun topUpIfLow() = lock.withLock {
         withContext(Dispatchers.IO) { runCatching { topUpIfLowInternal() } }
@@ -252,6 +303,7 @@ class E2eeEngine(
         dao.wipeKyberPreKeys()
         dao.wipeRemoteIdentities()
         dao.wipeSenderKeys()
+        dao.wipeOpenedMessages()
         dao.wipeIdentity()
     }
 
@@ -304,7 +356,7 @@ class E2eeEngine(
     /**
      * Which devices this person can be reached on.
      *
-     * Asked of the server at most every few minutes, and never on the critical
+     * Asked of the server at most once a minute, and never on the critical
      * path when the phone is offline: a message written on a bus must still
      * seal and wait in the outbox, so a failed lookup falls back to the devices
      * this phone already has sessions with.
@@ -324,6 +376,24 @@ class E2eeEngine(
 
     private data class CachedDevices(val deviceIds: List<String>, val at: Long)
 
+    /**
+     * Forgets what is known about these people's devices, so the next seal
+     * asks the server. Called when the server says a copy was missing.
+     */
+    fun forgetDevices(userIds: Collection<String>) {
+        userIds.forEach { deviceCache.remove(it) }
+    }
+
+    /**
+     * A message just came from [deviceId]. If that is a device this phone did
+     * not know [userId] had — they signed in again, or on a new phone — the
+     * cached list is out of date, and replies sealed from it would miss them.
+     */
+    fun noteSenderDevice(userId: String, deviceId: String) {
+        val cached = deviceCache[userId] ?: return
+        if (deviceId !in cached.deviceIds) deviceCache.remove(userId)
+    }
+
     private fun startSession(store: ViroSignalStore, address: SignalProtocolAddress, device: DeviceBundleDto) {
         val bundle = PreKeyBundle(
             device.registrationId,
@@ -342,8 +412,38 @@ class E2eeEngine(
     }
 
     /**
-     * Opens one sealed copy. Returns null when this device cannot read it —
-     * a message sent before this phone existed, or one already opened.
+     * Opens one sealed copy of a chat message, exactly once.
+     *
+     * The ratchet step and the readable result are committed together, in one
+     * transaction on this database, so the app dying between "opened" and
+     * "saved in the chat" cannot lose a message: the next attempt finds the
+     * result here instead of trying a key that no longer exists. The caller
+     * drops it with [forgetOpened] once the chat database has it.
+     */
+    suspend fun openMessage(
+        messageId: String,
+        senderUserId: String,
+        senderDeviceId: String,
+        ciphertext: String,
+        type: Int,
+    ): OpenResult = lock.withLock {
+        withContext(Dispatchers.IO) {
+            dao.openedMessage(messageId)?.let { return@withContext OpenResult.Opened(it.plaintext, newSession = false) }
+            decrypt(senderUserId, senderDeviceId, ciphertext, type) { plain ->
+                dao.saveOpenedMessage(OpenedMessageEntity(messageId, plain, System.currentTimeMillis()))
+            }
+        }
+    }
+
+    /** The chat database has the result of [openMessage]; the handover row can go. */
+    suspend fun forgetOpened(messageId: String) = withContext(Dispatchers.IO) {
+        runCatching { dao.deleteOpenedMessage(messageId) }
+        Unit
+    }
+
+    /**
+     * Opens one sealed copy of something that keeps its own opened form (a
+     * Moment remark, a Loop answer). Returns null when it cannot be read.
      */
     suspend fun open(
         senderUserId: String,
@@ -352,25 +452,64 @@ class E2eeEngine(
         type: Int,
     ): String? = lock.withLock {
         withContext(Dispatchers.IO) {
-            val own = dao.ownIdentity() ?: return@withContext null
-            val store = storeOf(own)
-            val address = SignalProtocolAddress(senderDeviceId, DEVICE_NUMBER)
-            runCatching {
-                val bytes = ciphertext.b64Bytes()
-                val plain = if (type == CiphertextMessage.PREKEY_TYPE) {
+            when (val result = decrypt(senderUserId, senderDeviceId, ciphertext, type) {}) {
+                is OpenResult.Opened -> result.plaintext
+                is OpenResult.Failed -> null
+            }
+        }
+    }
+
+    /**
+     * The decryption itself, inside one transaction with [alsoSave]: either
+     * the ratchet moves on and the result is kept, or neither happens.
+     */
+    private fun decrypt(
+        senderUserId: String,
+        senderDeviceId: String,
+        ciphertext: String,
+        type: Int,
+        alsoSave: (String) -> Unit,
+    ): OpenResult {
+        val own = dao.ownIdentity() ?: return OpenResult.Failed(DecryptFailure.NOT_REGISTERED)
+        val store = storeOf(own)
+        val address = SignalProtocolAddress(senderDeviceId, DEVICE_NUMBER)
+        val bytes = runCatching { ciphertext.b64Bytes() }
+            .getOrElse { return OpenResult.Failed(DecryptFailure.CORRUPTED) }
+        val prekey = type == CiphertextMessage.PREKEY_TYPE
+        return try {
+            var plain = ""
+            db.runInTransaction {
+                val raw = if (prekey) {
                     SessionCipher(store, address).decrypt(PreKeySignalMessage(bytes))
                 } else {
                     SessionCipher(store, address).decrypt(SignalMessage(bytes))
                 }
-                store.rememberOwner(senderDeviceId, senderUserId)
-                String(plain, Charsets.UTF_8)
-            }.getOrElse {
-                // A duplicate, or a message for a session this phone no longer
-                // has. The kind matters for the log; the content never appears.
-                Log.w(TAG, "could not open a message: ${it.javaClass.simpleName}")
-                null
+                plain = String(raw, Charsets.UTF_8)
+                alsoSave(plain)
             }
+            store.rememberOwner(senderDeviceId, senderUserId)
+            OpenResult.Opened(plain, newSession = prekey)
+        } catch (e: Throwable) {
+            val failure = classify(e)
+            // The kind is what matters for diagnosis; the content never appears.
+            Log.w(TAG, "could not open a message: ${e.javaClass.simpleName} -> $failure")
+            OpenResult.Failed(failure)
         }
+    }
+
+    private fun classify(e: Throwable): DecryptFailure = when (e) {
+        is org.signal.libsignal.protocol.NoSessionException -> DecryptFailure.MISSING_SESSION
+        is org.signal.libsignal.protocol.DuplicateMessageException -> DecryptFailure.ALREADY_OPENED
+        is org.signal.libsignal.protocol.InvalidKeyIdException -> DecryptFailure.UNKNOWN_PREKEY
+        is org.signal.libsignal.protocol.InvalidVersionException,
+        is org.signal.libsignal.protocol.LegacyMessageException -> DecryptFailure.UNSUPPORTED_VERSION
+        is org.signal.libsignal.protocol.InvalidMessageException,
+        is org.signal.libsignal.protocol.InvalidMacException,
+        is org.signal.libsignal.protocol.InvalidKeyException,
+        is org.signal.libsignal.protocol.InvalidSessionException,
+        is org.signal.libsignal.protocol.UntrustedIdentityException -> DecryptFailure.SESSION_MISMATCH
+        is Error -> throw e
+        else -> DecryptFailure.TRANSIENT
     }
 
     // ------------------------------------------------------ safety numbers
@@ -424,10 +563,20 @@ class E2eeEngine(
         private const val DEVICE_NUMBER = 1
         /** How many one-time prekeys to publish at a time. */
         private const val PREKEY_BATCH = 100
-        /** How long a device list is trusted before asking again. */
-        private const val DEVICE_CACHE_MS = 5 * 60 * 1000L
+        /**
+         * How long a device list is trusted before asking again. Short on
+         * purpose: someone who signs in again is a new device, and a list
+         * five minutes stale sealed everything sent to them in that time for
+         * a phone they no longer had — readable nowhere. Offline, the cached
+         * list is still used, so sealing never waits on the network.
+         */
+        private const val DEVICE_CACHE_MS = 60 * 1000L
         /** How long a signed prekey is used before it is replaced. */
         private const val SIGNED_PREKEY_MAX_AGE_MS = 30L * 24 * 3600 * 1000
+        /** How often prekeys are checked outside registration. */
+        private const val TOP_UP_INTERVAL_MS = 10 * 60 * 1000L
+        /** How long an uncollected handover row is kept. */
+        private const val OPENED_RETENTION_MS = 7L * 24 * 3600 * 1000
         /** Signal's own parameters, so the numbers look and behave the same. */
         private const val FINGERPRINT_ITERATIONS = 5200
         private const val FINGERPRINT_VERSION = 2
