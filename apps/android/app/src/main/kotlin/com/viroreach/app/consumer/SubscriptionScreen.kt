@@ -9,10 +9,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.designsystem.ViroColors
+import com.viroreach.core.designsystem.components.*
 import com.viroreach.core.designsystem.ViroSpacing
-import com.viroreach.core.designsystem.components.ViroBackButton
-import com.viroreach.core.designsystem.components.ViroSafeScreen
-import com.viroreach.core.designsystem.components.ViroScreenBackground
 import com.viroreach.core.network.PlanDto
 import com.viroreach.core.network.SelectPlanBody
 import com.viroreach.core.network.SubscriptionDto
@@ -42,81 +40,41 @@ fun SubscriptionScreen(
 
     LaunchedEffect(Unit) { reload() }
 
-    ViroScreenBackground {
-        ViroSafeScreen {
-            Column(Modifier.fillMaxSize().padding(ViroSpacing.md)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ViroBackButton(onClick = onBack)
-                    Spacer(Modifier.width(ViroSpacing.sm))
-                    Text(
-                        "Subscription",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = ViroColors.textPrimary,
-                    )
-                }
-                Spacer(Modifier.height(ViroSpacing.sm))
-                Text(
-                    "Billing providers are not wired yet. You can preview plan selection.",
-                    color = ViroColors.textSecondary,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.height(ViroSpacing.md))
-                current?.let {
-                    Text(
-                        "Current: ${it.planName}",
-                        color = ViroColors.textPrimary,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                }
-                status?.let {
-                    Text(it, color = ViroColors.accent, style = MaterialTheme.typography.bodySmall)
-                }
-                Spacer(Modifier.height(ViroSpacing.md))
-                when {
-                    loading -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = ViroColors.accent)
-                    }
-                    error != null -> Text(error!!, color = ViroColors.textSecondary)
-                    else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(ViroSpacing.sm)) {
-                        items(plans, key = { it.id }) { plan ->
-                            val selected = current?.planId == plan.id ||
-                                (current?.isDefault == true && plan.name == "Free")
-                            Card(colors = CardDefaults.cardColors(containerColor = ViroColors.surface)) {
-                                Column(Modifier.padding(ViroSpacing.md)) {
-                                    Text(
-                                        plan.name,
-                                        color = ViroColors.textPrimary,
-                                        style = MaterialTheme.typography.titleMedium,
-                                    )
-                                    Text(
-                                        plan.description ?: "",
-                                        color = ViroColors.textSecondary,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                    )
-                                    if (selected) {
-                                        Text("Selected", color = ViroColors.accent)
-                                    } else {
-                                        TextButton(onClick = {
-                                            scope.launch {
-                                                runCatching {
-                                                    session.api.selectSubscription(SelectPlanBody(plan.id))
-                                                }.onSuccess {
-                                                    current = it
-                                                    status = "Switched to ${it.planName}"
-                                                }.onFailure {
-                                                    status = "Couldn't change plan"
-                                                }
-                                            }
-                                        }) {
-                                            Text("Select", color = ViroColors.accent)
-                                        }
+    ViroSubScreen(title = "Subscription", onBack = onBack) {
+        when {
+            loading -> ViroLoadingState()
+            error != null -> ViroMessageState(
+                title = "Plans couldn't load",
+                body = "Check your connection and try again.",
+                actionLabel = "Try again",
+                onAction = { scope.launch { reload() } },
+            )
+            else -> ViroSection(
+                title = "Plans",
+                footer = "Payments aren't open yet, so choosing a plan doesn't charge you anything.",
+            ) {
+                plans.forEachIndexed { index, plan ->
+                    if (index > 0) ViroRowDivider(inset = false)
+                    val selected = current?.planId == plan.id ||
+                        (current?.isDefault == true && plan.name == "Free")
+                    ViroChoiceRow(
+                        title = plan.name,
+                        subtitle = plan.description?.takeIf { it.isNotBlank() },
+                        selected = selected,
+                        onClick = {
+                            if (!selected) scope.launch {
+                                runCatching { session.api.selectSubscription(SelectPlanBody(plan.id)) }
+                                    .onSuccess {
+                                        current = it
+                                        status = "You're on ${it.planName}."
                                     }
-                                }
+                                    .onFailure { status = "Couldn't change your plan. Try again." }
                             }
-                        }
-                    }
+                        },
+                    )
                 }
             }
         }
+        status?.let { ViroStatusLine(it) }
     }
 }

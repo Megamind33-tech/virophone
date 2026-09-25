@@ -8,6 +8,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.designsystem.ViroColors
+import com.viroreach.core.designsystem.components.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.ui.graphics.vector.ImageVector
 import com.viroreach.core.designsystem.ViroSpacing
 import com.viroreach.core.network.IdentitiesResponse
 import com.viroreach.feature.contacts.PhoneNumberFormatter
@@ -46,34 +50,19 @@ fun ProfileIdentitiesSection(
 
     LaunchedEffect(Unit) { reload() }
 
-    Column(Modifier.fillMaxWidth()) {
-        Text(
-            "Numbers and emails",
-            style = MaterialTheme.typography.titleMedium,
-            color = ViroColors.textPrimary,
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "People can find you on Viro with any verified number here.",
-            style = MaterialTheme.typography.bodySmall,
-            color = ViroColors.textSecondary,
-        )
-        Spacer(Modifier.height(ViroSpacing.sm))
-
-        message?.let {
-            Text(it, color = ViroColors.consumerWarning, style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.height(ViroSpacing.sm))
-        }
-
+    val data = identities
+    val total = (data?.phones?.size ?: 0) + (data?.emails?.size ?: 0)
+    ViroSection(
+        title = "Numbers and emails",
+        footer = message ?: "People can find you on Viro with any verified number here.",
+    ) {
         if (loading && identities == null) {
-            CircularProgressIndicator(color = ViroColors.accent, modifier = Modifier.size(24.dp))
+            ViroLoadingState()
         } else {
-            val data = identities
-            val total = (data?.phones?.size ?: 0) + (data?.emails?.size ?: 0)
-
             data?.phones?.forEach { phone ->
                 IdentityRow(
                     label = PhoneNumberFormatter.formatE164International(phone.phoneE164),
+                    icon = Icons.Outlined.Phone,
                     verified = phone.verified,
                     // The last remaining sign-in method is not removable — the
                     // server refuses it, and offering the button anyway would
@@ -91,6 +80,7 @@ fun ProfileIdentitiesSection(
             data?.emails?.forEach { email ->
                 IdentityRow(
                     label = email.email,
+                    icon = Icons.Outlined.Email,
                     verified = email.verified,
                     removable = total > 1,
                     onRemove = {
@@ -102,24 +92,9 @@ fun ProfileIdentitiesSection(
                     },
                 )
             }
-
-            if (total == 0) {
-                Text(
-                    "Nothing linked yet.",
-                    color = ViroColors.textSecondary,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-
-            Spacer(Modifier.height(ViroSpacing.sm))
-            Row(horizontalArrangement = Arrangement.spacedBy(ViroSpacing.sm)) {
-                TextButton(onClick = onAddPhone) {
-                    Text("Add phone number", color = ViroColors.accent)
-                }
-                TextButton(onClick = onAddEmail) {
-                    Text("Add email", color = ViroColors.accent)
-                }
-            }
+            if (total > 0) ViroRowDivider(inset = false)
+            ViroListRow("Add phone number", icon = Icons.Outlined.AddIcCall, onClick = onAddPhone)
+            ViroListRow("Add email", icon = Icons.Outlined.AlternateEmail, onClick = onAddEmail)
         }
     }
 }
@@ -127,33 +102,19 @@ fun ProfileIdentitiesSection(
 @Composable
 private fun IdentityRow(
     label: String,
+    icon: ImageVector,
     verified: Boolean,
     removable: Boolean,
     onRemove: () -> Unit,
 ) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = ViroColors.surface),
-        modifier = Modifier.fillMaxWidth().padding(bottom = ViroSpacing.sm),
-    ) {
-        Row(
-            Modifier.fillMaxWidth().padding(ViroSpacing.md),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(label, color = ViroColors.textPrimary, style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    // Unverified entries cannot be used to find or sign in to the
-                    // account, so the state is stated plainly rather than implied.
-                    if (verified) "Verified" else "Not verified",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (verified) ViroColors.success else ViroColors.consumerWarning,
-                )
-            }
-            if (removable) {
-                TextButton(onClick = onRemove) {
-                    Text("Remove", color = ViroColors.consumerError)
-                }
-            }
-        }
-    }
+    ViroListRow(
+        title = label,
+        icon = icon,
+        // Unverified entries cannot be used to find or sign in to the account,
+        // so the state is stated plainly rather than implied.
+        subtitle = if (verified) "Verified" else "Not verified",
+        trailing = if (removable) {
+            { TextButton(onClick = onRemove) { Text("Remove", color = ViroColors.consumerError) } }
+        } else null,
+    )
 }

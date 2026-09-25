@@ -11,9 +11,10 @@ import androidx.compose.ui.unit.dp
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.designsystem.ViroColors
 import com.viroreach.core.designsystem.ViroSpacing
-import com.viroreach.core.designsystem.components.ViroBackButton
-import com.viroreach.core.designsystem.components.ViroSafeScreen
-import com.viroreach.core.designsystem.components.ViroScreenBackground
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.outlined.*
+import com.viroreach.core.designsystem.components.*
 import com.viroreach.core.network.DeviceSummary
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -48,92 +49,64 @@ fun DevicesScreen(
 
     LaunchedEffect(Unit) { reload() }
 
-    ViroScreenBackground {
-        ViroSafeScreen {
-            Column(Modifier.fillMaxSize().padding(ViroSpacing.md)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ViroBackButton(onClick = onBack)
-                    Spacer(Modifier.width(ViroSpacing.sm))
-                    Text(
-                        "Linked devices",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = ViroColors.textPrimary,
-                    )
-                }
-                Spacer(Modifier.height(ViroSpacing.md))
-                // Viro on a computer: the browser shows a code, and this is
-                // where it is approved. Nothing is linked without this step.
-                Column(Modifier.fillMaxWidth()) {
-                    Button(onClick = { linking = true; code = ""; linkError = null }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Link a device")
-                    }
-                    Text(
-                        "Open " + com.viroreach.app.people.webAddress() + " on a computer, then enter the code it shows.",
-                        color = ViroColors.textSecondary,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
-                    linked?.let {
-                        Text(
-                            it + " is now linked.",
-                            color = ViroColors.success,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(top = 6.dp),
+    val signOut: (DeviceSummary, Boolean) -> Unit = { device, isThis ->
+        scope.launch {
+            runCatching { session.api.revokeDevice(device.id) }
+            if (isThis) {
+                session.logout()
+                onLogout()
+            } else {
+                reload()
+            }
+        }
+    }
+
+    ViroSubScreen(title = "Linked devices", onBack = onBack) {
+        // Viro on a computer: the browser shows a code, and this is where it
+        // is approved. Nothing is linked without this step.
+        ViroSection(
+            footer = "Open " + com.viroreach.app.people.webAddress() + " on a computer, then enter the code it shows.",
+        ) {
+            ViroListRow(
+                "Link a device",
+                icon = Icons.Outlined.QrCodeScanner,
+                onClick = { linking = true; code = ""; linkError = null },
+            )
+        }
+        linked?.let { ViroStatusLine("$it is now linked.", positive = true) }
+
+        when {
+            loading -> ViroLoadingState()
+            error != null -> ViroMessageState(
+                title = "Devices couldn't load",
+                body = "Check your connection and try again.",
+                actionLabel = "Try again",
+                onAction = { scope.launch { reload() } },
+            )
+            devices.isEmpty() -> ViroMessageState(title = "No active devices", icon = Icons.Outlined.Devices)
+            else -> {
+                val (current, others) = devices.partition { it.id == thisDeviceId }
+                current.firstOrNull()?.let { device ->
+                    ViroSection(title = "This device") {
+                        DeviceRow(device, isThis = true)
+                        ViroRowDivider()
+                        ViroListRow(
+                            "Sign out of this device",
+                            icon = Icons.AutoMirrored.Outlined.Logout,
+                            destructive = true,
+                            showChevron = false,
+                            onClick = { signOut(device, true) },
                         )
                     }
                 }
-                Spacer(Modifier.height(ViroSpacing.md))
-                when {
-                    loading -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = ViroColors.accent)
-                    }
-                    error != null -> Text(error!!, color = ViroColors.textSecondary)
-                    devices.isEmpty() -> Text(
-                        "No active devices.",
-                        color = ViroColors.textSecondary,
-                    )
-                    else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(ViroSpacing.sm)) {
-                        items(devices, key = { it.id }) { device ->
-                            val isThis = device.id == thisDeviceId
-                            Card(colors = CardDefaults.cardColors(containerColor = ViroColors.surface)) {
-                                Column(Modifier.padding(ViroSpacing.md)) {
-                                    Text(
-                                        if (isThis) "This device" else device.platform,
-                                        color = ViroColors.textPrimary,
-                                        style = MaterialTheme.typography.titleMedium,
-                                    )
-                                    Text(
-                                        "${device.platform} · ${device.appVersion}",
-                                        color = ViroColors.textSecondary,
-                                        style = MaterialTheme.typography.bodySmall,
-                                    )
-                                    Text(
-                                        "Last seen ${formatDeviceTime(device.lastSeenAt)}",
-                                        color = ViroColors.textMuted,
-                                        style = MaterialTheme.typography.labelSmall,
-                                    )
-                                    if (!isThis) {
-                                        TextButton(onClick = {
-                                            scope.launch {
-                                                runCatching { session.api.revokeDevice(device.id) }
-                                                reload()
-                                            }
-                                        }) {
-                                            Text("Sign out device", color = ViroColors.consumerError)
-                                        }
-                                    } else {
-                                        TextButton(onClick = {
-                                            scope.launch {
-                                                runCatching { session.api.revokeDevice(device.id) }
-                                                session.logout()
-                                                onLogout()
-                                            }
-                                        }) {
-                                            Text("Sign out this device", color = ViroColors.accent)
-                                        }
-                                    }
-                                }
-                            }
+                if (others.isNotEmpty()) {
+                    ViroSection(
+                        title = "Other devices",
+                        footer = "Signing a device out removes it straight away; it will need to be linked again.",
+                    ) {
+                        others.forEachIndexed { index, device ->
+                            if (index > 0) ViroRowDivider()
+                            DeviceRow(device, isThis = false, onSignOut = { signOut(device, false) })
                         }
                     }
                 }
@@ -169,6 +142,19 @@ fun DevicesScreen(
         )
     }
 
+}
+
+@Composable
+private fun DeviceRow(device: DeviceSummary, isThis: Boolean, onSignOut: (() -> Unit)? = null) {
+    val web = device.platform.contains("web", ignoreCase = true)
+    ViroListRow(
+        title = if (isThis) "This phone" else device.platform.replaceFirstChar { it.uppercase() },
+        subtitle = "${device.platform} · ${device.appVersion}\nLast active ${formatDeviceTime(device.lastSeenAt)}",
+        icon = if (web) Icons.Outlined.Computer else Icons.Outlined.PhoneAndroid,
+        trailing = onSignOut?.let {
+            { TextButton(onClick = it) { Text("Sign out", color = ViroColors.consumerError) } }
+        },
+    )
 }
 
 private fun formatDeviceTime(iso: String): String =

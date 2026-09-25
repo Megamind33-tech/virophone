@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,6 +25,7 @@ import com.viroreach.app.consumer.resolveAvatarUrl
 import com.viroreach.app.messaging.ui.GroupAvatar
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.designsystem.ViroColors
+import com.viroreach.core.designsystem.components.*
 import com.viroreach.core.designsystem.components.ViroAvatar
 import com.viroreach.core.designsystem.components.ViroAvatarSize
 import com.viroreach.core.network.MemberDto
@@ -51,27 +54,39 @@ private fun ContactPicker(
 ) {
     var q by remember { mutableStateOf("") }
     Column(modifier) {
-        OutlinedTextField(
-            value = q, onValueChange = { q = it }, singleLine = true,
-            leadingIcon = { Icon(Icons.Default.Search, null) }, placeholder = { Text("Search contacts on Viro") },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        ViroTextField(
+            value = q,
+            onValueChange = { q = it },
+            placeholder = "Search contacts on Viro",
+            leadingIcon = Icons.Default.Search,
+            modifier = Modifier.padding(horizontal = 16.dp),
         )
         val shown = contacts.filter { it.userId !in exclude && (q.isBlank() || it.effectiveDisplayName.contains(q, true)) }
         if (shown.isEmpty()) {
-            Text("None of your contacts matching that are on Viro yet.", color = ViroColors.textSecondary, modifier = Modifier.padding(16.dp))
+            ViroMessageState(
+                title = if (q.isBlank()) "No contacts on Viro yet" else "No matches",
+                body = if (q.isBlank()) "People you add from Contacts appear here once they're on Viro." else "None of your contacts on Viro match that.",
+            )
         }
-        LazyColumn(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp)) {
             items(shown, key = { it.userId!! }) { c ->
                 val id = c.userId!!
-                Row(
-                    Modifier.fillMaxWidth().clickable { onToggle(id) }.padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ViroAvatar(displayName = c.effectiveDisplayName, imageUrl = c.resolveAvatarUrl(), size = ViroAvatarSize.Small)
-                    Spacer(Modifier.width(12.dp))
-                    Text(c.effectiveDisplayName, color = ViroColors.textPrimary, modifier = Modifier.weight(1f))
-                    Checkbox(checked = id in selected, onCheckedChange = { onToggle(id) })
-                }
+                ViroListRow(
+                    title = c.effectiveDisplayName,
+                    onClick = { onToggle(id) },
+                    leading = { ViroAvatar(displayName = c.effectiveDisplayName, imageUrl = c.resolveAvatarUrl(), size = ViroAvatarSize.Small) },
+                    trailing = {
+                        Checkbox(
+                            checked = id in selected,
+                            onCheckedChange = { onToggle(id) },
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = ViroColors.accent,
+                                uncheckedColor = ViroColors.textSecondary,
+                                checkmarkColor = ViroColors.onAccent,
+                            ),
+                        )
+                    },
+                )
             }
         }
     }
@@ -86,10 +101,12 @@ fun NewGroupScreen(session: SessionManager, onBack: () -> Unit, onCreated: (conv
     val selected = remember { mutableStateListOf<String>() }
     var creating by remember { mutableStateOf(false) }
     BackHandler { onBack() }
-    Column(Modifier.fillMaxSize().background(ViroColors.background).systemBarsPadding().imePadding()) {
-        Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ViroColors.textPrimary) }
-            Text("New group", color = ViroColors.textPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+    ViroSubScreen(
+        title = "New group",
+        onBack = onBack,
+        subtitle = if (selected.isEmpty()) "Add a name and pick people" else "${selected.size} selected",
+        scrollable = false,
+        actions = {
             TextButton(
                 enabled = title.isNotBlank() && selected.isNotEmpty() && !creating,
                 onClick = {
@@ -97,17 +114,20 @@ fun NewGroupScreen(session: SessionManager, onBack: () -> Unit, onCreated: (conv
                     scope.launch {
                         session.messaging.createGroup(title, selected.toList())
                             .onSuccess { onCreated(it, title.trim()) }
-                            .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_SHORT).show() }
+                            .onFailure { Toast.makeText(context, "Couldn't create the group. Try again.", Toast.LENGTH_SHORT).show() }
                         creating = false
                     }
                 },
-            ) { Text(if (creating) "Creating…" else "Create", color = ViroColors.accent) }
-        }
-        OutlinedTextField(
-            value = title, onValueChange = { title = it.take(120) }, singleLine = true,
-            label = { Text("Group name") }, modifier = Modifier.fillMaxWidth().padding(16.dp),
+            ) { Text(if (creating) "Creating…" else "Create", color = ViroColors.accent, fontWeight = FontWeight.SemiBold) }
+        },
+    ) {
+        ViroTextField(
+            value = title,
+            onValueChange = { title = it.take(120) },
+            label = "Group name",
+            leadingIcon = Icons.Default.Groups,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp),
         )
-        Text("${selected.size} selected", color = ViroColors.textSecondary, modifier = Modifier.padding(horizontal = 16.dp))
         ContactPicker(contacts, selected.toSet(), emptySet(), onToggle = { id -> if (id in selected) selected.remove(id) else selected.add(id) }, Modifier.weight(1f))
     }
 }
@@ -147,122 +167,94 @@ fun GroupInfoScreen(
         if (iAmAdmin) session.messaging.groupInvite(conversationId).onSuccess { inviteUrl = it.url }
     }
 
-    BackHandler { onBack() }
-    Column(Modifier.fillMaxSize().background(ViroColors.background).systemBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ViroColors.textPrimary) }
-            Text("Group info", color = ViroColors.textPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+    val shareLink: () -> Unit = {
+        inviteUrl?.let { url ->
+            val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(android.content.Intent.EXTRA_TEXT, "Join " + (conv?.title ?: "our group") + " on Viro: " + url)
+            }
+            runCatching { context.startActivity(android.content.Intent.createChooser(send, "Share group link")) }
         }
-        LazyColumn(Modifier.fillMaxSize()) {
-            item {
-                Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    GroupAvatar(conv?.title ?: "Group", 88.dp)
-                    Spacer(Modifier.height(10.dp))
-                    Text(conv?.title ?: "Group", color = ViroColors.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-                    conv?.description?.let { Text(it, color = ViroColors.textSecondary) }
-                    Text("${members.size} ${if (members.size == 1) "member" else "members"}", color = ViroColors.textSecondary, fontSize = 13.sp)
-                    if (iAmAdmin) TextButton(onClick = { renaming = true }) { Text("Edit name and description") }
+    }
+    val copyLink: () -> Unit = {
+        inviteUrl?.let { url ->
+            val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+            clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Viro group link", url))
+            Toast.makeText(context, "Link copied", Toast.LENGTH_SHORT).show()
+        }
+    }
+    val resetLink: () -> Unit = resetLink@{
+        if (inviteBusy) return@resetLink
+        inviteBusy = true
+        scope.launch {
+            session.messaging.resetGroupInvite(conversationId)
+                .onSuccess {
+                    inviteUrl = it.url
+                    Toast.makeText(context, "New link made. The old one no longer works.", Toast.LENGTH_LONG).show()
                 }
+                .onFailure { Toast.makeText(context, "Couldn't make a new link. Try again.", Toast.LENGTH_SHORT).show() }
+            inviteBusy = false
+        }
+    }
+
+    BackHandler { onBack() }
+    ViroSubScreen(title = "Group info", onBack = onBack) {
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            GroupAvatar(conv?.title ?: "Group", 88.dp)
+            Spacer(Modifier.height(12.dp))
+            Text(conv?.title ?: "Group", color = ViroColors.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+            conv?.description?.takeIf { it.isNotBlank() }?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, color = ViroColors.textSecondary, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             }
-            if (iAmAdmin) {
-                item {
-                    Row(
-                        Modifier.fillMaxWidth().clickable { adding = true }.padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Default.PersonAdd, null, tint = ViroColors.accent)
-                        Spacer(Modifier.width(14.dp))
-                        Text("Add people", color = ViroColors.accent)
-                    }
-                }
-            }
-            if (iAmAdmin) {
-                item {
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Link, null, tint = ViroColors.accent)
-                            Spacer(Modifier.width(14.dp))
-                            Text("Invite with a link", color = ViroColors.textPrimary, modifier = Modifier.weight(1f))
-                        }
-                        Text(
-                            inviteUrl ?: "Making a link…",
-                            color = ViroColors.textSecondary,
-                            fontSize = 12.sp,
-                            maxLines = 2,
-                            modifier = Modifier.padding(top = 4.dp, start = 38.dp),
-                        )
-                        Row(Modifier.padding(start = 30.dp)) {
-                            TextButton(
-                                onClick = {
-                                    inviteUrl?.let { url ->
-                                        val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                            type = "text/plain"
-                                            putExtra(
-                                                android.content.Intent.EXTRA_TEXT,
-                                                "Join " + (conv?.title ?: "our group") + " on Viro: " + url,
-                                            )
-                                        }
-                                        runCatching {
-                                            context.startActivity(android.content.Intent.createChooser(send, "Share group link"))
-                                        }
-                                    }
-                                },
-                                enabled = inviteUrl != null,
-                            ) { Text("Share") }
-                            TextButton(
-                                onClick = {
-                                    inviteUrl?.let { url ->
-                                        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
-                                        clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Viro group link", url))
-                                        Toast.makeText(context, "Link copied", Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                enabled = inviteUrl != null,
-                            ) { Text("Copy") }
-                            TextButton(
-                                onClick = {
-                                    if (inviteBusy) return@TextButton
-                                    inviteBusy = true
-                                    scope.launch {
-                                        session.messaging.resetGroupInvite(conversationId)
-                                            .onSuccess {
-                                                inviteUrl = it.url
-                                                Toast.makeText(context, "New link made. The old one no longer works.", Toast.LENGTH_LONG).show()
-                                            }
-                                            .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_SHORT).show() }
-                                        inviteBusy = false
-                                    }
-                                },
-                                enabled = !inviteBusy,
-                            ) { Text("Reset") }
-                            if (inviteUrl != null) {
-                                TextButton(onClick = { confirmRevoke = true }, enabled = !inviteBusy) {
-                                    Text("Turn off", color = ViroColors.consumerError)
-                                }
-                            }
+            Text("${members.size} ${if (members.size == 1) "member" else "members"}", color = ViroColors.textSecondary, fontSize = 13.sp)
+            if (iAmAdmin) TextButton(onClick = { renaming = true }) { Text("Edit name and description", color = ViroColors.accent) }
+        }
+
+        if (iAmAdmin) {
+            ViroSection(footer = "Anyone with the link can join. Reset it to stop the old one working.") {
+                ViroListRow("Add people", icon = Icons.Default.PersonAdd, onClick = { adding = true })
+                ViroListRow(
+                    "Invite with a link",
+                    icon = Icons.Default.Link,
+                    subtitle = inviteUrl ?: if (inviteBusy) "Making a link…" else "Link turned off",
+                    subtitleMaxLines = 1,
+                    onClick = if (inviteUrl != null) shareLink else null,
+                )
+                Row(Modifier.fillMaxWidth().padding(start = 56.dp, end = 8.dp, bottom = 4.dp)) {
+                    TextButton(onClick = shareLink, enabled = inviteUrl != null) { Text("Share") }
+                    TextButton(onClick = copyLink, enabled = inviteUrl != null) { Text("Copy") }
+                    TextButton(onClick = resetLink, enabled = !inviteBusy) { Text(if (inviteUrl == null) "Make link" else "Reset") }
+                    if (inviteUrl != null) {
+                        TextButton(onClick = { confirmRevoke = true }, enabled = !inviteBusy) {
+                            Text("Turn off", color = ViroColors.consumerError)
                         }
                     }
                 }
             }
-            items(members, key = { it.userId }) { m ->
-                Row(
-                    Modifier.fillMaxWidth().clickable(enabled = iAmAdmin && m.userId != me) { memberMenu = m }
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ViroAvatar(displayName = names[m.userId] ?: "?", size = ViroAvatarSize.Small)
-                    Spacer(Modifier.width(12.dp))
-                    Text(names[m.userId] ?: "Viro user", color = ViroColors.textPrimary, modifier = Modifier.weight(1f))
-                    if (m.role == "ADMIN") Text("Admin", color = ViroColors.accent, fontSize = 12.sp)
-                }
+        }
+
+        ViroSection(title = "${members.size} ${if (members.size == 1) "member" else "members"}") {
+            if (members.isEmpty()) ViroLoadingState()
+            members.forEach { m ->
+                ViroListRow(
+                    title = names[m.userId] ?: "Viro user",
+                    value = if (m.role == "ADMIN") "Admin" else null,
+                    onClick = if (iAmAdmin && m.userId != me) ({ memberMenu = m }) else null,
+                    showChevron = false,
+                    leading = { ViroAvatar(displayName = names[m.userId] ?: "?", size = ViroAvatarSize.Small) },
+                )
             }
-            item {
-                TextButton(onClick = { confirmLeave = true }, modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                    Icon(Icons.Default.ExitToApp, null, tint = ViroColors.consumerError)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Leave group", color = ViroColors.consumerError)
-                }
-            }
+        }
+
+        ViroSection {
+            ViroListRow(
+                "Leave group",
+                icon = Icons.AutoMirrored.Filled.ExitToApp,
+                destructive = true,
+                showChevron = false,
+                onClick = { confirmLeave = true },
+            )
         }
     }
 
@@ -277,7 +269,7 @@ fun GroupInfoScreen(
                     scope.launch {
                         session.messaging.revokeGroupInvite(conversationId)
                             .onSuccess { inviteUrl = null }
-                            .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_SHORT).show() }
+                            .onFailure { Toast.makeText(context, "Couldn't do that. Try again.", Toast.LENGTH_SHORT).show() }
                     }
                 }) { Text("Turn off", color = ViroColors.consumerError) }
             },
@@ -295,7 +287,7 @@ fun GroupInfoScreen(
                         memberMenu = null
                         scope.launch {
                             session.messaging.setRole(conversationId, m.userId, m.role != "ADMIN").onFailure {
-                                Toast.makeText(context, it.message, Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Couldn't change their role. Try again.", Toast.LENGTH_SHORT).show()
                             }
                             reload()
                         }

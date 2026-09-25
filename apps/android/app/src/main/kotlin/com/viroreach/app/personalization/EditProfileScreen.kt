@@ -12,9 +12,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.designsystem.ViroColors
+import com.viroreach.core.designsystem.components.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
 import com.viroreach.core.designsystem.ViroSpacing
 import com.viroreach.core.designsystem.components.*
 import kotlinx.coroutines.launch
@@ -101,93 +108,80 @@ fun EditProfileScreen(
         )
     }
 
-    ViroScreenBackground {
-        // Scrolls, and applies IME padding: this screen now carries the photo,
-        // the name field, Save AND the linked numbers and emails, which does not
-        // fit a short screen with the keyboard open. Without this the identities
-        // section was simply unreachable on smaller handsets.
-        ViroSafeScreen(applyImePadding = true) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(ViroSpacing.md),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ViroBackButton(onClick = onBack)
-                    Text(
-                        "Edit profile",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = ViroColors.textPrimary,
-                    )
+    val removePhoto: () -> Unit = {
+        scope.launch {
+            isSaving = true
+            session.profileRepository.removePhoto()
+                .onSuccess { statusMessage = "Photo removed" }
+                .onFailure { statusMessage = "Couldn't remove photo" }
+            isSaving = false
+        }
+    }
+    val save: () -> Unit = {
+        scope.launch {
+            isSaving = true
+            session.profileRepository.saveProfile(displayName)
+                .onSuccess { onBack() }
+                .onFailure { statusMessage = "Couldn't save your profile. Try again." }
+            isSaving = false
+        }
+    }
+
+    // Scrolls, and applies IME padding: this screen carries the photo, the
+    // name field, Save AND the linked numbers and emails, which does not fit a
+    // short screen with the keyboard open.
+    ViroSubScreen(title = "Edit profile", onBack = onBack) {
+        Column(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Box {
+                ViroAvatar(
+                    imageUrl = profile.effectivePhotoUrl,
+                    size = ViroAvatarSize.Hero,
+                    kind = ViroAvatarKind.USER_PROFILE_IMAGE,
+                    modifier = Modifier.clickable(enabled = !isSaving, onClickLabel = "Change photo") { showPhotoOptions = true },
+                )
+                Box(
+                    Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(ViroColors.accent),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Outlined.PhotoCamera, contentDescription = null, tint = ViroColors.onAccent, modifier = Modifier.size(18.dp))
                 }
-                Spacer(Modifier.height(ViroSpacing.xl))
-                Box(Modifier.align(Alignment.CenterHorizontally)) {
-                    ViroAvatar(
-                        imageUrl = profile.effectivePhotoUrl,
-                        size = ViroAvatarSize.Hero,
-                        kind = ViroAvatarKind.USER_PROFILE_IMAGE,
-                    )
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { showPhotoOptions = true }, enabled = !isSaving) {
+                    Text(if (isSaving) "Uploading…" else "Change photo", color = ViroColors.accent)
                 }
-                Spacer(Modifier.height(ViroSpacing.md))
-                Text(
-                    if (isSaving) "Uploading…" else "Change photo",
-                    color = ViroColors.accent,
-                    modifier = Modifier
-                        .align(Alignment.CenterHorizontally)
-                        .clickable(enabled = !isSaving) { showPhotoOptions = true },
-                )
-                Text(
-                    "Remove photo",
-                    color = ViroColors.textSecondary,
-                    modifier = Modifier
-                        .align(Alignment.CenterHorizontally)
-                        .clickable(enabled = !isSaving) {
-                            scope.launch {
-                                isSaving = true
-                                session.profileRepository.removePhoto()
-                                    .onSuccess { statusMessage = "Photo removed" }
-                                    .onFailure { statusMessage = "Couldn't remove photo" }
-                                isSaving = false
-                            }
-                        },
-                )
-                statusMessage?.let {
-                    Text(
-                        it,
-                        color = ViroColors.textSecondary,
-                        modifier = Modifier.align(Alignment.CenterHorizontally),
-                    )
+                if (!profile.effectivePhotoUrl.isNullOrBlank()) {
+                    TextButton(onClick = removePhoto, enabled = !isSaving) {
+                        Text("Remove", color = ViroColors.textSecondary)
+                    }
                 }
-                Spacer(Modifier.height(ViroSpacing.lg))
-                ViroPhoneField(
-                    value = displayName,
-                    onValueChange = { displayName = it },
-                    label = "Display name",
-                )
-                Spacer(Modifier.height(ViroSpacing.md))
-                ViroContinueButton(
-                    text = if (isSaving) "Saving…" else "Save",
-                    enabled = !isSaving,
-                    onClick = {
-                        scope.launch {
-                            isSaving = true
-                            session.profileRepository.saveProfile(displayName)
-                                .onSuccess { onBack() }
-                                .onFailure { statusMessage = "Couldn't save profile" }
-                            isSaving = false
-                        }
-                    },
-                )
-                Spacer(Modifier.height(ViroSpacing.xl))
-                ProfileIdentitiesSection(
-                    session = session,
-                    onAddPhone = onAddPhone,
-                    onAddEmail = onAddEmail,
-                )
-                Spacer(Modifier.height(ViroSpacing.xl))
+            }
+            statusMessage?.let {
+                Text(it, color = ViroColors.textSecondary, style = MaterialTheme.typography.bodySmall)
             }
         }
+
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ViroTextField(
+                value = displayName,
+                onValueChange = { displayName = it },
+                label = "Display name",
+                leadingIcon = Icons.Outlined.Person,
+            )
+            ViroFootnote("This is the name people see on Viro.")
+        }
+        ViroActionButton(text = "Save", onClick = save, busy = isSaving)
+
+        ProfileIdentitiesSection(
+            session = session,
+            onAddPhone = onAddPhone,
+            onAddEmail = onAddEmail,
+        )
     }
 }
 
@@ -202,7 +196,7 @@ private fun uploadFailureMessage(error: Throwable): String {
     return when (code) {
         "413" -> "That photo is too large to upload"
         "401", "403" -> "Your session has expired. Sign in again to change your photo."
-        null -> "Couldn't upload photo: ${error.message ?: "unknown error"}"
+        null -> "Couldn't upload photo. Try again."
         else -> "Couldn't upload photo (error $code)"
     }
 }

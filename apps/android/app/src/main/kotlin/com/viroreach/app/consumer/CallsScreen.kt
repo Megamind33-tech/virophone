@@ -84,12 +84,14 @@ fun CallsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column {
-                        Text("Viro", style = MaterialTheme.typography.headlineMedium, color = ViroColors.textPrimary)
+                    // Named for what the tab holds, like Contacts and Chats —
+                    // not a second brand header with a slogan under it.
+                    Column(Modifier.weight(1f)) {
+                        Text("Calls", style = MaterialTheme.typography.headlineMedium, color = ViroColors.textPrimary)
                         Text(
-                            "PEOPLE. VOICE. PROGRESS.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            "Everyone you've spoken to, recently.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ViroColors.textSecondary,
                         )
                     }
                     Row {

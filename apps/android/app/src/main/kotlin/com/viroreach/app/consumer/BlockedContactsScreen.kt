@@ -10,10 +10,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.designsystem.ViroColors
+import com.viroreach.core.designsystem.components.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
 import com.viroreach.core.designsystem.ViroSpacing
-import com.viroreach.core.designsystem.components.ViroBackButton
-import com.viroreach.core.designsystem.components.ViroSafeScreen
-import com.viroreach.core.designsystem.components.ViroScreenBackground
 import kotlinx.coroutines.launch
 
 /**
@@ -109,110 +109,68 @@ fun BlockedContactsScreen(
 
     LaunchedEffect(Unit) { reload() }
 
-    ViroScreenBackground {
-        ViroSafeScreen {
-            Column(Modifier.fillMaxSize().padding(ViroSpacing.md)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ViroBackButton(onClick = onBack)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "Blocked & spam",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = ViroColors.textPrimary,
+    val unblock: (RestrictedEntry) -> Unit = { entry ->
+        scope.launch {
+            if (entry.contactId != null) {
+                session.contactsRepository.unblockContact(entry.contactId)
+            } else if (entry.userId != null) {
+                runCatching { session.api.unblockUser(entry.userId) }
+            }
+            reload()
+        }
+    }
+    val notSpam: (RestrictedEntry) -> Unit = { entry ->
+        scope.launch {
+            entry.contactId?.let { session.contactsRepository.setSpam(it, false) }
+            reload()
+        }
+    }
+
+    ViroSubScreen(title = "Blocked and spam", onBack = onBack) {
+        error?.let { ViroStatusLine(it) }
+        if (loading) {
+            ViroLoadingState()
+        } else {
+            ViroSection(
+                title = if (blocked.isEmpty()) "Blocked" else "Blocked · ${blocked.size}",
+                footer = "Blocked people on Viro can't call or message you. Someone not on Viro yet is blocked the moment they join.",
+            ) {
+                if (blocked.isEmpty()) {
+                    ViroListRow("You haven't blocked anyone", icon = Icons.Outlined.Block, enabled = false)
+                }
+                blocked.forEachIndexed { index, entry ->
+                    if (index > 0) ViroRowDivider()
+                    RestrictedRow(
+                        name = entry.name,
+                        // A Viro user is refused server-side: they cannot call
+                        // or message this account at all. Someone not on Viro
+                        // has nothing to be refused yet, so the block is held
+                        // ready for if they join.
+                        subtitle = if (entry.userId != null) "On Viro · calls and messages refused" else "Not on Viro yet",
+                        actionLabel = "Unblock",
+                        onAction = { unblock(entry) },
                     )
                 }
-                Spacer(Modifier.height(ViroSpacing.md))
-
-                error?.let {
-                    Text(it, color = ViroColors.consumerWarning, style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(ViroSpacing.sm))
+            }
+            ViroSection(
+                title = if (spam.isEmpty()) "Marked as spam" else "Marked as spam · ${spam.size}",
+                footer = "Marking someone as spam flags their calls without blocking them.",
+            ) {
+                if (spam.isEmpty()) {
+                    ViroListRow("Nothing marked as spam", icon = Icons.Outlined.Report, enabled = false)
                 }
-
-                if (loading) {
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = ViroColors.accent)
-                    }
-                } else {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(ViroSpacing.sm)) {
-                        item {
-                            SectionHeading("Blocked", blocked.size)
-                        }
-                        if (blocked.isEmpty()) {
-                            item {
-                                Text(
-                                    "You haven't blocked anyone.",
-                                    color = ViroColors.textSecondary,
-                                )
-                            }
-                        }
-                        items(blocked, key = { "b-" + it.key }) { entry ->
-                            RestrictedRow(
-                                name = entry.name,
-                                // A Viro user is refused server-side: they cannot
-                                // call or message this account at all. Someone not
-                                // on Viro has nothing to be refused yet, so the
-                                // block is held ready for if they join.
-                                subtitle = if (entry.userId != null) {
-                                    "On Viro — calls and messages refused"
-                                } else {
-                                    "Not on Viro yet — will apply if they join"
-                                },
-                                actionLabel = "Unblock",
-                                onAction = {
-                                    scope.launch {
-                                        if (entry.contactId != null) {
-                                            session.contactsRepository.unblockContact(entry.contactId)
-                                        } else if (entry.userId != null) {
-                                            runCatching { session.api.unblockUser(entry.userId) }
-                                        }
-                                        reload()
-                                    }
-                                },
-                            )
-                        }
-
-                        item {
-                            Spacer(Modifier.height(ViroSpacing.md))
-                            SectionHeading("Marked as spam", spam.size)
-                        }
-                        if (spam.isEmpty()) {
-                            item {
-                                Text(
-                                    "Nothing marked as spam. Mark a contact as spam to " +
-                                        "flag their calls without blocking them.",
-                                    color = ViroColors.textSecondary,
-                                )
-                            }
-                        }
-                        items(spam, key = { "s-" + it.key }) { entry ->
-                            RestrictedRow(
-                                name = entry.name,
-                                subtitle = if (entry.userId != null) "On Viro" else "Not on Viro",
-                                actionLabel = "Not spam",
-                                onAction = {
-                                    scope.launch {
-                                        entry.contactId?.let {
-                                            session.contactsRepository.setSpam(it, false)
-                                        }
-                                        reload()
-                                    }
-                                },
-                            )
-                        }
-                    }
+                spam.forEachIndexed { index, entry ->
+                    if (index > 0) ViroRowDivider()
+                    RestrictedRow(
+                        name = entry.name,
+                        subtitle = if (entry.userId != null) "On Viro" else "Not on Viro",
+                        actionLabel = "Not spam",
+                        onAction = { notSpam(entry) },
+                    )
                 }
             }
         }
     }
-}
-
-@Composable
-private fun SectionHeading(title: String, count: Int) {
-    Text(
-        if (count > 0) "$title ($count)" else title,
-        style = MaterialTheme.typography.titleMedium,
-        color = ViroColors.textPrimary,
-    )
 }
 
 @Composable
@@ -222,27 +180,10 @@ private fun RestrictedRow(
     actionLabel: String,
     onAction: () -> Unit,
 ) {
-    Card(colors = CardDefaults.cardColors(containerColor = ViroColors.surface)) {
-        Row(
-            Modifier.fillMaxWidth().padding(ViroSpacing.md),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    name,
-                    color = ViroColors.textPrimary,
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Text(
-                    subtitle,
-                    color = ViroColors.textSecondary,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            TextButton(onClick = onAction) {
-                Text(actionLabel, color = ViroColors.accent)
-            }
-        }
-    }
+    ViroListRow(
+        title = name,
+        subtitle = subtitle,
+        leading = { ViroAvatar(size = ViroAvatarSize.Small, displayName = name) },
+        trailing = { TextButton(onClick = onAction) { Text(actionLabel, color = ViroColors.accent) } },
+    )
 }

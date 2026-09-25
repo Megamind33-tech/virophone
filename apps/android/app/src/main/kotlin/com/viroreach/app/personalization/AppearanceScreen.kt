@@ -13,10 +13,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import com.viroreach.core.designsystem.ViroColors
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.designsystem.ViroSpacing
-import com.viroreach.core.designsystem.components.ViroBackButton
+import com.viroreach.core.designsystem.components.*
 import com.viroreach.core.designsystem.components.ViroSafeScreen
 import com.viroreach.core.designsystem.components.ViroScreenBackground
 import kotlinx.coroutines.launch
@@ -45,19 +46,7 @@ fun AppearanceScreen(session: SessionManager, onBack: () -> Unit) {
         }
     }
 
-    ViroScreenBackground {
-        ViroSafeScreen {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(ViroSpacing.md),
-            ) {
-                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    ViroBackButton(onClick = onBack)
-                    Text("Appearance", style = MaterialTheme.typography.headlineMedium, color = ViroColors.textPrimary)
-                }
-                Spacer(Modifier.height(ViroSpacing.lg))
+    ViroSubScreen(title = "Appearance", onBack = onBack) {
                 Section("Theme") {
                     ChoiceRow("System", prefs.themeMode == ThemeMode.SYSTEM) {
                         scope.launch { manager.setThemeMode(ThemeMode.SYSTEM) }
@@ -106,55 +95,44 @@ fun AppearanceScreen(session: SessionManager, onBack: () -> Unit) {
                     ChoiceRow("Choose wallpaper", prefs.wallpaperType == WallpaperType.DEVICE) {
                         wallpaperLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                     }
-                    ChoiceRow("Remove wallpaper", false) {
-                        scope.launch { manager.setWallpaper(WallpaperType.DEFAULT, "", prefs.wallpaperDimAmount) }
+                    if (prefs.wallpaperType == WallpaperType.DEVICE) {
+                        ViroListRow("Remove wallpaper", destructive = true, showChevron = false, onClick = {
+                            scope.launch { manager.setWallpaper(WallpaperType.DEFAULT, "", prefs.wallpaperDimAmount) }
+                        })
                     }
-                    if (prefs.wallpaperType == WallpaperType.DEVICE && prefs.wallpaperReference.isNotBlank()) {
-                        Spacer(Modifier.height(ViroSpacing.sm))
-                        Text("Dim overlay", color = ViroColors.textSecondary, style = MaterialTheme.typography.labelMedium)
+                    if (prefs.wallpaperType == WallpaperType.DEVICE && prefs.wallpaperReference.isNotBlank()) Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        Text("Dim overlay", color = ViroColors.textSecondary, style = MaterialTheme.typography.labelLarge)
                         Slider(
                             value = prefs.wallpaperDimAmount,
                             onValueChange = { scope.launch { manager.setWallpaperDim(it) } },
                             valueRange = 0f..0.75f,
+                            colors = viroSliderColors(),
                         )
-                        Text("Blur", color = ViroColors.textSecondary, style = MaterialTheme.typography.labelMedium)
+                        Text("Blur", color = ViroColors.textSecondary, style = MaterialTheme.typography.labelLarge)
                         Slider(
                             value = prefs.wallpaperBlurRadius,
                             onValueChange = { scope.launch { manager.setWallpaperBlur(it) } },
                             valueRange = 0f..32f,
+                            colors = viroSliderColors(),
                         )
-                        Text("Contrast", color = ViroColors.textSecondary, style = MaterialTheme.typography.labelMedium)
+                        Text("Contrast", color = ViroColors.textSecondary, style = MaterialTheme.typography.labelLarge)
                         Slider(
                             value = prefs.wallpaperContrast,
                             onValueChange = { scope.launch { manager.setWallpaperContrast(it) } },
                             valueRange = 0.7f..1.6f,
+                            colors = viroSliderColors(),
                         )
                     }
                 }
-            }
-        }
     }
 }
 
 @Composable
 private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.padding(bottom = ViroSpacing.lg)) {
-        Text(title, style = MaterialTheme.typography.labelLarge, color = ViroColors.textMuted)
-        Spacer(Modifier.height(ViroSpacing.sm))
-        Card { Column(Modifier.padding(ViroSpacing.md), content = content) }
-    }
+    ViroSection(title = title, content = content)
 }
 
 @Composable
 private fun ChoiceRow(label: String, selected: Boolean, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = ViroSpacing.sm),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(label, color = ViroColors.textPrimary)
-        if (selected) Text("✓", color = ViroColors.accent)
-    }
+    ViroChoiceRow(title = label, selected = selected, onClick = onClick)
 }

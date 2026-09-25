@@ -9,10 +9,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.viroreach.app.session.SessionManager
 import com.viroreach.core.designsystem.ViroColors
+import com.viroreach.core.designsystem.components.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
 import com.viroreach.core.designsystem.ViroSpacing
-import com.viroreach.core.designsystem.components.ViroBackButton
-import com.viroreach.core.designsystem.components.ViroSafeScreen
-import com.viroreach.core.designsystem.components.ViroScreenBackground
 import com.viroreach.core.network.ConnectionDto
 import kotlinx.coroutines.launch
 
@@ -40,103 +40,63 @@ fun ConnectionsScreen(
     val outgoing = connections.filter { it.status == "PENDING" && it.direction == "OUTGOING" }
     val accepted = connections.filter { it.status == "ACCEPTED" }
 
-    ViroScreenBackground {
-        ViroSafeScreen {
-            Column(Modifier.fillMaxSize().padding(ViroSpacing.md)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ViroBackButton(onClick = onBack)
-                    Spacer(Modifier.width(ViroSpacing.sm))
-                    Text(
-                        "Connections",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = ViroColors.textPrimary,
-                    )
-                }
-                Spacer(Modifier.height(ViroSpacing.md))
-                when {
-                    loading -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = ViroColors.accent)
+    val act: (suspend () -> Unit) -> Unit = { call ->
+        scope.launch {
+            runCatching { call() }
+            reload()
+        }
+    }
+
+    ViroSubScreen(title = "Connections", onBack = onBack) {
+        when {
+            loading -> ViroLoadingState()
+            error != null -> ViroMessageState(
+                title = "Connections couldn't load",
+                body = "Check your connection and try again.",
+                actionLabel = "Try again",
+                onAction = { scope.launch { reload() } },
+            )
+            connections.isEmpty() -> ViroMessageState(
+                title = "No connections yet",
+                body = "Use Add people to find someone by their Viro ID or email — useful when they have no phone number on Viro.",
+                icon = Icons.Outlined.People,
+            )
+            else -> {
+                if (incoming.isNotEmpty()) {
+                    ViroSection(title = "Requests · ${incoming.size}") {
+                        incoming.forEachIndexed { index, conn ->
+                            if (index > 0) ViroRowDivider()
+                            ConnectionRow(peerLabel(conn), "Wants to connect", conn.peerAvatarUrl) {
+                                TextButton(onClick = { act { session.api.rejectConnection(conn.id) } }) {
+                                    Text("Decline", color = ViroColors.textSecondary)
+                                }
+                                TextButton(onClick = { act { session.api.acceptConnection(conn.id) } }) {
+                                    Text("Accept", color = ViroColors.accent)
+                                }
+                            }
+                        }
                     }
-                    error != null -> Text(error!!, color = ViroColors.textSecondary)
-                    connections.isEmpty() -> Text(
-                        "No connections yet. Use Add people to find someone by their " +
-                            "Viro ID or email — useful when they have no phone number on Viro.",
-                        color = ViroColors.textSecondary,
-                    )
-                    else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(ViroSpacing.md)) {
-                        if (incoming.isNotEmpty()) {
-                            item {
-                                Text(
-                                    "Incoming requests",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = ViroColors.textMuted,
-                                )
-                            }
-                            items(incoming, key = { it.id }) { conn ->
-                                ConnectionCard(
-                                    title = peerLabel(conn),
-                                    subtitle = "Wants to connect",
-                                    actions = {
-                                        TextButton(onClick = {
-                                            scope.launch {
-                                                runCatching { session.api.acceptConnection(conn.id) }
-                                                reload()
-                                            }
-                                        }) { Text("Accept", color = ViroColors.accent) }
-                                        TextButton(onClick = {
-                                            scope.launch {
-                                                runCatching { session.api.rejectConnection(conn.id) }
-                                                reload()
-                                            }
-                                        }) { Text("Reject", color = ViroColors.textSecondary) }
-                                    },
-                                )
+                }
+                if (outgoing.isNotEmpty()) {
+                    ViroSection(title = "Sent") {
+                        outgoing.forEachIndexed { index, conn ->
+                            if (index > 0) ViroRowDivider()
+                            ConnectionRow(peerLabel(conn), "Waiting for them to accept", conn.peerAvatarUrl) {
+                                TextButton(onClick = { act { session.api.revokeConnection(conn.id) } }) {
+                                    Text("Cancel", color = ViroColors.textSecondary)
+                                }
                             }
                         }
-                        if (outgoing.isNotEmpty()) {
-                            item {
-                                Text(
-                                    "Sent requests",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = ViroColors.textMuted,
-                                )
-                            }
-                            items(outgoing, key = { it.id }) { conn ->
-                                ConnectionCard(
-                                    title = peerLabel(conn),
-                                    subtitle = "Pending",
-                                    actions = {
-                                        TextButton(onClick = {
-                                            scope.launch {
-                                                runCatching { session.api.revokeConnection(conn.id) }
-                                                reload()
-                                            }
-                                        }) { Text("Cancel", color = ViroColors.textSecondary) }
-                                    },
-                                )
-                            }
-                        }
-                        if (accepted.isNotEmpty()) {
-                            item {
-                                Text(
-                                    "Connected",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = ViroColors.textMuted,
-                                )
-                            }
-                            items(accepted, key = { it.id }) { conn ->
-                                ConnectionCard(
-                                    title = peerLabel(conn),
-                                    subtitle = "Connected",
-                                    actions = {
-                                        TextButton(onClick = {
-                                            scope.launch {
-                                                runCatching { session.api.revokeConnection(conn.id) }
-                                                reload()
-                                            }
-                                        }) { Text("Remove", color = ViroColors.consumerError) }
-                                    },
-                                )
+                    }
+                }
+                if (accepted.isNotEmpty()) {
+                    ViroSection(title = "Connected · ${accepted.size}") {
+                        accepted.forEachIndexed { index, conn ->
+                            if (index > 0) ViroRowDivider()
+                            ConnectionRow(peerLabel(conn), "Connected", conn.peerAvatarUrl) {
+                                TextButton(onClick = { act { session.api.revokeConnection(conn.id) } }) {
+                                    Text("Remove", color = ViroColors.consumerError)
+                                }
                             }
                         }
                     }
@@ -147,18 +107,18 @@ fun ConnectionsScreen(
 }
 
 @Composable
-private fun ConnectionCard(
+private fun ConnectionRow(
     title: String,
     subtitle: String,
+    avatarUrl: String?,
     actions: @Composable RowScope.() -> Unit,
 ) {
-    Card(colors = CardDefaults.cardColors(containerColor = ViroColors.surface)) {
-        Column(Modifier.padding(ViroSpacing.md)) {
-            Text(title, color = ViroColors.textPrimary, style = MaterialTheme.typography.titleMedium)
-            Text(subtitle, color = ViroColors.textSecondary, style = MaterialTheme.typography.bodySmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(ViroSpacing.sm), content = actions)
-        }
-    }
+    ViroListRow(
+        title = title,
+        subtitle = subtitle,
+        leading = { ViroAvatar(size = ViroAvatarSize.Small, imageUrl = avatarUrl, displayName = title) },
+        trailing = { Row(verticalAlignment = Alignment.CenterVertically, content = actions) },
+    )
 }
 
 /**

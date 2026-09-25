@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Search
+import com.viroreach.core.designsystem.components.*
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -64,50 +67,66 @@ fun SearchScreen(session: SessionManager, onBack: () -> Unit, onOpen: (ChatRoute
     }
 
     BackHandler { onBack() }
-    Column(Modifier.fillMaxSize().background(ViroColors.background).systemBarsPadding().imePadding()) {
-        Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ViroColors.textPrimary) }
-            OutlinedTextField(
-                value = q,
-                onValueChange = { q = it.take(100) },
-                singleLine = true,
-                placeholder = { Text("Search messages") },
-                modifier = Modifier.weight(1f).focusRequester(focus),
-                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = ViroColors.textPrimary, unfocusedTextColor = ViroColors.textPrimary),
-            )
-        }
-        if (searching) LinearProgressIndicator(Modifier.fillMaxWidth(), color = ViroColors.accent)
-        if (q.trim().length >= 2 && results.isEmpty() && !searching) {
-            Text("No messages found.", color = ViroColors.textSecondary, modifier = Modifier.padding(24.dp))
-        }
-        LazyColumn(Modifier.fillMaxSize()) {
-            items(results, key = { it.id }) { m ->
-                val conv = conversations.firstOrNull { it.id == m.conversationId }
-                val chatName = names[m.conversationId] ?: "Chat"
-                Column(
-                    Modifier.fillMaxWidth().clickable {
-                        onOpen(
-                            ChatRoute(
-                                conversationId = m.conversationId,
-                                peerName = chatName,
-                                peerUserId = conv?.peerUserId,
-                                focusMessageId = m.id,
-                            ),
-                        )
-                    }.padding(horizontal = 16.dp, vertical = 10.dp),
+    ViroScreenBackground {
+        ViroSafeScreen(applyImePadding = true, applyNavigationBarsPadding = true) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row {
-                        Text(chatName, color = ViroColors.textPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1)
-                        Text(SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(m.createdAt)), color = ViroColors.textSecondary, fontSize = 12.sp)
+                    IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = ViroColors.textPrimary)
                     }
-                    Text(
-                        highlight((if (m.senderUserId == me) "You: " else "") + previewOf(m), q.trim(), ViroColors.textPrimary),
-                        color = ViroColors.textSecondary,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                    ViroSearchBar(
+                        query = q,
+                        onQueryChange = { q = it.take(100) },
+                        placeholder = "Search messages",
+                        modifier = Modifier.weight(1f).focusRequester(focus),
                     )
                 }
-                HorizontalDivider(color = ViroColors.divider)
+                if (searching) LinearProgressIndicator(Modifier.fillMaxWidth(), color = ViroColors.accent, trackColor = Color.Transparent)
+                when {
+                    q.trim().length < 2 -> ViroMessageState(
+                        title = "Search your messages",
+                        body = "Type at least two letters. Searching looks through the messages on this phone first.",
+                        icon = Icons.Default.Search,
+                    )
+                    results.isEmpty() && !searching -> ViroMessageState(title = "No messages found", body = "Try a different word.")
+                }
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(results, key = { it.id }) { m ->
+                        val conv = conversations.firstOrNull { it.id == m.conversationId }
+                        val chatName = names[m.conversationId] ?: "Chat"
+                        Row(
+                            Modifier.fillMaxWidth().clickable {
+                                onOpen(
+                                    ChatRoute(
+                                        conversationId = m.conversationId,
+                                        peerName = chatName,
+                                        peerUserId = conv?.peerUserId,
+                                        focusMessageId = m.id,
+                                    ),
+                                )
+                            }.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            ViroAvatar(displayName = chatName, size = ViroAvatarSize.Small)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Row {
+                                    Text(chatName, color = ViroColors.textPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1)
+                                    Text(SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(m.createdAt)), color = ViroColors.textSecondary, fontSize = 12.sp)
+                                }
+                                Text(
+                                    highlight((if (m.senderUserId == me) "You: " else "") + previewOf(m), q.trim(), ViroColors.textPrimary),
+                                    color = ViroColors.textSecondary,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }

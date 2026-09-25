@@ -12,6 +12,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -104,7 +106,7 @@ fun ContactDetailScreen(
                 profile = it
                 statusMessage = "Photo updated"
             }.onFailure {
-                statusMessage = "Couldn't set photo: ${it.message ?: "unknown error"}"
+                statusMessage = "Couldn't set that photo. Try another one."
             }
         }
     }
@@ -202,21 +204,15 @@ fun ContactDetailScreen(
         )
     }
 
-    ViroScreenBackground {
-        ViroSafeScreen {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(ViroSpacing.md),
-            ) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    ViroBackButton(onClick = onBack)
-                    Spacer(Modifier.weight(1f))
-                    IconButton(onClick = { shareContact() }) {
-                        Icon(Icons.Default.Share, contentDescription = "Share", tint = ViroColors.textPrimary)
-                    }
-                }
+    ViroSubScreen(
+        title = "",
+        onBack = onBack,
+        actions = {
+            IconButton(onClick = { shareContact() }) {
+                Icon(Icons.Default.Share, contentDescription = "Share contact", tint = ViroColors.textPrimary)
+            }
+        },
+    ) {
                 Column(
                     Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -228,19 +224,18 @@ fun ContactDetailScreen(
                         )
                         FilledIconButton(
                             onClick = { showPhotoOptions = true },
-                            modifier = Modifier.size(40.dp),
+                            modifier = Modifier.size(38.dp),
                             colors = IconButtonDefaults.filledIconButtonColors(containerColor = ViroColors.accent),
                         ) {
-                            Icon(Icons.Default.Edit, contentDescription = "Change photo", tint = ViroColors.textPrimary)
+                            Icon(Icons.Default.PhotoCamera, contentDescription = "Change photo", tint = ViroColors.onAccent, modifier = Modifier.size(18.dp))
                         }
                     }
                     Spacer(Modifier.height(ViroSpacing.md))
                     if (isEditingName) {
-                        OutlinedTextField(
+                        ViroTextField(
                             value = editedName,
                             onValueChange = { editedName = it },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
+                            label = "Name",
                         )
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                             TextButton(onClick = { isEditingName = false }) { Text("Cancel") }
@@ -310,114 +305,73 @@ fun ContactDetailScreen(
                         modifier = Modifier.padding(top = ViroSpacing.lg),
                     )
                 }
-                Spacer(Modifier.height(ViroSpacing.lg))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    ProfileActionChip("Call", Icons.Default.Call, onCall)
-                    ProfileActionChip("Message", Icons.Default.Email, onMessage)
-                    ProfileActionChip("Share", Icons.Default.Share) { shareContact() }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ProfileActionChip("Call", Icons.Default.Call, onCall, Modifier.weight(1f))
+                    ProfileActionChip("Message", Icons.AutoMirrored.Filled.Chat, onMessage, Modifier.weight(1f))
+                    ProfileActionChip("Share", Icons.Default.Share, { shareContact() }, Modifier.weight(1f))
                 }
-                Spacer(Modifier.height(ViroSpacing.md))
                 // Targets, dates, Loops and Moments for this person — private to you.
-                TextButton(onClick = onOpenRelationship, modifier = Modifier.fillMaxWidth()) {
-                    Text("❤️  Relationship, targets & Moments", color = ViroColors.accent)
-                }
-                Spacer(Modifier.height(ViroSpacing.lg))
-                SectionTitle("Communication history")
-                if (history.isEmpty()) {
-                    Text(
-                        "No calls or messages yet with this contact.",
-                        color = ViroColors.textSecondary,
-                        style = MaterialTheme.typography.bodyMedium,
+                ViroSection {
+                    ViroListRow(
+                        "Relationship, targets and Moments",
+                        subtitle = "Only you can see this",
+                        icon = Icons.Default.FavoriteBorder,
+                        onClick = onOpenRelationship,
                     )
-                } else {
-                    history.take(12).forEach { item ->
-                        ContactHistoryRow(item)
+                }
+                ViroSection(title = "Recent activity") {
+                    if (history.isEmpty()) {
+                        ViroListRow("No calls or messages yet", icon = Icons.Default.History, enabled = false)
+                    } else {
+                        history.take(12).forEach { item -> ContactHistoryRow(item) }
                     }
                 }
-                Spacer(Modifier.height(ViroSpacing.lg))
-                SectionTitle("Other numbers")
-                if (relatedContacts.isEmpty()) {
-                    Text(
-                        "No other numbers saved under this contact.",
-                        color = ViroColors.textSecondary,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                } else {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(ViroSpacing.md)) {
-                        items(relatedContacts, key = { it.id }) { related ->
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier
-                                    .widthIn(max = 96.dp)
-                                    .clickable { onOpenRelated(related) },
-                            ) {
-                                ViroAvatar(
-                                    imageUrl = related.resolveAvatarUrl(),
-                                    size = ViroAvatarSize.Large,
-                                )
-                                related.phoneE164?.let { phone ->
-                                    Text(
-                                        PhoneNumberFormatter.formatE164International(phone),
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = ViroColors.textPrimary,
-                                    )
-                                }
-                                if (related.isReachable) {
-                                    Text(
-                                        "Viro",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = ViroColors.success,
-                                    )
-                                }
+                if (relatedContacts.isNotEmpty()) {
+                    ViroSection(title = "Other numbers") {
+                        relatedContacts.forEach { related ->
+                            ViroListRow(
+                                title = related.phoneE164?.let { PhoneNumberFormatter.formatE164International(it) } ?: related.effectiveDisplayName,
+                                subtitle = if (related.isReachable) "On Viro" else null,
+                                leading = { ViroAvatar(imageUrl = related.resolveAvatarUrl(), size = ViroAvatarSize.Small) },
+                                onClick = { onOpenRelated(related) },
+                            )
+                        }
+                    }
+                }
+                ViroSection {
+                    ViroListRow("Invite to Viro", icon = Icons.Default.PersonAdd, showChevron = false, onClick = {
+                        scope.launch {
+                            if (profile.userId != null) {
+                                session.contactsRepository.inviteContact(profile.id)
+                                    .onSuccess { statusMessage = it }
+                                    .onFailure { shareContact() }
+                            } else {
+                                shareContact()
                             }
                         }
-                    }
+                    })
+                    // Spam sits above Block deliberately: it is the lighter
+                    // action and the one people reach for first, before they
+                    // are sure enough to cut someone off entirely.
+                    ViroListRow(
+                        if (profile.isSpam) "Not spam" else "Mark as spam",
+                        icon = Icons.Default.Report,
+                        showChevron = false,
+                        onClick = {
+                            scope.launch {
+                                session.contactsRepository.setSpam(profile.id, !profile.isSpam)
+                                val nowSpam = !profile.isSpam
+                                statusMessage = if (nowSpam) "Marked as spam" else "Removed spam mark"
+                                // Local state drives the row label, so flip it
+                                // here rather than waiting for a reload.
+                                profile = profile.copy(isSpam = nowSpam)
+                            }
+                        },
+                    )
+                    ViroListRow("Block ${profile.effectiveDisplayName.substringBefore(' ')}", icon = Icons.Default.Block, destructive = true, showChevron = false, onClick = { showBlockConfirm = true })
+                    ViroListRow("Delete contact", icon = Icons.Default.Delete, destructive = true, showChevron = false, onClick = { showDeleteConfirm = true })
                 }
-                Spacer(Modifier.height(ViroSpacing.lg))
-                SectionTitle("Actions")
-                ProfileMenuRow("Invite to Viro", Icons.Default.Person) {
-                    scope.launch {
-                        if (profile.userId != null) {
-                            session.contactsRepository.inviteContact(profile.id)
-                                .onSuccess { statusMessage = it }
-                                .onFailure { shareContact() }
-                        } else {
-                            shareContact()
-                        }
-                    }
-                }
-                // Spam sits above Block deliberately: it is the lighter action
-                // and the one people reach for first, before they are sure
-                // enough to cut someone off entirely.
-                ProfileMenuRow(
-                    if (profile.isSpam) "Not spam" else "Mark as spam",
-                    Icons.Default.Warning,
-                ) {
-                    scope.launch {
-                        session.contactsRepository.setSpam(profile.id, !profile.isSpam)
-                        val nowSpam = !profile.isSpam
-                        statusMessage = if (nowSpam) "Marked as spam" else "Removed spam mark"
-                        // Local state drives the row label, so flip it here
-                        // rather than waiting for a reload.
-                        profile = profile.copy(isSpam = nowSpam)
-                    }
-                }
-                ProfileMenuRow("Block", Icons.Default.Close) { showBlockConfirm = true }
-                ProfileMenuRow("Delete", Icons.Default.Delete, destructive = true) {
-                    showDeleteConfirm = true
-                }
-                Spacer(Modifier.height(ViroSpacing.xl))
-            }
-        }
     }
-}
-
-@Composable
-private fun SectionTitle(title: String) {
-    Text(title, style = MaterialTheme.typography.titleMedium, color = ViroColors.textPrimary)
-    Spacer(Modifier.height(ViroSpacing.sm))
 }
 
 @Composable
@@ -425,79 +379,35 @@ private fun ProfileActionChip(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        FilledIconButton(
-            onClick = onClick,
-            colors = IconButtonDefaults.filledIconButtonColors(containerColor = ViroColors.surfaceRaised),
-        ) {
-            Icon(icon, contentDescription = label, tint = ViroColors.accent)
-        }
-        Spacer(Modifier.height(4.dp))
-        Text(label, style = MaterialTheme.typography.labelMedium, color = ViroColors.textSecondary)
-    }
-}
-
-@Composable
-private fun ProfileMenuRow(
-    label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    destructive: Boolean = false,
-    onClick: () -> Unit,
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(18.dp),
+        color = viroGroupedSurface(),
+        modifier = modifier.height(72.dp),
     ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = if (destructive) ViroColors.consumerError else ViroColors.textSecondary,
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(
-            label,
-            color = if (destructive) ViroColors.consumerError else ViroColors.textPrimary,
-            style = MaterialTheme.typography.bodyLarge,
-        )
+        Column(
+            Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = ViroColors.accent)
+            Spacer(Modifier.height(6.dp))
+            Text(label, style = MaterialTheme.typography.labelLarge, color = ViroColors.textPrimary)
+        }
     }
-    HorizontalDivider(color = ViroColors.divider)
 }
 
 @Composable
 private fun ContactHistoryRow(item: ContactHistoryItem) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            if (item.kind == ContactHistoryKind.CALL) Icons.Default.Call else Icons.Default.Email,
-            contentDescription = null,
-            tint = ViroColors.textSecondary,
-            modifier = Modifier.size(18.dp),
-        )
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(item.label, color = ViroColors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-            Text(
-                item.detail,
-                color = ViroColors.textSecondary,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Text(
-            formatHistoryTime(item.timestampMs),
-            color = ViroColors.textMuted,
-            style = MaterialTheme.typography.labelSmall,
-        )
-    }
+    ViroListRow(
+        title = item.label,
+        subtitle = item.detail,
+        subtitleMaxLines = 1,
+        icon = if (item.kind == ContactHistoryKind.CALL) Icons.Default.Call else Icons.AutoMirrored.Filled.Chat,
+        value = formatHistoryTime(item.timestampMs),
+    )
 }
 
 private fun formatHistoryTime(ms: Long): String =
