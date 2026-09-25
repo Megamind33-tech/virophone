@@ -380,8 +380,8 @@ class MessagingRepository(
         for (c in entities) {
             if (c.unread == 0 && !c.mentionedUnread) continue
             val kept = keepLocalRead(c, me)
-            if (kept.unread == 0 && !kept.mentionedUnread) {
-                dao.conversation(c.id)?.let { now -> dao.upsertConversations(listOf(now.copy(unread = 0, mentionedUnread = false))) }
+            if (kept.unread != c.unread || kept.mentionedUnread != c.mentionedUnread) {
+                dao.conversation(c.id)?.let { now -> dao.upsertConversations(listOf(now.copy(unread = kept.unread, mentionedUnread = kept.mentionedUnread))) }
             }
         }
     }
@@ -468,17 +468,22 @@ class MessagingRepository(
     }
 
     /**
-     * The server's unread count, unless this phone already read everything it
-     * counts. "Read" is held back from the server while a message is still
-     * being opened, so its count can lag; what was actually seen here wins, and
-     * only a message newer than that shows as unread again. "Mark as unread"
-     * is the person's own choice and is left alone.
+     * The server's unread count, unless this phone has already read more of it.
+     * "Read" is held back from the server while a message is still being
+     * opened, so its count can include messages this person looked at long
+     * ago and stay above zero forever. What was actually seen here wins:
+     * the badge is counted from this phone's own rows, messages newer than
+     * the last time the chat was read — never raised above what the server
+     * says, only corrected down. "Mark as unread" is a separate flag of the
+     * person's own and is not touched.
      */
     private suspend fun keepLocalRead(c: ConversationEntity, me: String?): ConversationEntity {
         if (c.unread == 0 && !c.mentionedUnread) return c
         val readAt = dao.kv(KEY_READ_AT + c.id)?.value?.toLongOrNull() ?: return c
-        val newest = me?.let { dao.latestIncomingAt(c.id, it) } ?: return c
-        return if (newest <= readAt) c.copy(unread = 0, mentionedUnread = false) else c
+        if (me == null) return c
+        val actuallyUnread = dao.unreadSince(c.id, me, readAt)
+        if (actuallyUnread >= c.unread) return c
+        return c.copy(unread = actuallyUnread, mentionedUnread = c.mentionedUnread && actuallyUnread > 0)
     }
 
     /**
@@ -487,7 +492,7 @@ class MessagingRepository(
      * were still sealed. Old ones stay quiet: a message from yesterday
      * opening now is not news.
      */
-    private fun announceLateOpenings(rows: List<MessageEntity>) {
+    private suspend fun announceLateOpenings(rows: List<MessageEntity>) {
         val me = myUserId()
         val now = System.currentTimeMillis()
         for (row in rows) {
@@ -495,6 +500,11 @@ class MessagingRepository(
             if (row.senderUserId == me || row.deletedAt != null) continue
             if (now - row.createdAt > LATE_NOTIFY_MS) continue
             if (openConversationId == row.conversationId) continue
+            // A message this phone already read — even as a waiting placeholder —
+            // opening now is not news; a notification for it would call
+            // something unread that the person has already seen.
+            val readAt = dao.kv(KEY_READ_AT + row.conversationId)?.value?.toLongOrNull() ?: 0L
+            if (row.createdAt <= readAt) continue
             _incoming.tryEmit(row.conversationId to row.toChat(me))
         }
     }

@@ -324,6 +324,22 @@ interface MessagingDao {
     @Query("SELECT MAX(createdAt) FROM messages WHERE conversationId = :conversationId AND senderUserId != :me AND type != 'SYSTEM'")
     suspend fun latestIncomingAt(conversationId: String, me: String): Long?
 
+    /**
+     * Incoming messages newer than a read marker: the badge this phone
+     * actually owes, counted from rows it has, rather than the server's
+     * count — which cannot shrink while sealed messages hold their
+     * read receipts back.
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM messages
+        WHERE conversationId = :conversationId AND senderUserId != :me
+          AND deletedAt IS NULL AND type NOT IN ('SYSTEM', 'REACTION')
+          AND createdAt > :readAt
+        """,
+    )
+    suspend fun unreadSince(conversationId: String, me: String, readAt: Long): Int
+
     /** Incoming messages in a chat that this phone has not been able to open yet. */
     @Query(
         """
