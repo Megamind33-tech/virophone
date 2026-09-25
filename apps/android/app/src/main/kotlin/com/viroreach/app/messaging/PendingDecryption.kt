@@ -39,11 +39,12 @@ internal object PendingDecryption {
 
     /**
      * The server's copy, trimmed to what this phone needs to try again: its
-     * own envelope. Other devices' ciphertext is of no use here.
+     * own envelope, and any for devices this account was before on this phone
+     * (their keys are kept). Other devices' ciphertext is of no use here.
      */
-    fun forQueue(dto: MsgDto, myDeviceId: String?): MsgDto =
+    fun forQueue(dto: MsgDto, myDeviceId: String?, alsoKeep: Set<String> = emptySet()): MsgDto =
         if (myDeviceId == null) dto
-        else dto.copy(envelopes = dto.envelopes?.filter { it.deviceId == myDeviceId })
+        else dto.copy(envelopes = dto.envelopes?.filter { it.deviceId == myDeviceId || it.deviceId in alsoKeep })
 }
 
 /**

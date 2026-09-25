@@ -266,4 +266,79 @@ class TwoPhonesTest {
         expect(aliceAgain, reply, "got all three")
         expect(bob, send(aliceAgain, bob, "good"), "good")
     }
+
+    // ------------- the server handing this phone a new device at sign-in
+
+    /** One account's key stores on one phone, able to set an old device's aside. */
+    private class MemoryKeyStores : KeyStores {
+        var cur: E2eeDatabase = Phone.newDb()
+        val old = mutableMapOf<String, E2eeDatabase>()
+        override fun current() = cur
+        override fun retireCurrent(deviceId: String) { old[deviceId] = cur; cur = Phone.newDb() }
+        override fun retired(deviceId: String) = old[deviceId]
+        override fun retiredDeviceIds() = old.keys.toSet()
+        override fun wipeRetired() = old.clear()
+    }
+
+    @Test fun `a new device at sign-in still opens what was sealed for the old one`() = runBlocking {
+        val alice = Phone("alice", "a1", server)
+        assertTrue(alice.engine.ensureRegistered("alice", "a1"))
+        val stores = MemoryKeyStores()
+        val bob1 = E2eeEngine(stores, server.api("bob", "b1"))
+        assertTrue(bob1.ensureRegistered("bob", "b1"))
+        val bobPhone1 = Phone("bob", "b1", server, stores.cur)
+
+        expect(bobPhone1, send(alice, bobPhone1, "before"), "before")
+        expect(alice, send(bobPhone1, alice, "hi"), "hi")
+        // Bob signs out; Alice keeps writing to the device she knows.
+        val whileAway = (1..3).map { send(alice, bobPhone1, "while away $it") }
+
+        // Bob signs back in and the server gives this phone a new device.
+        val bob2 = E2eeEngine(stores, server.api("bob", "b2"))
+        assertTrue(bob2.ensureRegistered("bob", "b2"))
+        assertEquals(setOf("b1"), bob2.retiredDeviceIds())
+        assertEquals("b2", bob2.myDeviceId())
+
+        // Everything sealed for the old device opens with its kept keys.
+        whileAway.forEachIndexed { i, w ->
+            val copy = w.envelopes.first { it.deviceId == "b1" }
+            val r = bob2.openRetired(w.id, "b1", "alice", "a1", copy.ciphertext, copy.type)
+            assertEquals("while away ${i + 1}", (r as OpenResult.Opened).plaintext)
+        }
+
+        // And the new device is a full participant from here on.
+        val bobPhone2 = Phone("bob", "b2", server, stores.cur)
+        val fromNew = send(bobPhone2, alice, "new phone, same me")
+        expect(alice, fromNew, "new phone, same me")
+    }
+
+    @Test fun `on real files, the old device's keys are set aside and still open its messages`() = runBlocking {
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val alice = Phone("alice", "a1", server)
+        assertTrue(alice.engine.ensureRegistered("alice", "a1"))
+        E2eeDatabase.useAccount("bob-files")
+        try {
+            val bob1 = E2eeEngine(ctx, server.api("bob", "b1"))
+            assertTrue(bob1.ensureRegistered("bob", "b1"))
+            val first = alice.engine.seal("alice", listOf("bob"), "sealed for the old device")
+            val w = Wire("f1", alice, first)
+
+            // Same account, new device from the server: a fresh engine, as after a sign-in.
+            val bob2 = E2eeEngine(ctx, server.api("bob", "b2"))
+            assertTrue(bob2.ensureRegistered("bob", "b2"))
+            assertEquals("b2", bob2.myDeviceId())
+            assertEquals(setOf("b1"), bob2.retiredDeviceIds())
+            assertTrue(ctx.getDatabasePath("viro_e2ee_bob-files__b1.db").exists())
+
+            val copy = w.envelopes.first { it.deviceId == "b1" }
+            val r = bob2.openRetired(w.id, "b1", "alice", "a1", copy.ciphertext, copy.type)
+            assertEquals("sealed for the old device", (r as OpenResult.Opened).plaintext)
+
+            // Deleting the account takes the kept keys with it.
+            bob2.wipe()
+            assertTrue(bob2.retiredDeviceIds().isEmpty())
+        } finally {
+            E2eeDatabase.useAccount(null)
+        }
+    }
 }

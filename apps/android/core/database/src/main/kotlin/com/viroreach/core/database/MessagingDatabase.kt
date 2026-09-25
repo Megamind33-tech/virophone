@@ -320,6 +320,16 @@ interface MessagingDao {
     @Query("UPDATE messages SET cryptoState = :state WHERE type = 'ENCRYPTED' AND cryptoState IS NULL AND conversationId = :conversationId")
     suspend fun settleUnrecoveredSealed(conversationId: String, state: String)
 
+    /** Incoming messages in a chat that this phone has not been able to open yet. */
+    @Query(
+        """
+        SELECT COUNT(*) FROM messages
+        WHERE conversationId = :conversationId AND type = 'ENCRYPTED' AND deletedAt IS NULL
+          AND senderUserId != :me AND (cryptoState IS NULL OR cryptoState != 'UNAVAILABLE')
+        """,
+    )
+    suspend fun unopenedIncoming(conversationId: String, me: String): Int
+
     /** Sealed rows an earlier build gave up on, put back in line to be asked for again. */
     @Query("UPDATE messages SET cryptoState = NULL WHERE type = 'ENCRYPTED' AND cryptoState = 'UNAVAILABLE' AND deletedAt IS NULL")
     suspend fun requeueUnavailableSealed(): Int

@@ -306,6 +306,52 @@ abstract class E2eeDatabase : RoomDatabase() {
             }
         }
 
+        /** File-name prefix of this account's earlier devices' key stores. */
+        internal fun retiredPrefix(): String? = account?.let { nameFor(it).removeSuffix(".db") + "__" }
+
+        private fun retiredName(deviceId: String): String? =
+            retiredPrefix()?.let { it + deviceId.filter { c -> c.isLetterOrDigit() || c == '-' } + ".db" }
+
+        /**
+         * The server replaced this account's device on this phone: the store
+         * for the old one is closed and set aside under its device id, and the
+         * next [get] opens a fresh one for the new device.
+         */
+        internal fun retireCurrent(context: Context, deviceId: String) {
+            val name = nameFor(account)
+            val target = retiredName(deviceId) ?: return
+            synchronized(this) {
+                instances.remove(name)?.close()
+                val source = context.getDatabasePath(name)
+                val dest = context.getDatabasePath(target)
+                if (dest.exists()) return
+                for (suffix in listOf("", "-wal", "-shm", "-journal")) {
+                    val f = java.io.File(source.path + suffix)
+                    if (f.exists()) f.renameTo(java.io.File(dest.path + suffix))
+                }
+            }
+        }
+
+        internal fun openRetired(context: Context, deviceId: String): E2eeDatabase? {
+            val name = retiredName(deviceId) ?: return null
+            return instances[name] ?: synchronized(this) {
+                instances[name] ?: Room.databaseBuilder(context.applicationContext, E2eeDatabase::class.java, name)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .build()
+                    .also { instances[name] = it }
+            }
+        }
+
+        internal fun deleteRetired(context: Context, deviceId: String) {
+            val name = retiredName(deviceId) ?: return
+            synchronized(this) {
+                instances.remove(name)?.close()
+                for (suffix in listOf("", "-wal", "-shm", "-journal")) {
+                    java.io.File(context.getDatabasePath(name).path + suffix).delete()
+                }
+            }
+        }
+
         internal fun nameFor(accountId: String?): String =
             if (accountId == null) "viro_e2ee_signed_out.db"
             else "viro_e2ee_" + accountId.filter { it.isLetterOrDigit() || it == '-' } + ".db"
@@ -347,5 +393,54 @@ abstract class E2eeDatabase : RoomDatabase() {
                     .also { instances[name] = it }
             }
         }
+    }
+}
+
+/**
+ * Where this phone keeps an account's keys: the store for the device it is
+ * signed in as, and the stores of devices it was before on this same phone.
+ *
+ * A device the server replaced is not wiped. Everyone who wrote to this person
+ * while they were signed out sealed it for that earlier device — it was never
+ * removed from their account — and only its keys can open that.
+ */
+interface KeyStores {
+    fun current(): E2eeDatabase
+    /** Moves the current store aside as the keys of [deviceId]; [current] starts empty. */
+    fun retireCurrent(deviceId: String)
+    fun retired(deviceId: String): E2eeDatabase?
+    fun retiredDeviceIds(): Set<String>
+    fun wipeRetired()
+}
+
+/** The phone's own files: one per account, and one per earlier device of that account. */
+internal class FileKeyStores(private val context: Context) : KeyStores {
+    @Volatile private var retiredCache: Pair<String, Set<String>>? = null
+
+    override fun current(): E2eeDatabase = E2eeDatabase.get(context)
+
+    override fun retireCurrent(deviceId: String) {
+        E2eeDatabase.retireCurrent(context, deviceId)
+        retiredCache = null
+    }
+
+    override fun retired(deviceId: String): E2eeDatabase? =
+        if (deviceId in retiredDeviceIds()) E2eeDatabase.openRetired(context, deviceId) else null
+
+    override fun retiredDeviceIds(): Set<String> {
+        val prefix = E2eeDatabase.retiredPrefix() ?: return emptySet()
+        retiredCache?.let { (p, ids) -> if (p == prefix) return ids }
+        val dir = context.getDatabasePath("x").parentFile ?: return emptySet()
+        val ids = dir.list().orEmpty()
+            .filter { it.startsWith(prefix) && it.endsWith(".db") }
+            .map { it.removePrefix(prefix).removeSuffix(".db") }
+            .toSet()
+        retiredCache = prefix to ids
+        return ids
+    }
+
+    override fun wipeRetired() {
+        retiredDeviceIds().forEach { E2eeDatabase.deleteRetired(context, it) }
+        retiredCache = null
     }
 }

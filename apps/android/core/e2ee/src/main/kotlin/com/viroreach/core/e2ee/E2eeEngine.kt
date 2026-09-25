@@ -78,14 +78,25 @@ sealed class OpenResult {
  * Everything runs off the main thread: libsignal calls the store synchronously.
  */
 class E2eeEngine internal constructor(
-    private val database: () -> E2eeDatabase,
+    private val stores: KeyStores,
     private val api: ViroKeysApi,
 ) {
     /** The signed-in account's keys, whichever account that is at the moment of each call. */
-    constructor(context: Context, api: ViroKeysApi) : this({ E2eeDatabase.get(context) }, api)
-    internal constructor(db: E2eeDatabase, api: ViroKeysApi) : this({ db }, api)
+    constructor(context: Context, api: ViroKeysApi) : this(FileKeyStores(context), api)
 
-    private val db: E2eeDatabase get() = database()
+    /** One fixed store and nowhere to set an old device's keys aside — for tests. */
+    internal constructor(db: E2eeDatabase, api: ViroKeysApi) : this(
+        object : KeyStores {
+            override fun current() = db
+            override fun retireCurrent(deviceId: String) = Unit
+            override fun retired(deviceId: String): E2eeDatabase? = null
+            override fun retiredDeviceIds(): Set<String> = emptySet()
+            override fun wipeRetired() = Unit
+        },
+        api,
+    )
+
+    private val db: E2eeDatabase get() = stores.current()
     private val dao: E2eeDao get() = db.dao()
     /** Devices a fresh session was started with for a reseal, and when. */
     private val freshSessions = java.util.concurrent.ConcurrentHashMap<String, Long>()
@@ -135,7 +146,19 @@ class E2eeEngine internal constructor(
                     topUpIfLowInternal()
                     return@runCatching ready.publishedAt != 0L
                 }
-                if (existing != null) wipeInternal()
+                if (existing != null && existing.userId == userId && existing.publishedAt != 0L) {
+                    // The same person, but the server gave this phone a new
+                    // device. Everything written to them while they were away
+                    // was sealed for the old one, which is still on their
+                    // account — so its keys are set aside, not destroyed.
+                    Log.i(TAG, "keeping the keys of this account's previous device on this phone")
+                    stores.retireCurrent(existing.deviceId)
+                    // Anything the store could not move is cleared, so the new
+                    // device never starts on top of the old one's keys.
+                    if (dao.ownIdentity() != null) wipeInternal()
+                } else if (existing != null) {
+                    wipeInternal()
+                }
                 register(userId, deviceId)
                 true
             }.getOrElse {
@@ -311,7 +334,12 @@ class E2eeEngine internal constructor(
     }
 
     /** Forgets every key on this phone. Any message already sent here becomes unreadable. */
-    suspend fun wipe() = lock.withLock { withContext(Dispatchers.IO) { wipeInternal() } }
+    suspend fun wipe() = lock.withLock {
+        withContext(Dispatchers.IO) {
+            wipeInternal()
+            runCatching { stores.wipeRetired() }
+        }
+    }
 
     private fun wipeInternal() {
         dao.wipeSessions()
@@ -483,8 +511,35 @@ class E2eeEngine internal constructor(
     ): OpenResult = lock.withLock {
         withContext(Dispatchers.IO) {
             dao.openedMessage(messageId)?.let { return@withContext OpenResult.Opened(it.plaintext, newSession = false) }
-            decrypt(senderUserId, senderDeviceId, ciphertext, type) { plain ->
+            decrypt(db, senderUserId, senderDeviceId, ciphertext, type) { plain ->
                 dao.saveOpenedMessage(OpenedMessageEntity(messageId, plain, System.currentTimeMillis()))
+            }
+        }
+    }
+
+    /** Devices this account was before on this phone, whose keys are still kept. */
+    suspend fun retiredDeviceIds(): Set<String> = withContext(Dispatchers.IO) {
+        runCatching { stores.retiredDeviceIds() }.getOrDefault(emptySet())
+    }
+
+    /**
+     * Opens a copy sealed for one of this account's earlier devices on this
+     * phone, with that device's own kept keys — exactly once, like [openMessage].
+     */
+    suspend fun openRetired(
+        messageId: String,
+        retiredDeviceId: String,
+        senderUserId: String,
+        senderDeviceId: String,
+        ciphertext: String,
+        type: Int,
+    ): OpenResult = lock.withLock {
+        withContext(Dispatchers.IO) {
+            val old = runCatching { stores.retired(retiredDeviceId) }.getOrNull()
+                ?: return@withContext OpenResult.Failed(DecryptFailure.MISSING_SESSION)
+            old.dao().openedMessage(messageId)?.let { return@withContext OpenResult.Opened(it.plaintext, newSession = false) }
+            decrypt(old, senderUserId, senderDeviceId, ciphertext, type) { plain ->
+                old.dao().saveOpenedMessage(OpenedMessageEntity(messageId, plain, System.currentTimeMillis()))
             }
         }
     }
@@ -492,6 +547,7 @@ class E2eeEngine internal constructor(
     /** The chat database has the result of [openMessage]; the handover row can go. */
     suspend fun forgetOpened(messageId: String) = withContext(Dispatchers.IO) {
         runCatching { dao.deleteOpenedMessage(messageId) }
+        runCatching { stores.retiredDeviceIds().forEach { stores.retired(it)?.dao()?.deleteOpenedMessage(messageId) } }
         Unit
     }
 
@@ -506,7 +562,7 @@ class E2eeEngine internal constructor(
         type: Int,
     ): String? = lock.withLock {
         withContext(Dispatchers.IO) {
-            when (val result = decrypt(senderUserId, senderDeviceId, ciphertext, type) {}) {
+            when (val result = decrypt(db, senderUserId, senderDeviceId, ciphertext, type) {}) {
                 is OpenResult.Opened -> result.plaintext
                 is OpenResult.Failed -> null
             }
@@ -518,21 +574,23 @@ class E2eeEngine internal constructor(
      * the ratchet moves on and the result is kept, or neither happens.
      */
     private fun decrypt(
+        into: E2eeDatabase,
         senderUserId: String,
         senderDeviceId: String,
         ciphertext: String,
         type: Int,
         alsoSave: (String) -> Unit,
     ): OpenResult {
-        val own = dao.ownIdentity() ?: return OpenResult.Failed(DecryptFailure.NOT_REGISTERED)
-        val store = storeOf(own)
+        val keys = into.dao()
+        val own = keys.ownIdentity() ?: return OpenResult.Failed(DecryptFailure.NOT_REGISTERED)
+        val store = ViroSignalStore(keys, IdentityKeyPair(own.identityKeyPair), own.registrationId)
         val address = SignalProtocolAddress(senderDeviceId, DEVICE_NUMBER)
         val bytes = runCatching { ciphertext.b64Bytes() }
             .getOrElse { return OpenResult.Failed(DecryptFailure.CORRUPTED) }
         val prekey = type == CiphertextMessage.PREKEY_TYPE
         return try {
             var plain = ""
-            db.runInTransaction {
+            into.runInTransaction {
                 val raw = if (prekey) {
                     SessionCipher(store, address).decrypt(PreKeySignalMessage(bytes))
                 } else {

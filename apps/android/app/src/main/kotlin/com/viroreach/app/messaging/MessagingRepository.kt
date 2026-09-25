@@ -417,6 +417,11 @@ class MessagingRepository(
         if (settled.isNotEmpty()) dao.deletePending(settled)
         handovers.forEach { e2ee.forgetOpened(it) }
         if (source.startsWith(RETRY)) announceLateOpenings(written)
+        // Something waiting in the chat on screen just opened: now the
+        // receipt that was held back can go.
+        openConversationId?.let { open ->
+            if (written.any { it.conversationId == open && it.type != TYPE_ENCRYPTED && it.id in settled }) markRead(open)
+        }
         if (resends.isNotEmpty()) scope.launch { resends.forEach { askForResend(it) } }
         // A new session with somebody's device is exactly what anything of
         // theirs still waiting was waiting for.
@@ -520,7 +525,15 @@ class MessagingRepository(
         dto.senderDeviceId?.let { e2ee.noteSenderDevice(dto.senderUserId, it) }
         val myDeviceId = e2ee.myDeviceId()
         val senderDeviceId = dto.senderDeviceId
-        val envelope = myDeviceId?.let { mine -> dto.envelopes?.firstOrNull { it.deviceId == mine } }
+        var envelope = myDeviceId?.let { mine -> dto.envelopes?.firstOrNull { it.deviceId == mine } }
+        // Not sealed for the device this phone is now, but perhaps for one it
+        // was before for this same account: the server gives a new device at
+        // some sign-ins, and the old one's keys are kept here for exactly this.
+        var viaRetired: String? = null
+        if (envelope == null && myDeviceId != null && senderDeviceId != null && !dto.envelopes.isNullOrEmpty()) {
+            val kept = e2ee.retiredDeviceIds()
+            dto.envelopes?.firstOrNull { it.deviceId in kept }?.let { envelope = it; viaRetired = it.deviceId }
+        }
 
         // Whoever sealed it can seal it again for this phone — unless that
         // was this very phone, which is the one place it cannot come from.
@@ -535,10 +548,11 @@ class MessagingRepository(
             CryptoTrace.log(dto.id, dto.conversationId, senderDeviceId, direction, source, CRYPTO_UNAVAILABLE, "NOT_ADDRESSED_TO_THIS_DEVICE")
             return dto.toEntity(existing).copy(cryptoState = CRYPTO_UNAVAILABLE)
         }
-        val result = if (myDeviceId == null) {
-            OpenResult.Failed(DecryptFailure.NOT_REGISTERED)
-        } else {
-            e2ee.openMessage(dto.id, dto.senderUserId, senderDeviceId!!, envelope!!.ciphertext, envelope.type ?: 1)
+        val copy = envelope
+        val result = when {
+            myDeviceId == null || copy == null -> OpenResult.Failed(DecryptFailure.NOT_REGISTERED)
+            viaRetired != null -> e2ee.openRetired(dto.id, viaRetired!!, dto.senderUserId, senderDeviceId!!, copy.ciphertext, copy.type ?: 1)
+            else -> e2ee.openMessage(dto.id, dto.senderUserId, senderDeviceId!!, copy.ciphertext, copy.type ?: 1)
         }
         return when (result) {
             is OpenResult.Opened -> {
@@ -569,7 +583,7 @@ class MessagingRepository(
                         conversationId = dto.conversationId,
                         senderUserId = dto.senderUserId,
                         senderDeviceId = senderDeviceId,
-                        messageJson = ChatJson.gson.toJson(PendingDecryption.forQueue(dto, myDeviceId)),
+                        messageJson = ChatJson.gson.toJson(PendingDecryption.forQueue(dto, myDeviceId, e2ee.retiredDeviceIds())),
                         reason = result.failure.name,
                         attempts = attempts,
                         nextRetryAt = PendingDecryption.nextRetryAt(attempts, now),
@@ -623,7 +637,7 @@ class MessagingRepository(
                 conversationId = dto.conversationId,
                 senderUserId = dto.senderUserId,
                 senderDeviceId = dto.senderDeviceId,
-                messageJson = ChatJson.gson.toJson(PendingDecryption.forQueue(dto, myDeviceId)),
+                messageJson = ChatJson.gson.toJson(PendingDecryption.forQueue(dto, myDeviceId, e2ee.retiredDeviceIds())),
                 reason = "$RESEND_REASON$reason",
                 attempts = attempts,
                 nextRetryAt = now + RESEND_EVERY_MS,
@@ -991,6 +1005,13 @@ class MessagingRepository(
         if (conversationId.startsWith(PLACEHOLDER)) return
         scope.launch {
             dao.clearUnread(conversationId)
+            // "Read" tells the sender their words were seen. A message this
+            // phone is still opening has not been seen, and telling them it
+            // had — while the chat here says it is still coming — is exactly
+            // the contradiction a messenger must never show. The receipt goes
+            // once everything waiting has opened (see [upsertMessages]).
+            val me = myUserId()
+            if (me != null && dao.unopenedIncoming(conversationId, me) > 0) return@launch
             runCatching { api.markRead(conversationId) }
         }
     }
