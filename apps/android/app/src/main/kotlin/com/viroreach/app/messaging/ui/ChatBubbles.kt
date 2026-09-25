@@ -237,7 +237,11 @@ fun MessageRow(
                     // place when it opens; only a message this phone can never
                     // open (sealed before it was signed in) says so.
                     msg.type == "ENCRYPTED" -> Text(
-                        if (msg.isUnavailable) "Not available on this phone" else "Decrypting message…",
+                        when {
+                            msg.isUnavailable -> "Not available on this phone"
+                            msg.isResending -> "Getting this message from their phone…"
+                            else -> "Decrypting message…"
+                        },
                         color = ViroColors.textSecondary,
                         fontSize = 14.sp,
                         fontStyle = FontStyle.Italic,

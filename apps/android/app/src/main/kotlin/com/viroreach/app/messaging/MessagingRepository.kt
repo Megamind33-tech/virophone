@@ -363,6 +363,7 @@ class MessagingRepository(
         val settled = mutableListOf<String>()
         val handovers = mutableListOf<String>()
         val newSessions = mutableSetOf<String>()
+        val resends = mutableListOf<String>()
         var written: List<MessageEntity> = emptyList()
         ingestMutex.withLock {
             val rows = mutableListOf<MessageEntity>()
@@ -380,7 +381,7 @@ class MessagingRepository(
                 // The outbox copy is replaced by the server's.
                 // REPLACE on the unique clientMsgId swaps the outbox row atomically
                 // when upsert succeeds. Never delete it before decoding its reply.
-                rows += ingest(dto, existing, source, settled, handovers, newSessions)
+                rows += ingest(dto, existing, source, settled, handovers, newSessions, resends)
             }
             dao.upsertMessages(rows)
             written = rows
@@ -394,6 +395,7 @@ class MessagingRepository(
         if (settled.isNotEmpty()) dao.deletePending(settled)
         handovers.forEach { e2ee.forgetOpened(it) }
         if (source.startsWith(RETRY)) announceLateOpenings(written)
+        if (resends.isNotEmpty()) scope.launch { resends.forEach { askForResend(it) } }
         // A new session with somebody's device is exactly what anything of
         // theirs still waiting was waiting for.
         if (newSessions.isNotEmpty()) {
@@ -453,6 +455,7 @@ class MessagingRepository(
         settled: MutableList<String>,
         handovers: MutableList<String>,
         newSessions: MutableSet<String>,
+        resends: MutableList<String>,
     ): MessageEntity {
         if (dto.type != TYPE_ENCRYPTED) {
             if (existing?.type == TYPE_ENCRYPTED) settled += dto.id
@@ -497,10 +500,15 @@ class MessagingRepository(
         val senderDeviceId = dto.senderDeviceId
         val envelope = myDeviceId?.let { mine -> dto.envelopes?.firstOrNull { it.deviceId == mine } }
 
+        // Whoever sealed it can seal it again for this phone — unless that
+        // was this very phone, which is the one place it cannot come from.
+        val canAsk = myDeviceId != null && senderDeviceId != null &&
+            !(dto.senderUserId == me && senderDeviceId == myDeviceId)
         if (myDeviceId != null && (envelope == null || senderDeviceId == null)) {
             // Sealed for other devices only: before this phone was signed in,
-            // or on another phone of the sender's. No retry can change that,
-            // and this is not a failure to dress up as waiting.
+            // or before the sender knew about it. Nothing here can open it, but
+            // the author's phone can seal it again for this one.
+            if (canAsk) return holdForResend(dto, existing, myDeviceId, source, direction, "NOT_ADDRESSED_TO_THIS_DEVICE", settled, resends)
             settled += dto.id
             CryptoTrace.log(dto.id, dto.conversationId, senderDeviceId, direction, source, CRYPTO_UNAVAILABLE, "NOT_ADDRESSED_TO_THIS_DEVICE")
             return dto.toEntity(existing).copy(cryptoState = CRYPTO_UNAVAILABLE)
@@ -520,6 +528,11 @@ class MessagingRepository(
             }
             is OpenResult.Failed -> {
                 if (!result.failure.retryable) {
+                    // A spent key or a damaged copy cannot be opened here again
+                    // — but the words are still on the author's phone.
+                    if (canAsk && result.failure != DecryptFailure.UNSUPPORTED_VERSION) {
+                        return holdForResend(dto, existing, myDeviceId, source, direction, result.failure.name, settled, resends)
+                    }
                     settled += dto.id
                     CryptoTrace.log(dto.id, dto.conversationId, senderDeviceId, direction, source, CRYPTO_UNAVAILABLE, result.failure.name)
                     return dto.toEntity(existing).copy(cryptoState = CRYPTO_UNAVAILABLE)
@@ -546,9 +559,110 @@ class MessagingRepository(
                     ),
                 )
                 CryptoTrace.log(dto.id, dto.conversationId, senderDeviceId, direction, source, "PENDING_DECRYPTION", result.failure.name, attempts)
+                // A session that keeps refusing a message has drifted, and
+                // waiting will not bring it back; a fresh one from the author
+                // will. Asked once retrying has had a fair go.
+                if (canAsk && result.failure != DecryptFailure.NOT_REGISTERED && attempts >= RESEND_AFTER_ATTEMPTS) resends += dto.id
                 dto.toEntity(existing).copy(cryptoState = CRYPTO_PENDING)
             }
         }
+    }
+
+    /**
+     * A message this phone cannot open itself, waiting for its author's
+     * phone to seal it again for this device.
+     *
+     * Asked for straight away and again at most hourly, for two days: the
+     * author's phone only answers while it is online, and nothing is kept on
+     * the server in between. Past that it is said plainly to be unavailable.
+     */
+    private suspend fun holdForResend(
+        dto: MsgDto,
+        existing: MessageEntity?,
+        myDeviceId: String?,
+        source: String,
+        direction: String,
+        reason: String,
+        settled: MutableList<String>,
+        resends: MutableList<String>,
+    ): MessageEntity {
+        val now = System.currentTimeMillis()
+        val before = dao.pending(dto.id)
+        val firstSeenAt = before?.firstSeenAt ?: now
+        if (now - firstSeenAt > RESEND_WINDOW_MS) {
+            settled += dto.id
+            CryptoTrace.log(dto.id, dto.conversationId, dto.senderDeviceId, direction, source, CRYPTO_UNAVAILABLE, "RESEND_NEVER_CAME:$reason")
+            return dto.toEntity(existing).copy(cryptoState = CRYPTO_UNAVAILABLE)
+        }
+        val attempts = (before?.attempts ?: 0) + 1
+        dao.savePending(
+            PendingDecryptionEntity(
+                messageId = dto.id,
+                conversationId = dto.conversationId,
+                senderUserId = dto.senderUserId,
+                senderDeviceId = dto.senderDeviceId,
+                messageJson = ChatJson.gson.toJson(PendingDecryption.forQueue(dto, myDeviceId)),
+                reason = "$RESEND_REASON$reason",
+                attempts = attempts,
+                nextRetryAt = now + RESEND_EVERY_MS,
+                gaveUp = false,
+                firstSeenAt = firstSeenAt,
+            ),
+        )
+        resends += dto.id
+        CryptoTrace.log(dto.id, dto.conversationId, dto.senderDeviceId, direction, source, "RESEND_REQUESTED", reason, attempts)
+        return dto.toEntity(existing).copy(cryptoState = CRYPTO_RESENDING)
+    }
+
+    /** Asks the author's phone to seal a message again for this one — at most hourly per message. */
+    private suspend fun askForResend(messageId: String) {
+        val key = "$RESEND_ASKED$messageId"
+        val last = dao.kv(key)?.value?.toLongOrNull() ?: 0L
+        val now = System.currentTimeMillis()
+        if (now - last < RESEND_EVERY_MS - 60_000L) return
+        runCatching { api.requestResend(messageId) }
+            .onSuccess { dao.putKv(KvEntity(key, now.toString())) }
+            .onFailure { Log.w(TAG, "RESEND_REQUEST_FAILED ${it.javaClass.simpleName}") }
+    }
+
+    /**
+     * Another device cannot open one of my messages and has asked for it
+     * again. This phone still holds what it said, so it seals exactly that —
+     * the same payload the message first carried — for that device alone.
+     */
+    private suspend fun answerResendRequest(p: JSONObject) {
+        val messageId = p.optString("messageId").takeIf { it.isNotBlank() } ?: return
+        val userId = p.optString("userId").takeIf { it.isNotBlank() } ?: return
+        val deviceId = p.optString("deviceId").takeIf { it.isNotBlank() } ?: return
+        val row = dao.message(messageId) ?: return
+        // Only my own words, and only ones this phone can actually read.
+        if (row.senderUserId != myUserId() || row.type == TYPE_ENCRYPTED || row.deletedAt != null) return
+        val key = "$RESENT$messageId:$deviceId"
+        val now = System.currentTimeMillis()
+        val last = dao.kv(key)?.value?.toLongOrNull() ?: 0L
+        if (now - last < RESEND_ANSWER_EVERY_MS) return
+        val meta = ChatJson.map(row.metadataJson).filterKeys { it != "outbox" && it != "mentions" }.toMutableMap()
+        row.pollJson?.let { runCatching { ChatJson.gson.fromJson(it, PollDto::class.java) }.getOrNull() }?.let { poll ->
+            meta["poll"] = mapOf(
+                "question" to poll.question,
+                "options" to poll.options.orEmpty().map { it.text },
+                "multi" to (poll.multi == true),
+            )
+        }
+        val plaintext = SealedMessage.pack(
+            SealedPayload(
+                type = row.type,
+                body = row.body,
+                meta = meta.takeIf { it.isNotEmpty() },
+                media = ChatJson.media(row.mediaJson)?.toSealedRef(),
+            ),
+        )
+        runCatching {
+            val envelope = e2ee.sealForDevice(userId, deviceId, plaintext) ?: return
+            api.addEnvelopes(messageId, com.viroreach.core.network.AddEnvelopesBody(listOf(EnvelopeBody(envelope.deviceId, envelope.ciphertext, envelope.type))))
+            dao.putKv(KvEntity(key, now.toString()))
+            Log.i(TAG, "RESEND_ANSWERED msg=$messageId")
+        }.onFailure { Log.w(TAG, "RESEND_ANSWER_FAILED ${it.javaClass.simpleName}") }
     }
 
     /** The server's copy with what was inside the seal put back. */
@@ -617,6 +731,14 @@ class MessagingRepository(
     private suspend fun repairUnrecoveredSealed() {
         if (!repaired.compareAndSet(false, true)) return
         runCatching {
+            // Once: the build before this one marked messages it could not
+            // open as unavailable for good. Most of them can be asked for
+            // again from their author's phone, so they go back through.
+            if (dao.kv(KEY_REQUEUED_V1) == null) {
+                val n = dao.requeueUnavailableSealed()
+                dao.putKv(KvEntity(KEY_REQUEUED_V1, System.currentTimeMillis().toString()))
+                Log.i(TAG, "SEALED_REQUEUED count=$n")
+            }
             for (gap in dao.unrecoveredSealed()) {
                 if (gap.conversationId.startsWith(PLACEHOLDER)) continue
                 var before = gap.newest + 1
@@ -715,6 +837,7 @@ class MessagingRepository(
                 upsertMessages(listOf(dto), "websocket")
                 announceIfIncoming(type, dto)
             }
+            "message.resend-request" -> scope.launch { answerResendRequest(p) }
             "message.hidden" -> p.optString("messageId").takeIf { it.isNotBlank() }?.let { dao.deleteMessages(listOf(it)) }
             "message.removed" -> {
                 val arr = p.optJSONArray("messageIds") ?: return
@@ -1809,6 +1932,22 @@ class MessagingRepository(
         private const val RETRY_BATCH = 200
         /** How far back the one-off repair looks per conversation, in pages of 60. */
         private const val REPAIR_PAGES = 10
+        /** Set once the earlier build's unavailable messages have been put back in line. */
+        private const val KEY_REQUEUED_V1 = "sealed_requeued_v1"
+        /** Queue reason prefix for a message waiting on its author's phone. */
+        private const val RESEND_REASON = "RESEND:"
+        /** When this phone last asked for a message again. */
+        private const val RESEND_ASKED = "resend_asked:"
+        /** When this phone last answered a request for one of its messages. */
+        private const val RESENT = "resent:"
+        /** How often to ask again while the author's phone has not answered. */
+        private const val RESEND_EVERY_MS = 60 * 60 * 1000L
+        /** How long to keep asking before saying the message is unavailable. */
+        private const val RESEND_WINDOW_MS = 48 * 60 * 60 * 1000L
+        /** How often the author answers the same device about the same message. */
+        private const val RESEND_ANSWER_EVERY_MS = 10 * 60 * 1000L
+        /** Retries of a drifting session before asking the author instead. */
+        private const val RESEND_AFTER_ATTEMPTS = 3
         /** A message opened later than this after it was sent is not announced. */
         private const val LATE_NOTIFY_MS = 6 * 60 * 60 * 1000L
         /** Where an opened Loop answer is kept: a sealed thing opens once. */

@@ -1024,6 +1024,79 @@ export class MessagesService {
     return (await this.hydrate(userId, [m]))[0];
   }
 
+  /**
+   * Asks the author of a sealed message to seal it again for the asking device.
+   *
+   * The server cannot help with the content — it never had it — so all it does
+   * is pass the request to the author's phones, which still hold the words.
+   * Nothing is stored: a phone that misses the request is asked again later.
+   */
+  async requestResend(userId: string, deviceId: string, messageId: string) {
+    const m = await this.ownMessage(userId, messageId);
+    if (m.type !== 'ENCRYPTED' || m.deletedAt) return { ok: true, forwarded: false };
+    // Only the author can answer, and never on behalf of itself.
+    if (m.senderUserId === userId && m.senderDeviceId === deviceId) return { ok: true, forwarded: false };
+    const frame = {
+      type: 'message.resend-request',
+      callId: m.conversationId,
+      fromUserId: userId,
+      conversationId: m.conversationId,
+      payload: { conversationId: m.conversationId, messageId: m.id, userId, deviceId },
+    };
+    const forwarded = await this.realtime.deliverToUser(m.senderUserId, frame);
+    return { ok: true, forwarded: !!forwarded };
+  }
+
+  /**
+   * The author's phone adds fresh sealed copies of its own message for
+   * particular devices. Unlike an edit, nothing about the message changes —
+   * no edited mark, no new copies for anyone else — so only the owners of
+   * those devices are told.
+   */
+  async addEnvelopes(
+    userId: string,
+    messageId: string,
+    envelopes: { deviceId: string; ciphertext: string; type?: number }[],
+  ) {
+    const m = await this.ownMessage(userId, messageId);
+    if (m.senderUserId !== userId) {
+      this.fail('FORBIDDEN', 'Only the person who sent a message can seal it again.', HttpStatus.FORBIDDEN);
+    }
+    if (m.type !== 'ENCRYPTED' || m.deletedAt) {
+      this.fail('VALIDATION_ERROR', 'This message cannot be sealed again.', HttpStatus.BAD_REQUEST);
+    }
+    const sealed = this.sealedEnvelopes({ envelopes } as SendMessageInput, 'TEXT');
+    if (!sealed) this.fail('VALIDATION_ERROR', 'Sealed copies are required.', HttpStatus.BAD_REQUEST);
+    const audience = await this.participantIds(m.conversationId);
+    const ownerOf = new Map((await this.keysService.encryptableDevices(audience)).map((d) => [d.deviceId, d.userId]));
+    for (const e of sealed) {
+      if (!ownerOf.has(e.deviceId)) {
+        this.fail('VALIDATION_ERROR', 'That device is not part of this conversation.', HttpStatus.BAD_REQUEST);
+      }
+    }
+    await this.envelopeRepo.delete({ messageId: m.id, deviceId: In(sealed.map((e) => e.deviceId)) });
+    await this.envelopeRepo.save(
+      sealed.map((e) =>
+        this.envelopeRepo.create({
+          messageId: m.id,
+          deviceId: e.deviceId,
+          userId: ownerOf.get(e.deviceId)!,
+          ciphertext: e.ciphertext,
+          envelopeType: e.type,
+        }),
+      ),
+    );
+    // Moved forward so a phone that was offline for this picks it up in its
+    // next sync, which fetches by updated time. editedAt is untouched: the
+    // words are the same, only who can read them changed.
+    const now = new Date();
+    m.updatedAt = now;
+    await this.msgRepo.update({ id: m.id }, { updatedAt: now });
+    const owners = [...new Set(sealed.map((e) => ownerOf.get(e.deviceId)!))];
+    await this.emitMessage('message.updated', m, owners);
+    return { ok: true };
+  }
+
   async deleteMessage(userId: string, messageId: string, scope: 'me' | 'everyone') {
     const m = await this.ownMessage(userId, messageId);
     if (scope === 'me') {

@@ -77,12 +77,15 @@ sealed class OpenResult {
  *
  * Everything runs off the main thread: libsignal calls the store synchronously.
  */
-class E2eeEngine(
-    context: Context,
+class E2eeEngine internal constructor(
+    private val db: E2eeDatabase,
     private val api: ViroKeysApi,
 ) {
-    private val db = E2eeDatabase.get(context)
+    constructor(context: Context, api: ViroKeysApi) : this(E2eeDatabase.get(context), api)
+
     private val dao = db.dao()
+    /** Devices a fresh session was started with for a reseal, and when. */
+    private val freshSessions = java.util.concurrent.ConcurrentHashMap<String, Long>()
     /** When one-time prekeys were last checked outside registration. */
     @Volatile private var lastTopUpCheck = 0L
     private val lock = Mutex()
@@ -354,6 +357,43 @@ class E2eeEngine(
     }
 
     /**
+     * Seals one message again, for one device that could not open its copy.
+     *
+     * Always on a fresh session: whatever went wrong on the other side —
+     * a spent key, a session that drifted, a device that did not exist when
+     * the message was first sent — a new session built from that device's
+     * current bundle is the one thing certain to open. The session in use is
+     * archived rather than deleted, so anything already on its way on it still
+     * opens when it lands.
+     */
+    suspend fun sealForDevice(userId: String, deviceId: String, plaintext: String): SealedEnvelope? = lock.withLock {
+        withContext(Dispatchers.IO) {
+            val own = dao.ownIdentity() ?: return@withContext null
+            if (deviceId == own.deviceId) return@withContext null
+            val store = storeOf(own)
+            val address = SignalProtocolAddress(deviceId, DEVICE_NUMBER)
+            // One fresh session per device per burst: a phone asking for many
+            // old messages at once gets them all on the same new session,
+            // rather than a bundle — and one of its prekeys — per message.
+            val now = System.currentTimeMillis()
+            val fresh = freshSessions[deviceId]?.let { now - it < FRESH_SESSION_MS } == true && store.containsSession(address)
+            if (!fresh) {
+                val bundle = api.bundles(userId, deviceId).devices.orEmpty().firstOrNull { it.deviceId == deviceId }
+                    ?: return@withContext null
+                store.loadSession(address)?.let { record ->
+                    record.archiveCurrentState()
+                    store.storeSession(address, record)
+                }
+                startSession(store, address, bundle)
+                freshSessions[deviceId] = now
+            }
+            store.rememberOwner(deviceId, userId)
+            val sealed = SessionCipher(store, address).encrypt(plaintext.toByteArray(Charsets.UTF_8))
+            SealedEnvelope(deviceId, sealed.serialize().b64(), sealed.type)
+        }
+    }
+
+    /**
      * Which devices this person can be reached on.
      *
      * Asked of the server at most once a minute, and never on the critical
@@ -573,6 +613,8 @@ class E2eeEngine(
         private const val DEVICE_CACHE_MS = 60 * 1000L
         /** How long a signed prekey is used before it is replaced. */
         private const val SIGNED_PREKEY_MAX_AGE_MS = 30L * 24 * 3600 * 1000
+        /** How long a session started for a reseal is reused for further reseals. */
+        private const val FRESH_SESSION_MS = 10 * 60 * 1000L
         /** How often prekeys are checked outside registration. */
         private const val TOP_UP_INTERVAL_MS = 10 * 60 * 1000L
         /** How long an uncollected handover row is kept. */

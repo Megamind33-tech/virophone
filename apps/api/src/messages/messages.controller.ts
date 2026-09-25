@@ -130,6 +130,12 @@ class EditMessageDto {
   envelopes?: { deviceId: string; ciphertext: string; type?: number }[];
 }
 
+class AddEnvelopesDto {
+  /** Sealed copies of the same message for devices that could not open theirs. */
+  @IsArray() @ArrayMaxSize(64)
+  envelopes!: { deviceId: string; ciphertext: string; type?: number }[];
+}
+
 class ReactDto {
   @IsString() @IsNotEmpty() @MaxLength(32) emoji!: string;
 }
@@ -374,6 +380,22 @@ export class MessagesController {
   @Post('erase-with/:userId')
   async eraseWith(@Req() req: AuthedReq, @Param('userId') userId: string) {
     return this.messagesService.eraseWith(req.user.sub, userId);
+  }
+
+  /**
+   * This phone cannot open a sealed message — its key is spent, or it was
+   * sealed before this device was signed in — and asks the author's phone to
+   * seal it again for this device. Carries identifiers only.
+   */
+  @Post(':id/resend-request')
+  async requestResend(@Req() req: AuthedReq, @Param('id') id: string) {
+    return this.messagesService.requestResend(req.user.sub, req.user.deviceId, id);
+  }
+
+  /** The author's answer: fresh sealed copies for particular devices. */
+  @Post(':id/envelopes')
+  async addEnvelopes(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: AddEnvelopesDto) {
+    return this.messagesService.addEnvelopes(req.user.sub, id, body.envelopes);
   }
 
   @Patch(':id')

@@ -94,6 +94,47 @@ Encryption is unchanged: nothing is sent or stored in the clear on the
 server, no key leaves the phone, and no identity is regenerated outside
 sign-in.
 
+## Follow-up: asking the author's phone to seal it again
+
+The first round stopped messages being lost, but anything already broken —
+a key spent by the old race, a message sealed before a phone's latest sign-in
+— could only be marked "Not available on this phone". Real two-phone tests
+(`core/e2ee/.../TwoPhonesTest.kt`, 13 cases on real libsignal) confirmed that
+new messages between two healthy phones open correctly, so what testers saw
+was this backlog.
+
+Now a phone that cannot open a message asks its author's phone for it, the
+way Signal does:
+
+1. The recipient calls `POST /messages/:id/resend-request` — identifiers only.
+   The server passes it to the author's phones as `message.resend-request`.
+2. The author's phone still holds the words. It seals the same payload again
+   for that one device, on a fresh session: the old session is archived, not
+   deleted, so anything already on its way still opens. It then calls
+   `POST /messages/:id/envelopes`, which is author-only, only for devices in
+   the chat, and never marks the message as edited. That bumps `updated_at`,
+   so an offline phone's next sync collects it.
+3. The recipient opens it through the ordinary path, in its place.
+
+A recipient asks when:
+
+- its key is spent;
+- the message was not addressed to this device;
+- the copy is damaged;
+- a session keeps refusing a message after three retries.
+
+It asks again at most hourly for two days, showing "Getting this message from
+their phone…". Only after that does it say "Not available on this phone".
+Messages the previous build had already marked unavailable are put back in
+line once. A burst of requests shares one fresh session per device.
+
+Only the author can re-seal, so nobody can forge someone else's words. A
+message this very phone sent and then lost has no one to ask, and stays
+unavailable.
+
+**Needs the API deployed** (`scripts/vps-deploy.sh`) for the two new endpoints.
+Until then requests fail quietly and messages stay pending.
+
 ## Debug diagnostics
 
 Debug builds log one line per state change under the tag `ViroE2eeMsg`,

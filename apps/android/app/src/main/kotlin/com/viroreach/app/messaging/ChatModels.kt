@@ -68,6 +68,8 @@ data class ChatMessage(
     val isPending: Boolean get() = outboxStatus != null
     /** Sealed and still being opened in the background — shown as a quiet placeholder. */
     val isDecrypting: Boolean get() = type == "ENCRYPTED" && cryptoState != CRYPTO_UNAVAILABLE
+    /** Sealed, and asked for again from the author's phone. */
+    val isResending: Boolean get() = type == "ENCRYPTED" && cryptoState == CRYPTO_RESENDING
     /** Sealed for good as far as this phone is concerned. */
     val isUnavailable: Boolean get() = type == "ENCRYPTED" && cryptoState == CRYPTO_UNAVAILABLE
     val effect: String? get() = metadata["effect"] as? String
@@ -311,7 +313,9 @@ internal fun ConversationRow.toItem(myUserId: String?): ConversationItem = Conve
 
 /** A sealed message that is queued to be opened again. */
 const val CRYPTO_PENDING = "PENDING"
-/** A sealed message this phone can never open: sealed before it existed, or its key is spent. */
+/** A sealed message this phone asked its author's phone to seal again for it. */
+const val CRYPTO_RESENDING = "RESENDING"
+/** A sealed message this phone can never open, and its author's phone never resent. */
 const val CRYPTO_UNAVAILABLE = "UNAVAILABLE"
 
 /** One line for the inbox: what the last message was, in words. */
@@ -319,6 +323,7 @@ fun ConversationItem.preview(): String = when {
     lastMessageId == null -> if (isPrivate) "Private session started" else ""
     lastDeleted -> "This message was deleted"
     lastType == "ENCRYPTED" && lastCryptoState == CRYPTO_UNAVAILABLE -> "Message not available on this phone"
+    lastType == "ENCRYPTED" && lastCryptoState == CRYPTO_RESENDING -> "Getting this message from their phone…"
     lastType == "ENCRYPTED" -> "Decrypting message…"
     lastType == "VOICE" -> "🎤 Voice message"
     lastType == "IMAGE" -> if (lastBody.isNullOrBlank()) "📷 Photo" else "📷 $lastBody"

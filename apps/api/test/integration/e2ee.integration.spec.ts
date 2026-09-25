@@ -718,6 +718,54 @@ describe('End-to-end encryption (server)', () => {
     expect(left).toHaveLength(0);
   });
 
+  it('lets a device that cannot open a message ask its author to seal it again', async () => {
+    if (skip()) return;
+    const sent = await http()
+      .post('/api/v1/messages')
+      .set(as(alicePhone))
+      .send({ conversationId: cid, clientMsgId: 'enc-resend', envelopes: everyone('the lost one') })
+      .expect(201);
+    const id = sent.body.message.id;
+    const before = await sql('SELECT updated_at, edited_at FROM messages WHERE id = $1', [id]);
+
+    // Bob's phone asks; the server holds nothing and only passes it on.
+    const asked = await http().post(`/api/v1/messages/${id}/resend-request`).set(as(bobPhone)).expect(201);
+    expect(asked.body.ok).toBe(true);
+
+    // Only the author may answer, and only for devices in the chat.
+    await http()
+      .post(`/api/v1/messages/${id}/envelopes`)
+      .set(as(bobPhone))
+      .send({ envelopes: [{ deviceId: bobPhone.deviceId, ciphertext: seal('forged') }] })
+      .expect(403);
+    const outsider = await signIn('+260978811099');
+    await publishKeys(outsider);
+    await http()
+      .post(`/api/v1/messages/${id}/envelopes`)
+      .set(as(alicePhone))
+      .send({ envelopes: [{ deviceId: outsider.deviceId, ciphertext: seal('leak') }] })
+      .expect(400);
+
+    await http()
+      .post(`/api/v1/messages/${id}/envelopes`)
+      .set(as(alicePhone))
+      .send({ envelopes: [{ deviceId: bobPhone.deviceId, ciphertext: seal('the lost one, again'), type: 3 }] })
+      .expect(201);
+
+    const bobs = await http().get(`/api/v1/messages/conversations/${cid}`).set(as(bobPhone)).expect(200);
+    const message = bobs.body.find((m: any) => m.id === id);
+    const mine = message.envelopes.find((e: any) => e.deviceId === bobPhone.deviceId);
+    expect(Buffer.from(mine.ciphertext, 'base64').toString()).toBe('the lost one, again');
+    expect(mine.type).toBe(3);
+    // Bob's laptop keeps the copy it already had.
+    const laptop = message.envelopes.find((e: any) => e.deviceId === bobLaptop.deviceId);
+    expect(Buffer.from(laptop.ciphertext, 'base64').toString()).toBe('the lost one');
+    // Not an edit — but newer, so an offline phone's next sync collects it.
+    const after = await sql('SELECT updated_at, edited_at FROM messages WHERE id = $1', [id]);
+    expect(after[0].edited_at).toBeNull();
+    expect(new Date(after[0].updated_at).getTime()).toBeGreaterThan(new Date(before[0].updated_at).getTime());
+  });
+
   it('forgets a device\'s keys when it is signed out', async () => {
     if (skip()) return;
     await http().delete(`/api/v1/devices/${bobLaptop.deviceId}`).set(as(bobPhone)).expect(200);

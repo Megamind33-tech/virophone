@@ -320,6 +320,10 @@ interface MessagingDao {
     @Query("UPDATE messages SET cryptoState = :state WHERE type = 'ENCRYPTED' AND cryptoState IS NULL AND conversationId = :conversationId")
     suspend fun settleUnrecoveredSealed(conversationId: String, state: String)
 
+    /** Sealed rows an earlier build gave up on, put back in line to be asked for again. */
+    @Query("UPDATE messages SET cryptoState = NULL WHERE type = 'ENCRYPTED' AND cryptoState = 'UNAVAILABLE' AND deletedAt IS NULL")
+    suspend fun requeueUnavailableSealed(): Int
+
     @Query("DELETE FROM pending_decryption")
     suspend fun wipePending()
 

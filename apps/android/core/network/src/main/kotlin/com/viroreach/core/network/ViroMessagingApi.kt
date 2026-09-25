@@ -92,6 +92,14 @@ interface ViroMessagingApi {
     @DELETE("api/v1/messages/{id}/reaction")
     suspend fun unreact(@Path("id") id: String): MsgDto
 
+    /** This phone cannot open a sealed message: ask its author's phone to seal it again for this device. */
+    @POST("api/v1/messages/{id}/resend-request")
+    suspend fun requestResend(@Path("id") id: String): OkResult
+
+    /** The author's answer: fresh sealed copies of one of its own messages, for particular devices. */
+    @POST("api/v1/messages/{id}/envelopes")
+    suspend fun addEnvelopes(@Path("id") id: String, @Body body: AddEnvelopesBody): OkResult
+
     @POST("api/v1/messages/{id}/viewed")
     suspend fun viewed(@Path("id") id: String): OkResult
 
@@ -251,6 +259,7 @@ data class SendBody(
 )
 
 data class EnvelopeBody(val deviceId: String, val ciphertext: String, val type: Int)
+data class AddEnvelopesBody(val envelopes: List<EnvelopeBody>)
 
 /** A place, or the start of a live share (liveSeconds: 900, 3600 or 28800). */
 data class LocationBody(
