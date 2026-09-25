@@ -147,12 +147,16 @@ fun ChatScreen(
     val vibe = if (isGroup) Vibe.DEFAULT else Vibe.of(relationship?.vibe)
     val features by repo.features.collectAsState()
     var memberNames by remember(cid) { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var memberAvatars by remember(cid) { mutableStateOf<Map<String, String>>(emptyMap()) }
     LaunchedEffect(cid, conversation?.participantsCsv) {
         val c = conversation ?: return@LaunchedEffect
         if (c.kind != "GROUP") return@LaunchedEffect
         val server = repo.members(c.id).associate { it.userId to it.displayName }
         memberNames = c.participantsCsv.split(',').filter { it.isNotBlank() }.associateWith { id ->
             session.contactsRepository.nameForUserId(id) ?: server[id] ?: "Viro user"
+        }
+        memberAvatars = memberNames.keys.associateWith { id ->
+            session.contactsRepository.findByUserId(id)?.resolveAvatarUrl().orEmpty()
         }
     }
 
@@ -282,6 +286,12 @@ fun ChatScreen(
         userId == me -> "You"
         userId == peerUserId -> peerName
         else -> memberNames[userId] ?: "Someone"
+    }
+
+    /** The last message of a run from one person — where their face goes. */
+    fun isLastOfSenderRun(list: List<ChatMessage>, index: Int): Boolean {
+        val next = list.getOrNull(index + 1) ?: return true
+        return next.senderUserId != list[index].senderUserId || next.type == "SYSTEM" || next.type == "LOOP"
     }
 
     // ---- sending ------------------------------------------------------------
@@ -619,6 +629,15 @@ fun ChatScreen(
                             playEffect = play,
                             groupSender = if (isGroup) nameOf(msg.senderUserId) else null,
                             transcriptsEnabled = features.transcripts == true,
+                            avatar = if (!msg.mine && isLastOfSenderRun(messages, i)) {
+                                {
+                                    SenderAvatar(
+                                        userId = msg.senderUserId,
+                                        name = if (isGroup) nameOf(msg.senderUserId) else peerName,
+                                        url = if (isGroup) memberAvatars[msg.senderUserId] else avatarUrl,
+                                    )
+                                }
+                            } else null,
                             callbacks = BubbleCallbacks(
                                 onLongPress = { actionsFor = it },
                                 onReply = { if (!it.isPending) replyTo = it },
@@ -714,10 +733,31 @@ fun ChatScreen(
                 cid?.let { id ->
                     typing[id]?.let { t ->
                         item(key = "typing") {
-                            Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                TypingDots(vibe.accent)
-                                Spacer(Modifier.width(8.dp))
-                                Text(if (t.state == "recording") "$peerName is recording a voice note" else "$peerName is typing", color = ViroColors.textSecondary, fontSize = 12.sp)
+                            // Their face and a quiet bubble of dots, the way
+                            // Messenger says it; who it is stays in the header.
+                            Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.Bottom) {
+                                SenderAvatar(
+                                    userId = t.userId,
+                                    name = if (isGroup) nameOf(t.userId) else peerName,
+                                    url = if (isGroup) memberAvatars[t.userId] else avatarUrl,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(topStart = vibe.corner, topEnd = vibe.corner, bottomStart = 4.dp, bottomEnd = vibe.corner))
+                                        .background(vibe.theirs)
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                ) {
+                                    if (t.state == "recording") {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.Mic, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("Recording a voice note", color = Color.White, fontSize = 13.sp)
+                                        }
+                                    } else {
+                                        TypingDots(vibe.accent)
+                                    }
+                                }
                             }
                         }
                     }

@@ -42,6 +42,13 @@ NOTES="${1:-$(git -C "$ROOT" log -1 --pretty=%s)}"
 # falling back to IPv4 — longer than the CLI's own 10s timeout, so every call
 # failed with a connect error that looked like an outage. Both are worked around
 # rather than requiring the operator to remember them.
+#
+# Separately, a token refresh once failed with "credentials are no longer
+# valid" even though the login was fine: Node only trusts its bundled CA list,
+# which cannot validate everything this machine's connections present, although
+# the Windows certificate store can. --use-system-ca adds that store while
+# leaving certificate verification enabled, which let the existing login work
+# without reauthentication.
 FIREBASE_BIN="${VIRO_FIREBASE_BIN:-}"
 if [[ -z "$FIREBASE_BIN" ]]; then
   if command -v firebase >/dev/null 2>&1; then
@@ -53,7 +60,7 @@ if [[ -z "$FIREBASE_BIN" ]]; then
     exit 1
   fi
 fi
-export NODE_OPTIONS="${NODE_OPTIONS:---dns-result-order=ipv4first}"
+export NODE_OPTIONS="${NODE_OPTIONS:---dns-result-order=ipv4first --use-system-ca}"
 
 echo "==> Building debug APK"
 (cd "$ANDROID_DIR" && ./gradlew :app:assembleDebug -q)
@@ -65,13 +72,28 @@ fi
 
 echo "==> Uploading $(du -h "$APK" | cut -f1) to Firebase App Distribution"
 if [[ -n "$TESTER_GROUP" ]]; then
-  "$FIREBASE_BIN" appdistribution:distribute "$APK" \
-    --app "$APP_ID" --project "$PROJECT" \
-    --release-notes "$NOTES" --groups "$TESTER_GROUP"
+  FLAGS=(--groups "$TESTER_GROUP")
 else
+  FLAGS=(--testers "$TESTERS")
+fi
+
+# The stored credentials intermittently fail their first use after the machine
+# has been idle — "credentials are no longer valid" — then work again without
+# reauthentication once any cheap authed call has refreshed the token. A
+# finished build should not be lost to that, so warm the token up first and
+# retry the upload once if it still fails.
+warm_auth() {
+  "$FIREBASE_BIN" apps:list --project "$PROJECT" >/dev/null 2>&1 || true
+}
+warm_auth
+if ! "$FIREBASE_BIN" appdistribution:distribute "$APK" \
+  --app "$APP_ID" --project "$PROJECT" \
+  --release-notes "$NOTES" "${FLAGS[@]}"; then
+  echo "==> Upload failed; refreshing the login token and retrying once" >&2
+  warm_auth
   "$FIREBASE_BIN" appdistribution:distribute "$APK" \
     --app "$APP_ID" --project "$PROJECT" \
-    --release-notes "$NOTES" --testers "$TESTERS"
+    --release-notes "$NOTES" "${FLAGS[@]}"
 fi
 
 echo "==> Done. Testers get an email; installs need 'unknown sources' allowed once."

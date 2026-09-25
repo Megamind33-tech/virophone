@@ -49,6 +49,8 @@ import com.viroreach.app.messaging.MediaFiles
 import com.viroreach.app.messaging.VoicePlayer
 import com.viroreach.app.messaging.VoiceRecorder
 import com.viroreach.core.designsystem.ViroColors
+import com.viroreach.core.designsystem.components.ViroAvatar
+import com.viroreach.core.designsystem.components.ViroAvatarSize
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
@@ -98,6 +100,12 @@ fun MessageRow(
     /** In a group: the sender's name above their incoming messages. */
     groupSender: String? = null,
     transcriptsEnabled: Boolean = false,
+    /**
+     * The sender's face beside their message, Messenger-style. Rendered only
+     * on incoming messages; the screen decides which rows of a run carry it
+     * (the last, bottom-aligned, reads as "this person said this").
+     */
+    avatar: (@Composable () -> Unit)? = null,
 ) {
     if (msg.type == "SYSTEM") {
         SystemRow(msg, senderLabel)
@@ -131,135 +139,141 @@ fun MessageRow(
             .padding(vertical = 2.dp),
         horizontalAlignment = align,
     ) {
-        Box {
-            if (playEffect && msg.effect != null) EffectOverlay(msg.effect!!, vibe)
-            Column(
-                Modifier
-                    .offset { IntOffset(drag.value.roundToInt(), 0) }
-                    // Swipe right to reply, as in WhatsApp.
-                    .pointerInput(msg.id) {
-                        detectHorizontalDragGestures(
-                            onDragEnd = {
-                                if (drag.value > 90f && !msg.deleted) {
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    callbacks.onReply(msg)
-                                }
-                                scope.launch { drag.animateTo(0f, tween(180)) }
+        Row(verticalAlignment = Alignment.Bottom) {
+            if (avatar != null && !msg.mine) {
+                avatar()
+                Spacer(Modifier.width(6.dp))
+            }
+            Box {
+                if (playEffect && msg.effect != null) EffectOverlay(msg.effect!!, vibe)
+                Column(
+                    Modifier
+                        .offset { IntOffset(drag.value.roundToInt(), 0) }
+                        // Swipe right to reply, as in WhatsApp.
+                        .pointerInput(msg.id) {
+                            detectHorizontalDragGestures(
+                                onDragEnd = {
+                                    if (drag.value > 90f && !msg.deleted) {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        callbacks.onReply(msg)
+                                    }
+                                    scope.launch { drag.animateTo(0f, tween(180)) }
+                                },
+                                onDragCancel = { scope.launch { drag.animateTo(0f) } },
+                            ) { _, amount ->
+                                scope.launch { drag.snapTo((drag.value + amount).coerceIn(0f, 160f)) }
+                            }
+                        }
+                        .widthIn(max = 300.dp)
+                        .clip(shape)
+                        .background(bubbleColor)
+                        .then(
+                            // A sealed message still being opened sits quietly
+                            // in its place, the way a deleted one does, rather
+                            // than as a full bubble shouting about itself.
+                            if (msg.deleted || msg.type == "ENCRYPTED") {
+                                Modifier.background(ViroColors.surface.copy(alpha = 0.5f), shape)
+                            } else {
+                                Modifier
                             },
-                            onDragCancel = { scope.launch { drag.animateTo(0f) } },
-                        ) { _, amount ->
-                            scope.launch { drag.snapTo((drag.value + amount).coerceIn(0f, 160f)) }
+                        )
+                        .combinedClickable(
+                            onClick = {
+                                when {
+                                    msg.outboxStatus == "FAILED" -> callbacks.onRetry(msg)
+                                    else -> Unit
+                                }
+                            },
+                            onLongClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                callbacks.onLongPress(msg)
+                            },
+                        )
+                        .padding(horizontal = if (bare) 2.dp else 12.dp, vertical = if (bare) 2.dp else 8.dp),
+                ) {
+                    if (groupSender != null && !msg.mine && !msg.deleted) {
+                        Text(groupSender, color = memberColor(msg.senderUserId), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    if (msg.forwarded && !msg.deleted) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Shortcut, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Forwarded", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp, fontStyle = FontStyle.Italic)
                         }
                     }
-                    .widthIn(max = 300.dp)
-                    .clip(shape)
-                    .background(bubbleColor)
-                    .then(
-                        // A sealed message still being opened sits quietly
-                        // in its place, the way a deleted one does, rather
-                        // than as a full bubble shouting about itself.
-                        if (msg.deleted || msg.type == "ENCRYPTED") {
-                            Modifier.background(ViroColors.surface.copy(alpha = 0.5f), shape)
-                        } else {
-                            Modifier
-                        },
-                    )
-                    .combinedClickable(
-                        onClick = {
-                            when {
-                                msg.outboxStatus == "FAILED" -> callbacks.onRetry(msg)
-                                else -> Unit
-                            }
-                        },
-                        onLongClick = {
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            callbacks.onLongPress(msg)
-                        },
-                    )
-                    .padding(horizontal = if (bare) 2.dp else 12.dp, vertical = if (bare) 2.dp else 8.dp),
-            ) {
-                if (groupSender != null && !msg.mine && !msg.deleted) {
-                    Text(groupSender, color = memberColor(msg.senderUserId), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                }
-                if (msg.forwarded && !msg.deleted) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Shortcut, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Forwarded", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp, fontStyle = FontStyle.Italic)
+                    msg.replyTo?.takeIf { !msg.deleted }?.let { reply ->
+                        ReplyQuote(
+                            author = senderLabel(reply.senderUserId ?: ""),
+                            text = when {
+                                reply.deleted == true -> "Deleted message"
+                                reply.type == "VOICE" -> "🎤 Voice message"
+                                reply.type == "IMAGE" -> "📷 Photo"
+                                else -> reply.body ?: ""
+                            },
+                            accent = if (msg.mine) Color.White else vibe.accent,
+                            onClick = { callbacks.onJumpTo(reply.id) },
+                        )
+                        Spacer(Modifier.height(6.dp))
                     }
-                }
-                msg.replyTo?.takeIf { !msg.deleted }?.let { reply ->
-                    ReplyQuote(
-                        author = senderLabel(reply.senderUserId ?: ""),
-                        text = when {
-                            reply.deleted == true -> "Deleted message"
-                            reply.type == "VOICE" -> "🎤 Voice message"
-                            reply.type == "IMAGE" -> "📷 Photo"
-                            else -> reply.body ?: ""
-                        },
-                        accent = if (msg.mine) Color.White else vibe.accent,
-                        onClick = { callbacks.onJumpTo(reply.id) },
-                    )
-                    Spacer(Modifier.height(6.dp))
-                }
-                when {
-                    msg.deleted -> Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Block, null, tint = ViroColors.textSecondary, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            if (msg.mine) "You deleted this message" else "This message was deleted",
+                    when {
+                        msg.deleted -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Block, null, tint = ViroColors.textSecondary, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                if (msg.mine) "You deleted this message" else "This message was deleted",
+                                color = ViroColors.textSecondary,
+                                fontStyle = FontStyle.Italic,
+                            )
+                        }
+                        msg.viewOnce -> ViewOnceContent(msg, onOpen = { callbacks.onOpenViewOnce(msg) })
+                        msg.type == "VOICE" -> {
+                            VoiceContent(msg, media, player, vibe, callbacks.onToggleVoice)
+                            // An encrypted voice note is noise to the server, so
+                            // there is nothing to offer: no transcript line.
+                            TranscriptLine(msg, transcriptsEnabled && msg.media?.sealedKey == null, callbacks.onTranscribe)
+                        }
+                        msg.type == "IMAGE" -> ImageContent(msg, media, callbacks.onOpenImage)
+                        msg.type == "POLL" -> PollContent(msg, vibe, senderLabel, callbacks.onVote)
+                        msg.type == "GIF" -> GifContent(msg)
+                        msg.type == "STICKER" -> StickerContent(msg)
+                        msg.type == "FILE" -> FileContent(msg, downloading = false, onOpen = callbacks.onOpenFile)
+                        msg.type == "LOCATION" -> msg.place?.let { place ->
+                            LocationContent(
+                                msg = msg,
+                                place = place,
+                                onOpen = callbacks.onOpenPlace,
+                                onStopSharing = callbacks.onStopSharingLocation,
+                            )
+                        } ?: Text("Location", color = Color.White, fontSize = 16.sp)
+                        // Sealed and not opened yet. Almost always this is a moment
+                        // while the retry queue gets to it, and it is replaced in
+                        // place when it opens; only a message this phone can never
+                        // open (sealed before it was signed in) says so.
+                        msg.type == "ENCRYPTED" -> Text(
+                            when {
+                                msg.isUnavailable -> "Not available on this phone"
+                                msg.isResending -> "Getting this message from their phone…"
+                                else -> "Decrypting message…"
+                            },
                             color = ViroColors.textSecondary,
+                            fontSize = 14.sp,
                             fontStyle = FontStyle.Italic,
                         )
+                        msg.type == "CONTACT" -> msg.contactCard?.let { card ->
+                            ContactContent(
+                                card = card,
+                                onMessage = callbacks.onMessageContact,
+                                onCall = callbacks.onCallContact,
+                                onSave = callbacks.onSaveContact,
+                            )
+                        } ?: Text("Shared contact", color = Color.White, fontSize = 16.sp)
+                        else -> {
+                            Text(withMentionsHighlighted(msg.body.orEmpty(), vibe.accent), color = Color.White, fontSize = 16.sp)
+                            msg.linkPreview?.let { LinkPreviewCard(it, media, msg.mine) }
+                        }
                     }
-                    msg.viewOnce -> ViewOnceContent(msg, onOpen = { callbacks.onOpenViewOnce(msg) })
-                    msg.type == "VOICE" -> {
-                        VoiceContent(msg, media, player, vibe, callbacks.onToggleVoice)
-                        // An encrypted voice note is noise to the server, so
-                        // there is nothing to offer: no transcript line.
-                        TranscriptLine(msg, transcriptsEnabled && msg.media?.sealedKey == null, callbacks.onTranscribe)
-                    }
-                    msg.type == "IMAGE" -> ImageContent(msg, media, callbacks.onOpenImage)
-                    msg.type == "POLL" -> PollContent(msg, vibe, senderLabel, callbacks.onVote)
-                    msg.type == "GIF" -> GifContent(msg)
-                    msg.type == "STICKER" -> StickerContent(msg)
-                    msg.type == "FILE" -> FileContent(msg, downloading = false, onOpen = callbacks.onOpenFile)
-                    msg.type == "LOCATION" -> msg.place?.let { place ->
-                        LocationContent(
-                            msg = msg,
-                            place = place,
-                            onOpen = callbacks.onOpenPlace,
-                            onStopSharing = callbacks.onStopSharingLocation,
-                        )
-                    } ?: Text("Location", color = Color.White, fontSize = 16.sp)
-                    // Sealed and not opened yet. Almost always this is a moment
-                    // while the retry queue gets to it, and it is replaced in
-                    // place when it opens; only a message this phone can never
-                    // open (sealed before it was signed in) says so.
-                    msg.type == "ENCRYPTED" -> Text(
-                        when {
-                            msg.isUnavailable -> "Not available on this phone"
-                            msg.isResending -> "Getting this message from their phone…"
-                            else -> "Decrypting message…"
-                        },
-                        color = ViroColors.textSecondary,
-                        fontSize = 14.sp,
-                        fontStyle = FontStyle.Italic,
-                    )
-                    msg.type == "CONTACT" -> msg.contactCard?.let { card ->
-                        ContactContent(
-                            card = card,
-                            onMessage = callbacks.onMessageContact,
-                            onCall = callbacks.onCallContact,
-                            onSave = callbacks.onSaveContact,
-                        )
-                    } ?: Text("Shared contact", color = Color.White, fontSize = 16.sp)
-                    else -> {
-                        Text(withMentionsHighlighted(msg.body.orEmpty(), vibe.accent), color = Color.White, fontSize = 16.sp)
-                        msg.linkPreview?.let { LinkPreviewCard(it, media, msg.mine) }
-                    }
+                    MetaLine(msg, delivery)
                 }
-                MetaLine(msg, delivery)
             }
         }
         if (msg.reactions.isNotEmpty() && !msg.deleted) {
@@ -273,6 +287,27 @@ fun MessageRow(
                 fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp).clickable { callbacks.onRetry(msg) },
             )
+        }
+    }
+}
+
+/**
+ * The small round face beside someone's message. Their profile photo when
+ * there is one; otherwise their initials on the same stable colour their name
+ * uses in groups, so a person reads as one person either way.
+ */
+@Composable
+fun SenderAvatar(userId: String, name: String, url: String?, modifier: Modifier = Modifier) {
+    if (!url.isNullOrBlank()) {
+        ViroAvatar(modifier, size = ViroAvatarSize.Tiny, imageUrl = url, displayName = name)
+    } else {
+        val initials = name.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+            .take(2).joinToString("") { it.first().uppercase() }.ifBlank { "?" }
+        Box(
+            modifier.size(ViroAvatarSize.Tiny.diameter).clip(CircleShape).background(memberColor(userId)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(initials, color = ViroColors.background, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
