@@ -194,6 +194,7 @@ fun ChatScreen(
     var replyTo by remember { mutableStateOf<ChatMessage?>(null) }
     var editing by remember { mutableStateOf<ChatMessage?>(null) }
     var actionsFor by remember { mutableStateOf<ChatMessage?>(null) }
+    var signalPicker by remember { mutableStateOf(false) }
     var reactionsFor by remember { mutableStateOf<ChatMessage?>(null) }
     var infoFor by remember { mutableStateOf<ChatMessage?>(null) }
     var forwardFrom by remember { mutableStateOf<ChatMessage?>(null) }
@@ -512,10 +513,8 @@ fun ChatScreen(
                     peerUserId != null -> ({ onCall(peerUserId, phone, peerName) })
                     else -> null
                 },
-                onHeartbeat = if (!isGroup && vibe.heartbeat && peerUserId != null) ({
-                    heartbeatVibration(context)
-                    sendOut(MessagingRepository.Outgoing(body = "💓 Thinking of you", effect = "heartbeat"))
-                }) else null,
+                // A signal is a reach, not a message: the 💓 opens the eight.
+                onHeartbeat = if (!isGroup && peerUserId != null) ({ signalPicker = true }) else null,
                 menuOpen = menuOpen,
                 onMenu = { menuOpen = it },
                 menu = {
@@ -878,6 +877,24 @@ fun ChatScreen(
     }
 
     // ---- sheets & dialogs ------------------------------------------------------
+    if (signalPicker) {
+        com.viroreach.app.signals.SignalPickerSheet(
+            peerName = peerName,
+            onSend = { kind ->
+                val target = peerUserId
+                if (target != null) {
+                    // The tap itself answers the hand, whatever the network
+                    // does with the signal.
+                    heartbeatVibration(context)
+                    scope.launch {
+                        runCatching { session.api.sendSignal(com.viroreach.core.network.SendSignalBody(target, kind)) }
+                            .onFailure { Toast.makeText(context, "Couldn't reach them just now.", Toast.LENGTH_SHORT).show() }
+                    }
+                }
+            },
+            onDismiss = { signalPicker = false },
+        )
+    }
     actionsFor?.let { m ->
         MessageActionsSheet(
             msg = m,

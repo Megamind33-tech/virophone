@@ -12,6 +12,7 @@ import { ContactsModule } from './contacts/contacts.module';
 import { DirectoryModule } from './directory/directory.module';
 import { ConnectionsModule } from './connections/connections.module';
 import { BlocksModule } from './blocks/blocks.module';
+import { SignalsModule } from './signals/signals.module';
 import { CallsModule } from './calls/calls.module';
 import { HealthModule } from './health/health.module';
 import { SecurityModule } from './security/security.module';
@@ -63,6 +64,7 @@ import { MomentsModule } from './moments/moments.module';
     DirectoryModule,
     ConnectionsModule,
     BlocksModule,
+    SignalsModule,
     SignalingDeliveryModule,
     CallsModule,
     HealthModule,

@@ -25,6 +25,14 @@ import com.viroreach.core.designsystem.components.ViroWallpaperConfig
 // A FragmentActivity (still a ComponentActivity) because the biometric prompt
 // behind chat lock needs one.
 class MainActivity : FragmentActivity() {
+
+    override fun onStart() {
+        super.onStart()
+        // Where a signal may be shown inside Viro; away from it, the system
+        // presentation takes over.
+        com.viroreach.app.signals.SignalPresenter.foreground = true
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -75,6 +83,11 @@ class MainActivity : FragmentActivity() {
                         }
                     }
                     ViroReachRoot()
+                    // A presence signal shows over whatever is open in Viro,
+                    // never only over a chat.
+                    com.viroreach.app.signals.ViroPresenceSurface { userId ->
+                        AppNavigation.request(AppNavigation.Target(screen = OPEN_CHAT, peerUserId = userId))
+                    }
                     com.viroreach.app.diagnostics.CrashReportPrompt()
                 }
             }
@@ -91,6 +104,7 @@ class MainActivity : FragmentActivity() {
      */
     override fun onStop() {
         super.onStop()
+        com.viroreach.app.signals.SignalPresenter.foreground = false
         com.viroreach.app.diagnostics.CrashReporter.backgrounded(this)
     }
 

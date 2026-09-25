@@ -120,6 +120,10 @@
             android:exported="false" />
 
         <receiver
+            android:name=".signals.SignalActionReceiver"
+            android:exported="false" />
+
+        <receiver
 
             android:name=".call.IncomingCallActionReceiver"
 

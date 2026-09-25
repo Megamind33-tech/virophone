@@ -171,6 +171,16 @@ interface ViroApiService {
     @HTTP(method = "DELETE", path = "api/v1/push/tokens", hasBody = true)
     suspend fun removePushToken(@Body body: RemovePushTokenBody)
 
+    // --- Intimate signals: a presence event, not a message ---
+    @POST("api/v1/signals")
+    suspend fun sendSignal(@Body body: SendSignalBody): SignalSendResult
+
+    @POST("api/v1/signals/{id}/ack")
+    suspend fun ackSignal(@Path("id") id: String, @Body body: AckSignalBody)
+
+    @POST("api/v1/signals/{id}/respond")
+    suspend fun respondSignal(@Path("id") id: String, @Body body: RespondSignalBody)
+
     // --- Call history / telemetry ---
     @GET("api/v1/calls/history")
     suspend fun getCallHistory(): List<CallHistoryEntry>
@@ -442,6 +452,11 @@ data class OfflineCallTicket(val ticket: String, val peerUserId: String, val exp
 
 // Push
 data class RegisterPushTokenBody(val token: String, val provider: String = "fcm")
+
+data class SendSignalBody(val toUserId: String, val kind: String)
+data class SignalSendResult(val ok: Boolean, val count: Int = 1, val todayCount: Int = 1, val mutual: Boolean = false)
+data class AckSignalBody(val state: String)
+data class RespondSignalBody(val kind: String)
 data class RemovePushTokenBody(val token: String)
 
 // Call history / telemetry

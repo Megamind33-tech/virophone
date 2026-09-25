@@ -7,6 +7,7 @@ import com.viroreach.app.MainActivity
 import com.viroreach.app.relationships.ReminderNotifications
 import com.viroreach.app.relationships.ReminderScheduler
 import com.viroreach.app.session.SessionManager
+import com.viroreach.app.signals.SignalPresenter
 import com.viroreach.feature.calling.IncomingCallInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +74,14 @@ class ViroFirebaseMessagingService : FirebaseMessagingService() {
                 body = message.notification?.body.orEmpty(),
                 key = data["connectionId"].orEmpty(),
             )
+            return
+        }
+        if (data["type"] == "signal" || data["type"] == "signal.mutual" || data["type"] == "signal.response") {
+            // A signal is data, not a notification message, so it reaches this
+            // code in every app state — including after the process was gone.
+            // The coordinator decides where it is felt; repeats of one signal
+            // replace what it already said instead of stacking.
+            SignalPresenter.onResponseSignal(applicationContext, data)
             return
         }
         if (data["type"] != TYPE_INCOMING_CALL) {
