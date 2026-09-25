@@ -1,6 +1,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { WsAdapter } from '@nestjs/platform-ws';
+import { json } from 'express';
 import { AppModule } from '../../src/app.module';
 import { Throttle } from '@nestjs/throttler';
 import { AuthController } from '../../src/auth/auth.controller';
@@ -21,8 +22,13 @@ export async function createTestApp(options: { manyOtpFixtures?: boolean } = {})
     imports: [AppModule],
   }).compile();
 
-  const app = moduleFixture.createNestApplication();
+  // Mirrors main.ts: sealed sends carry one ciphertext per recipient device and
+  // exceed express's 100 KB default, so tests must run behind the same raised
+  // limit production uses — otherwise a too-small body limit never fails a
+  // test while breaking every real encrypted send.
+  const app = moduleFixture.createNestApplication({ bodyParser: false });
   app.useWebSocketAdapter(new WsAdapter(app));
+  app.use(json({ limit: '5mb' }));
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   await app.init();
   return app;

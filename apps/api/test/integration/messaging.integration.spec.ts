@@ -178,4 +178,24 @@ describe('Messaging end-to-end', () => {
       .send({ toUserId: bob.userId, body: 'hi' });
     expect(send.status).toBe(403);
   });
+
+  it('accepts a send whose sealed copies exceed the 100 KB express default', async () => {
+    if (skip()) return;
+    const alice = await registerUser(app, '+260978000021', 'a3-key');
+    // The send DTO allows 512 envelopes — one sealed copy per recipient
+    // device — and fresh-session ciphertexts make such a body far larger than
+    // express's 100 KB JSON default, which once refused every real encrypted
+    // send as "request entity too large" (shown as a generic unexpected
+    // error). The device ids are not real, so the outcome is a 4xx from
+    // validation; it must never be 413 from the body parser.
+    const envelopes = Array.from({ length: 512 }, (_, i) => ({
+      deviceId: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      ciphertext: 'A'.repeat(2048),
+    }));
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/messages')
+      .set('Authorization', `Bearer ${alice.accessToken}`)
+      .send({ toUserId: alice.userId, body: 'big', clientMsgId: 'c-big', envelopes });
+    expect(res.status).not.toBe(413);
+  });
 });
