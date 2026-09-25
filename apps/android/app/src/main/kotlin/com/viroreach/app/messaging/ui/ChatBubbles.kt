@@ -266,8 +266,9 @@ fun MessageRow(
             ReactionsRow(msg, onClick = { callbacks.onReactionTap(msg) })
         }
         if (msg.outboxStatus == "FAILED") {
+            val why = ((msg.metadata["outbox"] as? Map<*, *>)?.get("error") as? String)?.takeIf { it.isNotBlank() }
             Text(
-                "Not sent. Tap to retry.",
+                if (why != null) "Not sent — ${why.trimEnd('.')}. Tap to retry." else "Not sent. Tap to retry.",
                 color = ViroColors.consumerError,
                 fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp).clickable { callbacks.onRetry(msg) },

@@ -1212,15 +1212,23 @@ class MessagingRepository(
             } catch (e: Exception) {
                 val failure = ApiDiagnostics.parseFailure("POST", "/api/v1/messages", e)
                 Log.w(TAG, "OUTBOX_SEND_FAILED ${failure.summary()}")
-                // 4xx will not fix itself; show it as failed. Anything else retries.
-                val permanent = failure.httpStatus in 400..499
+                val offline = e is java.io.IOException
                 // Written only if the row is still the outbox copy: a late
                 // failure must not turn a message that did go out back into one
                 // that is "sending".
-                dao.message(current.id)?.takeIf { it.status == "SENDING" || it.status == "FAILED" }?.let {
-                    dao.upsertMessages(listOf(it.copy(status = if (permanent) "FAILED" else "SENDING")))
+                val latest = dao.message(current.id)?.takeIf { it.status == "SENDING" || it.status == "FAILED" }
+                // A clock that never moves tells nobody anything. Offline, the
+                // message waits, as on WhatsApp; anything else gets a few tries,
+                // then says it was not sent, and why, with "tap to retry" — and
+                // keeps retrying by itself on every flush all the same.
+                val attempts = latest?.let { outboxAttempts(it) + 1 } ?: 0
+                val reason = sendFailureReason(e, failure.httpStatus, failure.message)
+                val gaveUp = !offline && (failure.httpStatus in 400..499 || attempts >= SEND_ATTEMPTS_BEFORE_FAILED)
+                latest?.let {
+                    dao.upsertMessages(listOf(withOutboxFailure(it, attempts, if (offline) null else reason).copy(status = if (gaveUp) "FAILED" else "SENDING")))
                 }
-                if (permanent) _lastError.value = failure.message
+                Log.w(TAG, "OUTBOX_ATTEMPT_FAILED attempt=$attempts offline=$offline reason=${e.javaClass.simpleName}")
+                if (gaveUp && attempts <= SEND_ATTEMPTS_BEFORE_FAILED) _lastError.value = reason
                 // No connection: nothing behind it will get through either, and
                 // the next reconnect flushes again. Any other failure belongs to
                 // this one message — the ones queued after it still go, the way
@@ -1228,6 +1236,30 @@ class MessagingRepository(
                 if (e is java.io.IOException) break
             }
         }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun outboxAttempts(row: MessageEntity): Int =
+        ((ChatJson.map(row.metadataJson)["outbox"] as? Map<String, Any?>)?.get("attempts") as? Number)?.toInt() ?: 0
+
+    @Suppress("UNCHECKED_CAST")
+    private fun withOutboxFailure(row: MessageEntity, attempts: Int, reason: String?): MessageEntity {
+        val meta = ChatJson.map(row.metadataJson).toMutableMap()
+        val out = ((meta["outbox"] as? Map<String, Any?>) ?: emptyMap()).toMutableMap()
+        out["attempts"] = attempts
+        if (reason != null) out["error"] = reason else out.remove("error")
+        meta["outbox"] = out
+        return row.copy(metadataJson = ChatJson.toJson(meta))
+    }
+
+    /** What went wrong, in words the person can act on. Never contains the message. */
+    private fun sendFailureReason(e: Exception, httpStatus: Int, serverMessage: String?): String = when {
+        e is com.viroreach.core.e2ee.SealUnavailableException ->
+            "Their phone isn't set up for encrypted messages right now"
+        httpStatus in 400..599 && !serverMessage.isNullOrBlank() -> serverMessage
+        httpStatus >= 500 -> "Viro's server had a problem"
+        e is IllegalStateException && !e.message.isNullOrBlank() -> e.message!!
+        else -> "Something went wrong sending this"
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -1452,18 +1484,15 @@ class MessagingRepository(
                 "multi" to (it.multi == true),
             )
         }
-        val envelopes = e2ee.seal(
-            me,
-            audience,
-            SealedMessage.pack(
-                SealedPayload(
-                    type = row.type,
-                    body = row.body,
-                    meta = payloadMeta.takeIf { it.isNotEmpty() },
-                    media = mediaRef,
-                ),
+        val packed = SealedMessage.pack(
+            SealedPayload(
+                type = row.type,
+                body = row.body,
+                meta = payloadMeta.takeIf { it.isNotEmpty() },
+                media = mediaRef,
             ),
         )
+        val envelopes = sealRepairing(me, audience, packed)
         if (envelopes.isEmpty()) {
             // The server would refuse this anyway; say something the person can
             // act on rather than failing silently.
@@ -1524,6 +1553,23 @@ class MessagingRepository(
             dao.moveMessages(convId, res.conversationId)
             _conversationMoved.tryEmit(convId to res.conversationId)
         }
+    }
+
+    /**
+     * Seals for everyone in the chat, and when that cannot be done the
+     * obvious way, repairs what usually stands in the way and tries once more
+     * before the message is left waiting: this phone's own keys, set up again
+     * right after a sign-in, and the other person's device list, which is out
+     * of date the moment they sign in somewhere new.
+     */
+    private suspend fun sealRepairing(me: String, audience: List<String>, packed: String): List<com.viroreach.core.e2ee.SealedEnvelope> {
+        val first = runCatching { e2ee.seal(me, audience, packed) }
+        first.getOrNull()?.takeIf { it.isNotEmpty() }?.let { return it }
+        first.exceptionOrNull()?.let { if (it is java.io.IOException || it is CancellationException) throw it }
+        Log.w(TAG, "SEAL_REPAIRING cause=${first.exceptionOrNull()?.javaClass?.simpleName ?: "EMPTY"}")
+        if (!e2ee.isRegistered()) setUpEncryption()
+        e2ee.forgetDevices(audience + me)
+        return e2ee.seal(me, audience, packed)
     }
 
     /** How long a live share runs, as the person chose it. */
@@ -2070,6 +2116,8 @@ class MessagingRepository(
         private const val RESEND_ANSWER_EVERY_MS = 10 * 60 * 1000L
         /** Retries of a drifting session before asking the author instead. */
         private const val RESEND_AFTER_ATTEMPTS = 3
+        /** Tries before a message that is not going through says so. */
+        private const val SEND_ATTEMPTS_BEFORE_FAILED = 3
         /** A message opened later than this after it was sent is not announced. */
         private const val LATE_NOTIFY_MS = 6 * 60 * 60 * 1000L
         /** Where an opened Loop answer is kept: a sealed thing opens once. */
