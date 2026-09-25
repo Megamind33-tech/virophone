@@ -496,6 +496,9 @@ fun YouScreen(
                             deleting = true
                             runCatching { session.api.deleteAccount() }
                                 .onSuccess {
+                                    // A deleted account's messages and keys
+                                    // have no one left to return to them.
+                                    runCatching { session.messaging.clearLocal() }
                                     viewModel.logout()
                                     confirmDelete = false
                                     onLogout()

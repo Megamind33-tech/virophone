@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, IsNull } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import { v4 as uuidv4 } from 'uuid';
 import { createHmac, randomInt } from 'crypto';
@@ -179,13 +179,7 @@ export class AuthService {
       await this.emailRepo.save(emailIdentity);
     }
 
-    const device = this.deviceRepo.create({
-      userId,
-      publicKey: devicePublicKey,
-      platform,
-      appVersion,
-    });
-    await this.deviceRepo.save(device);
+    const device = await this.signInDevice(userId, devicePublicKey, platform, appVersion);
 
     const tokens = await this.createSession(userId, device.id);
 
@@ -274,13 +268,7 @@ export class AuthService {
       await this.phoneRepo.save(phoneIdentity);
     }
 
-    const device = this.deviceRepo.create({
-      userId,
-      publicKey: devicePublicKey,
-      platform,
-      appVersion,
-    });
-    await this.deviceRepo.save(device);
+    const device = await this.signInDevice(userId, devicePublicKey, platform, appVersion);
 
     const tokens = await this.createSession(userId, device.id);
 
@@ -343,6 +331,34 @@ export class AuthService {
     return this.createSession(session.userId, session.deviceId, session.familyId);
   }
 
+  /**
+   * The device a sign-in lands on.
+   *
+   * The same install signing back in to the same account is the same device:
+   * its install key (kept in the phone's keystore for the life of the install)
+   * matches, and logging out never revoked it. Reusing it is what lets that
+   * phone read everything that was sealed for it while it was signed out, and
+   * keep the encryption keys it already has — a new device every time made
+   * every earlier message unreadable, on the phone and to its owner. A device
+   * the person removed stays removed; a different install, or a reinstall, is
+   * a new device, as it has to be: its keys are gone.
+   */
+  private async signInDevice(userId: string, devicePublicKey: string, platform: string, appVersion: string) {
+    const existing = devicePublicKey
+      ? await this.deviceRepo.findOne({
+          where: { userId, publicKey: devicePublicKey, revokedAt: IsNull() },
+          order: { createdAt: 'DESC' },
+        })
+      : null;
+    if (existing) {
+      existing.platform = platform;
+      existing.appVersion = appVersion;
+      existing.lastSeenAt = new Date();
+      return this.deviceRepo.save(existing);
+    }
+    return this.deviceRepo.save(this.deviceRepo.create({ userId, publicKey: devicePublicKey, platform, appVersion }));
+  }
+
   async logout(userId: string, deviceId: string) {
     await this.sessionRepo.update(
       { userId, deviceId, revokedAt: null as unknown as undefined },
@@ -365,13 +381,7 @@ export class AuthService {
     const { userId, email, isNewUser } =
       await this.firebaseAuthService.resolveUserFromIdToken(idToken);
 
-    const device = this.deviceRepo.create({
-      userId,
-      publicKey: devicePublicKey,
-      platform,
-      appVersion,
-    });
-    await this.deviceRepo.save(device);
+    const device = await this.signInDevice(userId, devicePublicKey, platform, appVersion);
 
     const tokens = await this.createSession(userId, device.id);
     return {

@@ -362,7 +362,36 @@ abstract class MessagingDatabase : RoomDatabase() {
     abstract fun dao(): MessagingDao
 
     companion object {
-        @Volatile private var instance: MessagingDatabase? = null
+        /** The file every build before per-account storage kept all messages in. */
+        private const val LEGACY_NAME = "viro_messaging.db"
+        private val instances = java.util.concurrent.ConcurrentHashMap<String, MessagingDatabase>()
+        @Volatile private var account: String? = null
+
+        /**
+         * Which account's messages are read and written from now on.
+         *
+         * Each account on this phone keeps its own file. Signing out, or
+         * another account signing in, no longer deletes anything: the other
+         * account's messages simply are not the ones open. That is what lets
+         * two people share a phone, or one person sign out and back in,
+         * without losing a conversation — the words in an end-to-end
+         * encrypted chat exist nowhere else.
+         */
+        fun useAccount(accountId: String?) {
+            account = accountId
+        }
+
+        /**
+         * Hands the single file an earlier build kept to the account it belonged
+         * to, once. Called before anything opens a database.
+         */
+        fun adoptLegacy(context: Context, owner: String) {
+            adoptFiles(context, LEGACY_NAME, nameFor(owner))
+        }
+
+        internal fun nameFor(accountId: String?): String =
+            if (accountId == null) "viro_messaging_signed_out.db"
+            else "viro_messaging_" + accountId.filter { it.isLetterOrDigit() || it == '-' } + ".db"
 
         /**
          * From v5 on, schema changes are migrated rather than rebuilt.
@@ -400,19 +429,36 @@ abstract class MessagingDatabase : RoomDatabase() {
             }
         }
 
-        fun get(context: Context): MessagingDatabase =
-            instance ?: synchronized(this) {
-                instance ?: Room.databaseBuilder(
+        fun get(context: Context): MessagingDatabase {
+            val name = nameFor(account)
+            return instances[name] ?: synchronized(this) {
+                instances[name] ?: Room.databaseBuilder(
                     context.applicationContext,
                     MessagingDatabase::class.java,
-                    "viro_messaging.db",
+                    name,
                 )
                     .addMigrations(MIGRATION_4_5, MIGRATION_5_6)
                     // Only for a version pair with no migration above — which
                     // now means a bug, not a plan.
                     .fallbackToDestructiveMigration()
                     .build()
-                    .also { instance = it }
+                    .also { instances[name] = it }
             }
+        }
+    }
+}
+
+/**
+ * Renames a Room database's files (with its journal and WAL) to a new name,
+ * only when the new one does not exist yet and nothing has opened either.
+ * Shared by the per-account stores for adopting the file an earlier build left.
+ */
+fun adoptFiles(context: Context, from: String, to: String) {
+    val source = context.getDatabasePath(from)
+    val target = context.getDatabasePath(to)
+    if (!source.exists() || target.exists()) return
+    for (suffix in listOf("", "-wal", "-shm", "-journal")) {
+        val s = java.io.File(source.path + suffix)
+        if (s.exists()) s.renameTo(java.io.File(target.path + suffix))
     }
 }

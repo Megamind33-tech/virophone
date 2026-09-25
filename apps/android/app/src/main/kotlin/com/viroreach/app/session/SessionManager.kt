@@ -39,6 +39,20 @@ import com.viroreach.core.network.UpdatePresenceBody
 class SessionManager private constructor(context: Context) {
     private val appContext = context.applicationContext
     val tokenStore: TokenStore = TokenStore(appContext)
+
+    /**
+     * Messages and encryption keys are kept per account on this phone. Before
+     * anything opens them: the files an earlier build kept for everyone go to
+     * the account that owned them, and the account in use is selected.
+     */
+    private val storageAccount: String? = (tokenStore.getUserId() ?: tokenStore.getLastUserId()).also { owner ->
+        if (owner != null) {
+            runCatching { com.viroreach.core.database.MessagingDatabase.adoptLegacy(appContext, owner) }
+            runCatching { com.viroreach.core.e2ee.E2eeDatabase.adoptLegacy(appContext, owner) }
+        }
+        com.viroreach.core.database.MessagingDatabase.useAccount(owner)
+        com.viroreach.core.e2ee.E2eeDatabase.useAccount(owner)
+    }
     val testIdentityStore: TestIdentityStore = TestIdentityStore(appContext)
     val sessionTokenManager: SessionTokenManager = SessionTokenManager(tokenStore)
     private val viroApiClient: ViroApiClient = ViroApiClient(sessionTokenManager)
@@ -427,6 +441,13 @@ class SessionManager private constructor(context: Context) {
         isSessionRestore: Boolean = false,
     ) {
         val previous = tokenStore.getLastUserId()
+        // Messages and keys follow the account: its own files, untouched by
+        // anyone else signing in on this phone and waiting for it to return.
+        if (previous != newUserId) {
+            com.viroreach.core.database.MessagingDatabase.useAccount(newUserId)
+            com.viroreach.core.e2ee.E2eeDatabase.useAccount(newUserId)
+            runCatching { messaging.onAccountChanged() }
+        }
         when {
             // Same account signing back in: keep everything. Favourites and
             // custom names exist nowhere else, so clearing here loses them.
@@ -464,7 +485,8 @@ class SessionManager private constructor(context: Context) {
     private suspend fun clearLocalUserData(reason: String) {
         moments.clear()
         android.util.Log.i("ViroSession", "CLEARING_LOCAL_USER_DATA reason=$reason")
-        runCatching { messaging.clearLocal() }
+        // Messages and encryption keys are not cleared here any more: each
+        // account keeps its own, and the other account's are not the ones open.
         runCatching { promotions.clear() }
         runCatching { contactsRepository.clearCache() }
         runCatching { callHistoryStore.clearAll() }

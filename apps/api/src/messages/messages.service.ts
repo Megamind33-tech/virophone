@@ -1043,8 +1043,34 @@ export class MessagesService {
       conversationId: m.conversationId,
       payload: { conversationId: m.conversationId, messageId: m.id, userId, deviceId },
     };
+    // Kept until answered: the author's phone may be offline — or, on a phone
+    // shared by two accounts, signed out while this one asks.
+    await this.msgRepo.query(
+      `INSERT INTO message_resend_requests (message_id, requester_device_id, requester_user_id, author_user_id)
+       VALUES ($1, $2, $3, $4) ON CONFLICT (message_id, requester_device_id) DO NOTHING`,
+      [m.id, deviceId, userId, m.senderUserId],
+    );
     const forwarded = await this.realtime.deliverToUser(m.senderUserId, frame);
     return { ok: true, forwarded: !!forwarded };
+  }
+
+  /** Requests for this person's own messages still waiting on an answer. */
+  async pendingResendRequests(userId: string) {
+    const rows: any[] = await this.msgRepo.query(
+      `SELECT r.message_id, r.requester_user_id, r.requester_device_id, m.conversation_id
+         FROM message_resend_requests r JOIN messages m ON m.id = r.message_id
+        WHERE r.author_user_id = $1 AND m.deleted_at IS NULL AND r.created_at > now() - interval '14 days'
+        ORDER BY r.created_at LIMIT 500`,
+      [userId],
+    );
+    return {
+      requests: rows.map((r) => ({
+        messageId: r.message_id,
+        conversationId: r.conversation_id,
+        userId: r.requester_user_id,
+        deviceId: r.requester_device_id,
+      })),
+    };
   }
 
   /**
@@ -1092,6 +1118,10 @@ export class MessagesService {
     const now = new Date();
     m.updatedAt = now;
     await this.msgRepo.update({ id: m.id }, { updatedAt: now });
+    await this.msgRepo.query(
+      `DELETE FROM message_resend_requests WHERE message_id = $1 AND requester_device_id = ANY($2::uuid[])`,
+      [m.id, sealed.map((e) => e.deviceId)],
+    );
     const owners = [...new Set(sealed.map((e) => ownerOf.get(e.deviceId)!))];
     await this.emitMessage('message.updated', m, owners);
     return { ok: true };

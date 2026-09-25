@@ -58,7 +58,8 @@ class BackupManager(
     private val baseUrl: String,
 ) {
     private val appContext = context.applicationContext
-    private val dao = MessagingDatabase.get(appContext).dao()
+    // Looked up each time: it is the signed-in account's store, and that can change.
+    private val dao get() = MessagingDatabase.get(appContext).dao()
 
     /**
      * The recovery key is kept here so backups can run without asking for it

@@ -135,6 +135,42 @@ unavailable.
 **Needs the API deployed** (`scripts/vps-deploy.sh`) for the two new endpoints.
 Until then requests fail quietly and messages stay pending.
 
+## Follow-up: signing out, and several accounts on one phone
+
+Logging out used to destroy that account's messages and keys on the phone.
+Two things did it:
+
+- Every sign-in created a brand-new server device with brand-new keys.
+- Another account signing in wiped the message store and the key store.
+
+So everything sealed earlier was addressed to a device that no longer
+existed, and my own sent words, which only the phone kept, were gone.
+
+Now:
+
+- **Same phone, same account, same device.** Sign-in reuses the device whose
+  install key matches: the Android Keystore key the app has had since it was
+  installed. Logout never revoked it, so its published keys are still there.
+  A removed device stays removed, and a reinstall or another phone is a new
+  device.
+- **Each account keeps its own store on the phone.** Messages go in
+  `viro_messaging_<account>.db` and keys in `viro_e2ee_<account>.db`.
+  Switching accounts switches which one is open. Nothing is deleted, except
+  when the account itself is deleted. On upgrade, the single files an earlier
+  build kept go to the account that owned them.
+- **Re-send requests are kept on the server** (`message_resend_requests`)
+  until the author answers. The author's phone collects them after each sync,
+  so they work even when the author is the account currently signed out on
+  the same phone.
+
+Accounts whose keys an earlier build had already wiped get new keys on their
+existing device. The first messages to them recover through the re-send
+request, and after that everything is direct.
+
+Tests: one phone with two accounts across sign-outs (real libsignal); same
+install back on the same device (API integration); a waiting re-send request
+collected by its author.
+
 ## Debug diagnostics
 
 Debug builds log one line per state change under the tag `ViroE2eeMsg`,

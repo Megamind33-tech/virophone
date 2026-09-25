@@ -237,4 +237,33 @@ class TwoPhonesTest {
         expect(a, send(b, a, "got them"), "got them")
         expect(b, send(a, b, "great"), "great")
     }
+
+    // ------------------------------------------ one phone, two accounts
+
+    @Test fun `two accounts on one phone keep reading each other across sign-outs`() = runBlocking {
+        // One phone: each account has its own key store on it, and the server
+        // hands each account back the same device when it signs in again.
+        val aliceStore = Phone.newDb()
+        val bobStore = Phone.newDb()
+        val alice = Phone("alice", "a1", server, aliceStore)
+        assertTrue(alice.engine.ensureRegistered("alice", "a1"))
+        val bobOnce = Phone("bob", "b1", server, bobStore)
+        assertTrue(bobOnce.engine.ensureRegistered("bob", "b1"))
+
+        // Alice is signed in and writes while Bob is signed out.
+        val sent = (1..3).map { send(alice, bobOnce, "while you were out $it") }
+
+        // Alice signs out, Bob signs in on the same phone: his own keys, his
+        // own device, and every message waiting for him opens.
+        val bob = Phone("bob", "b1", server, bobStore)
+        assertTrue(bob.engine.ensureRegistered("bob", "b1"))
+        sent.forEachIndexed { i, w -> expect(bob, w, "while you were out ${i + 1}") }
+        val reply = send(bob, alice, "got all three")
+
+        // Bob signs out, Alice back in: her keys were never touched.
+        val aliceAgain = Phone("alice", "a1", server, aliceStore)
+        assertTrue(aliceAgain.engine.ensureRegistered("alice", "a1"))
+        expect(aliceAgain, reply, "got all three")
+        expect(bob, send(aliceAgain, bob, "good"), "good")
+    }
 }

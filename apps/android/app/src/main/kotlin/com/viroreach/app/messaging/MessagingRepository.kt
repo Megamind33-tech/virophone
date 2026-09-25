@@ -104,7 +104,12 @@ class MessagingRepository(
     keysApi: ViroKeysApi,
 ) {
     private val appContext = context.applicationContext
-    private val dao = MessagingDatabase.get(appContext).dao()
+    /**
+     * The signed-in account's own message store, looked up each time: each
+     * account on this phone keeps its own, and which one is open changes when
+     * somebody else signs in — without anything being deleted.
+     */
+    private val dao get() = MessagingDatabase.get(appContext).dao()
 
     /** End-to-end encryption: this phone's keys, sessions, and sealing. */
     val e2ee = E2eeEngine(appContext, keysApi)
@@ -122,6 +127,8 @@ class MessagingRepository(
      * readable one. Held for the whole of each batch, so that cannot happen.
      */
     private val ingestMutex = Mutex()
+    /** When waiting re-send requests were last collected from the server. */
+    @Volatile private var lastResendSweep = 0L
     /** One retry pass at a time; a timer tick skips one already running, an event waits for it. */
     private val retryMutex = Mutex()
     /** The one-off repair of sealed rows kept from before the retry queue existed. */
@@ -239,7 +246,21 @@ class MessagingRepository(
         runCatching { api.features() }.onSuccess { _features.value = it }
     }
 
-    /** Wipes everything local: another account is signing in. */
+    /**
+     * Another account is now the one signed in. Its messages are in its own
+     * store, which [dao] now opens; what is held in memory about the previous
+     * one is let go, and the one-off repairs run again for this account.
+     */
+    fun onAccountChanged() {
+        openConversationId = null
+        _typing.value = emptyMap()
+        _present.value = emptyMap()
+        repaired.set(false)
+        lastResendSweep = 0L
+        e2ee.onAccountChanged()
+    }
+
+    /** Wipes this account's local messages and keys: the account itself is gone. */
     suspend fun clearLocal() {
         dao.wipeAll()
         media.wipe()
@@ -307,6 +328,7 @@ class MessagingRepository(
             if (initial) Log.i(TAG, "SYNC_INITIAL_DONE")
             _lastError.value = null
             scope.launch { retryPendingDecryption("sync") }
+            scope.launch { answerWaitingResendRequests() }
             true
         } catch (e: Exception) {
             Log.w(TAG, "SYNC_FAILED ${e.message}")
@@ -634,6 +656,23 @@ class MessagingRepository(
         val messageId = p.optString("messageId").takeIf { it.isNotBlank() } ?: return
         val userId = p.optString("userId").takeIf { it.isNotBlank() } ?: return
         val deviceId = p.optString("deviceId").takeIf { it.isNotBlank() } ?: return
+        answerResend(messageId, userId, deviceId)
+    }
+
+    /**
+     * Requests that waited on the server while this account was signed out —
+     * on a shared phone, while the very account asking was the one signed in.
+     * Collected after a sync, at most every few minutes.
+     */
+    private suspend fun answerWaitingResendRequests() {
+        val now = System.currentTimeMillis()
+        if (now - lastResendSweep < RESEND_SWEEP_MS) return
+        lastResendSweep = now
+        val waiting = runCatching { api.pendingResendRequests().requests.orEmpty() }.getOrElse { return }
+        for (r in waiting) answerResend(r.messageId, r.userId, r.deviceId)
+    }
+
+    private suspend fun answerResend(messageId: String, userId: String, deviceId: String) {
         val row = dao.message(messageId) ?: return
         // Only my own words, and only ones this phone can actually read.
         if (row.senderUserId != myUserId() || row.type == TYPE_ENCRYPTED || row.deletedAt != null) return
@@ -1934,6 +1973,8 @@ class MessagingRepository(
         private const val REPAIR_PAGES = 10
         /** Set once the earlier build's unavailable messages have been put back in line. */
         private const val KEY_REQUEUED_V1 = "sealed_requeued_v1"
+        /** How often waiting re-send requests are collected from the server. */
+        private const val RESEND_SWEEP_MS = 3 * 60 * 1000L
         /** Queue reason prefix for a message waiting on its author's phone. */
         private const val RESEND_REASON = "RESEND:"
         /** When this phone last asked for a message again. */

@@ -281,7 +281,34 @@ abstract class E2eeDatabase : RoomDatabase() {
     abstract fun dao(): E2eeDao
 
     companion object {
-        @Volatile private var instance: E2eeDatabase? = null
+        /** The file every build before per-account storage kept this phone's keys in. */
+        private const val LEGACY_NAME = "viro_e2ee.db"
+        private val instances = java.util.concurrent.ConcurrentHashMap<String, E2eeDatabase>()
+        @Volatile private var account: String? = null
+
+        /**
+         * Which account's keys and sessions are used from now on. Each account
+         * on this phone keeps its own, so signing out or switching accounts no
+         * longer throws away the keys everything already sealed to it needs.
+         */
+        fun useAccount(accountId: String?) {
+            account = accountId
+        }
+
+        /** Hands the single key file an earlier build kept to its owner, once. */
+        fun adoptLegacy(context: Context, owner: String) {
+            val source = context.getDatabasePath(LEGACY_NAME)
+            val target = context.getDatabasePath(nameFor(owner))
+            if (!source.exists() || target.exists()) return
+            for (suffix in listOf("", "-wal", "-shm", "-journal")) {
+                val f = java.io.File(source.path + suffix)
+                if (f.exists()) f.renameTo(java.io.File(target.path + suffix))
+            }
+        }
+
+        internal fun nameFor(accountId: String?): String =
+            if (accountId == null) "viro_e2ee_signed_out.db"
+            else "viro_e2ee_" + accountId.filter { it.isLetterOrDigit() || it == '-' } + ".db"
 
         /**
          * Adds publishedAt. Every existing install gets 0, which is the honest
@@ -305,18 +332,20 @@ abstract class E2eeDatabase : RoomDatabase() {
             }
         }
 
-        fun get(context: Context): E2eeDatabase =
-            instance ?: synchronized(this) {
-                instance ?: Room.databaseBuilder(
+        fun get(context: Context): E2eeDatabase {
+            val name = nameFor(account)
+            return instances[name] ?: synchronized(this) {
+                instances[name] ?: Room.databaseBuilder(
                     context.applicationContext,
                     E2eeDatabase::class.java,
-                    "viro_e2ee.db",
+                    name,
                 )
                     // Deliberately no destructive fallback: see the note at the
                     // top of this file. Losing this file loses the chats.
                     .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
-                    .also { instance = it }
+                    .also { instances[name] = it }
             }
+        }
     }
 }

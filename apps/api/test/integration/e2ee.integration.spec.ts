@@ -766,6 +766,34 @@ describe('End-to-end encryption (server)', () => {
     expect(new Date(after[0].updated_at).getTime()).toBeGreaterThan(new Date(before[0].updated_at).getTime());
   });
 
+  it('keeps a request to seal again until the author answers it', async () => {
+    if (skip()) return;
+    const sent = await http()
+      .post('/api/v1/messages')
+      .set(as(alicePhone))
+      .send({ conversationId: cid, clientMsgId: 'enc-waiting', envelopes: everyone('while you were away') })
+      .expect(201);
+    const id = sent.body.message.id;
+    await http().post(`/api/v1/messages/${id}/resend-request`).set(as(bobPhone)).expect(201);
+    await http().post(`/api/v1/messages/${id}/resend-request`).set(as(bobPhone)).expect(201);
+
+    const waiting = await http().get('/api/v1/messages/resend-requests').set(as(alicePhone)).expect(200);
+    const mine = waiting.body.requests.filter((r: any) => r.messageId === id);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].deviceId).toBe(bobPhone.deviceId);
+    // Nobody else sees them.
+    const bobs = await http().get('/api/v1/messages/resend-requests').set(as(bobPhone)).expect(200);
+    expect(bobs.body.requests.some((r: any) => r.messageId === id)).toBe(false);
+
+    await http()
+      .post(`/api/v1/messages/${id}/envelopes`)
+      .set(as(alicePhone))
+      .send({ envelopes: [{ deviceId: bobPhone.deviceId, ciphertext: seal('while you were away'), type: 3 }] })
+      .expect(201);
+    const after = await http().get('/api/v1/messages/resend-requests').set(as(alicePhone)).expect(200);
+    expect(after.body.requests.some((r: any) => r.messageId === id)).toBe(false);
+  });
+
   it('forgets a device\'s keys when it is signed out', async () => {
     if (skip()) return;
     await http().delete(`/api/v1/devices/${bobLaptop.deviceId}`).set(as(bobPhone)).expect(200);

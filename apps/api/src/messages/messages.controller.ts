@@ -392,6 +392,12 @@ export class MessagesController {
     return this.messagesService.requestResend(req.user.sub, req.user.deviceId, id);
   }
 
+  /** Requests for my own messages that are still waiting — collected at sign-in and after each sync. */
+  @Get('resend-requests')
+  async pendingResendRequests(@Req() req: AuthedReq) {
+    return this.messagesService.pendingResendRequests(req.user.sub);
+  }
+
   /** The author's answer: fresh sealed copies for particular devices. */
   @Post(':id/envelopes')
   async addEnvelopes(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: AddEnvelopesDto) {

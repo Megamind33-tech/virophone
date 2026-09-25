@@ -78,12 +78,15 @@ sealed class OpenResult {
  * Everything runs off the main thread: libsignal calls the store synchronously.
  */
 class E2eeEngine internal constructor(
-    private val db: E2eeDatabase,
+    private val database: () -> E2eeDatabase,
     private val api: ViroKeysApi,
 ) {
-    constructor(context: Context, api: ViroKeysApi) : this(E2eeDatabase.get(context), api)
+    /** The signed-in account's keys, whichever account that is at the moment of each call. */
+    constructor(context: Context, api: ViroKeysApi) : this({ E2eeDatabase.get(context) }, api)
+    internal constructor(db: E2eeDatabase, api: ViroKeysApi) : this({ db }, api)
 
-    private val dao = db.dao()
+    private val db: E2eeDatabase get() = database()
+    private val dao: E2eeDao get() = db.dao()
     /** Devices a fresh session was started with for a reseal, and when. */
     private val freshSessions = java.util.concurrent.ConcurrentHashMap<String, Long>()
     /** When one-time prekeys were last checked outside registration. */
@@ -91,6 +94,17 @@ class E2eeEngine internal constructor(
     private val lock = Mutex()
     /** Who has which devices, so sealing is not a network round trip per message. */
     private val deviceCache = java.util.concurrent.ConcurrentHashMap<String, CachedDevices>()
+
+    /**
+     * Another account's keys are now the ones in use. What this engine holds
+     * in memory about the last one — devices it looked up, sessions it just
+     * started — belongs to that account and is dropped.
+     */
+    fun onAccountChanged() {
+        deviceCache.clear()
+        freshSessions.clear()
+        lastTopUpCheck = 0L
+    }
 
     // --------------------------------------------------------- registration
 

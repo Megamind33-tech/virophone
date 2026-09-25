@@ -96,6 +96,10 @@ interface ViroMessagingApi {
     @POST("api/v1/messages/{id}/resend-request")
     suspend fun requestResend(@Path("id") id: String): OkResult
 
+    /** Requests for my own messages still waiting on an answer — collected after each sync. */
+    @GET("api/v1/messages/resend-requests")
+    suspend fun pendingResendRequests(): ResendRequestsDto
+
     /** The author's answer: fresh sealed copies of one of its own messages, for particular devices. */
     @POST("api/v1/messages/{id}/envelopes")
     suspend fun addEnvelopes(@Path("id") id: String, @Body body: AddEnvelopesBody): OkResult
@@ -260,6 +264,8 @@ data class SendBody(
 
 data class EnvelopeBody(val deviceId: String, val ciphertext: String, val type: Int)
 data class AddEnvelopesBody(val envelopes: List<EnvelopeBody>)
+data class ResendRequestDto(val messageId: String, val conversationId: String?, val userId: String, val deviceId: String)
+data class ResendRequestsDto(val requests: List<ResendRequestDto>? = null)
 
 /** A place, or the start of a live share (liveSeconds: 900, 3600 or 28800). */
 data class LocationBody(

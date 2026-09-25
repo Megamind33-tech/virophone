@@ -27,7 +27,8 @@ data class ConversationUsage(val conversationId: String, val title: String?, val
  * clearing it is safe. Anything still waiting to be sent is left alone.
  */
 class MediaStorage(private val context: Context, private val media: MediaFiles) {
-    private val dao = MessagingDatabase.get(context.applicationContext).dao()
+    // Looked up each time: it is the signed-in account's store, and that can change.
+    private val dao get() = MessagingDatabase.get(context.applicationContext).dao()
 
     suspend fun usage(): StorageUsage = withContext(Dispatchers.IO) {
         val cached = media.cachedFiles()
