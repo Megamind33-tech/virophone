@@ -120,6 +120,13 @@ private val activityPhotos: Map<String, Int> = mapOf(
     // which is the case they were always really for.
 )
 
+/**
+ * The photograph bundled for an activity, or null where it only has the drawn
+ * art. Now uses this for the environment behind the card, and falls back to
+ * the ordinary background rather than blurring a drawing.
+ */
+fun momentActivityPhoto(intentKey: String?): Int? = intentKey?.let { activityPhotos[it] }
+
 @Composable
 fun MomentActivityArt(intentKey: String, modifier: Modifier = Modifier) {
     val photo = activityPhotos[intentKey]

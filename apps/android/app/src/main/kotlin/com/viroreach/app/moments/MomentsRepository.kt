@@ -66,6 +66,15 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
     /** People waiting at a door of this person's own. */
     private val _knocks = MutableStateFlow(0)
     val knocks = _knocks.asStateFlow()
+    /** Moments this person has knocked on, this session. Kept here rather
+     *  than on the screen so leaving Now and coming back still says so. */
+    private val _knocked = MutableStateFlow<Set<String>>(emptySet())
+    val knocked = _knocked.asStateFlow()
+    /** When the list last came back from the server, by the local clock. */
+    private var refreshedAt = 0L
+    /** The Moment somebody was looking at on Now, so returning to the tab
+     *  lands on it rather than back at the first card. */
+    var focusedMomentId: String? = null
 
     /** Everything moment.* the socket delivers; open rooms and the Now screen
      *  subscribe rather than each owning a socket. */
@@ -73,7 +82,14 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
     val frames = _frames.asSharedFlow()
 
     fun now() = System.currentTimeMillis() + offset
-    fun clear() { owner = null; _moments.value = emptyList(); _invitations.value = emptyList(); _knocks.value = 0; _loaded.value = false; _error.value = null; offset = 0 }
+    fun clear() {
+        owner = null; _moments.value = emptyList(); _invitations.value = emptyList(); _knocks.value = 0
+        _loaded.value = false; _error.value = null; offset = 0
+        _knocked.value = emptySet(); refreshedAt = 0L; focusedMomentId = null
+    }
+    /** True when there is nothing cached, or what is cached is older than [maxAgeMs]. */
+    fun isStale(maxAgeMs: Long): Boolean =
+        !_loaded.value || owner != userId() || System.currentTimeMillis() - refreshedAt > maxAgeMs
     fun prune() {
         if (owner != userId()) clear()
         _moments.value = _moments.value.filter { it.endsAt() > now() }
@@ -89,6 +105,7 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
             _moments.value = result.moments.filter { it.endsAt() > now() }
             _loaded.value = true
             _error.value = null
+            refreshedAt = System.currentTimeMillis()
         }
         catch (e: CancellationException) { throw e }
         catch (e: Exception) { prune(); _error.value = "Couldn't refresh Moments. Check your connection." }
@@ -170,7 +187,7 @@ class MomentsRepository(private val api: ViroMomentsApi, private val userId: () 
         runCatching { api.forgetKeepsake(keepsakeId) }
             .onFailure { if (it is CancellationException) throw it }
 
-    suspend fun knock(id: String): Result<Unit> = action { api.knock(id) }
+    suspend fun knock(id: String): Result<Unit> = action(onSuccess = { _knocked.value = _knocked.value + id }) { api.knock(id) }
     /** Recover a persisted knock after an offline push or process restart. */
     suspend fun pendingKnock(): Map<String, Any?>? {
         val account = userId() ?: return null

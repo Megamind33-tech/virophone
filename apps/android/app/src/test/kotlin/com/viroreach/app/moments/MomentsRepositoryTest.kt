@@ -285,6 +285,26 @@ class MomentsRepositoryTest {
         assertTrue(state.send("I'm in").isSuccess)
         assertEquals("I'm in", state.messages.value.last().body)
     }
+    @Test fun `a knock is remembered for the session and forgotten on sign out`() = runTest {
+        var user: String? = "bob"
+        val api = Api(listOf(moment()))
+        val repo = MomentsRepository(api) { user }
+        repo.refresh()
+        assertTrue(repo.knocked.value.isEmpty())
+        assertTrue(repo.knock("moment").isSuccess)
+        assertEquals(setOf("moment"), repo.knocked.value)
+        user = null
+        repo.refresh()
+        assertTrue(repo.knocked.value.isEmpty())
+    }
+    @Test fun `a fresh list is not stale and an unloaded one is`() = runTest {
+        val api = Api(listOf(moment()))
+        val repo = MomentsRepository(api) { "bob" }
+        assertTrue(repo.isStale(30_000))
+        repo.refresh()
+        assertFalse(repo.isStale(30_000))
+        assertTrue(repo.isStale(-1))
+    }
     @Test fun `knock and invite delegate to the api`() = runTest {
         val api = Api(emptyList())
         val repo = MomentsRepository(api) { "bob" }

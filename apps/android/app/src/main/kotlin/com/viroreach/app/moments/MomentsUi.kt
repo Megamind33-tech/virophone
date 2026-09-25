@@ -23,7 +23,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -52,7 +51,6 @@ import kotlinx.coroutines.launch
 
 private val types = listOf("FREE" to "Free", "BREAK" to "Break", "LISTENING" to "Listening",
     "WATCHING" to "Watching", "GAMING" to "Gaming", "WORKING" to "Working", "CUSTOM" to "Custom")
-val momentReactions = listOf("❤️", "😂", "🔥", "👏", "👍")
 
 /** Controls follow the selected appearance; artwork owns its own contrast. */
 @Composable
@@ -125,9 +123,19 @@ fun NowScreen(
     var roomId by rememberSaveable { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
-    val knocked = remember { mutableStateListOf<String>() }
+    val knocked by repo.knocked.collectAsState()
+    // Which Moment a knock is on its way to. One at a time, because a second
+    // tap must not send a second knock.
+    var knocking by remember { mutableStateOf<String?>(null) }
+    // A knock that did not go through, said once in plain words and then let go.
+    var knockNotice by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(knockNotice) { if (knockNotice != null) { delay(4000); knockNotice = null } }
     LaunchedEffect(repo) {
-        repo.refresh(); repo.refreshInvitations(); session.promotions.refresh()
+        // Coming back to the tab reuses what is already here; only a list that
+        // has actually gone stale is fetched again on the way in.
+        if (repo.isStale(30_000)) {
+            repo.refresh(); repo.refreshInvitations(); session.promotions.refresh()
+        }
         var ticks = 0
         while (true) {
             delay(1000)
@@ -141,162 +149,120 @@ fun NowScreen(
     }
     val me = session.tokenStore.getUserId()
     val own = moments.firstOrNull { it.creatorUserId == me }
-    val peers = moments.filter { it.creatorUserId != me }
 
-    // Who is holding a door open for this person specifically. That Moment
-    // leads, because being asked outranks being available.
-    val invitedIds = remember(invitations) { invitations.map { it.moment.id }.toSet() }
-    val deck = peers.sortedByDescending { it.id in invitedIds }
-    val pager = rememberPagerState(pageCount = { deck.size })
-    val featured = deck.getOrNull(pager.currentPage)
-    val secondary = emptyList<MomentDto>()
-    val pendingInvites = invitations.filter { invite -> peers.none { it.id == invite.moment.id } }
+    // The deck: everyone else's Moments, plus any Moment this person was asked
+    // into that the list has not caught up with. Whoever asked for this person
+    // specifically leads, because being asked outranks being available.
+    val deck = remember(moments, invitations, me) {
+        val invitedIds = invitations.map { it.moment.id }.toSet()
+        val peers = moments.filter { it.creatorUserId != me }
+        val waiting = invitations.filter { invite -> peers.none { it.id == invite.moment.id } && invite.moment.creatorUserId != me }
+        (peers.map { NowEntry(it, invited = it.id in invitedIds) } +
+            waiting.map { NowEntry(it.moment, invited = true, invitationId = it.invitationId) })
+            .sortedByDescending { it.invited }
+    }
+    val pager = rememberPagerState(
+        initialPage = deck.indexOfFirst { it.moment.id == repo.focusedMomentId }.coerceAtLeast(0),
+        pageCount = { deck.size },
+    )
+    // Remember where somebody was, so a trip to a chat and back lands on the
+    // same Moment rather than the first one.
+    LaunchedEffect(pager, deck) {
+        snapshotFlow { pager.settledPage }.collect { page ->
+            deck.getOrNull(page)?.let { repo.focusedMomentId = it.moment.id }
+        }
+    }
+    // When the list changes underneath (someone new, someone gone), stay with
+    // the Moment that was in front rather than whatever now has its index.
+    val deckIds = remember(deck) { deck.map { it.moment.id } }
+    LaunchedEffect(deckIds) {
+        val index = deckIds.indexOf(repo.focusedMomentId)
+        if (index >= 0 && index != pager.currentPage && !pager.isScrollInProgress) pager.scrollToPage(index)
+    }
+    // With a single Moment the pager is not laid out and its page can be left
+    // over from a longer list, so it is clamped rather than trusted.
+    val active = if (deck.isEmpty()) null else deck[pager.currentPage.coerceIn(0, deck.lastIndex)].moment
+    val clockNow: () -> Long = { clock }
 
     MomentsTheme {
       ViroScreenBackground {
+        NowBackdrop(intentKey = active?.intent, modifier = Modifier.fillMaxSize())
         Column(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp)) {
-                Text("Now", color = ViroColors.textPrimary, style = MaterialTheme.typography.headlineMedium)
-                Text(
-                    if (!loaded && peers.isEmpty()) "Checking Moments…" else if (peers.isEmpty() && own == null) "It's quiet right now" else "Moments from your people",
-                    color = ViroColors.textMuted,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-            LazyColumn(
-                Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                // Your own Moment is a live state, not an invitation. It stays
-                // small so it cannot outshout somebody asking for you.
-                if (own != null) {
-                    item(key = "mine") {
-                        YourMomentStrip(
-                            own = own,
-                            photoUrl = profile.effectivePhotoUrl,
-                            displayName = profile.displayName,
-                            clock = clock,
-                            onReturn = { roomId = own.id },
-                            onManage = { manage = own.id },
-                        )
-                    }
-                }
-
-                if (featured != null) {
-                    item(key = "moment-deck") {
-                        HorizontalPager(state = pager, key = { deck[it].id }, pageSpacing = 12.dp) { page ->
-                        val featured = deck[page]
-                        FeaturedMoment(
-                            m = featured,
-                            clock = clock,
-                            invited = featured.id in invitedIds,
-                            busy = busy,
-                            knockSent = featured.id in knocked,
-                            onReact = { emoji -> scope.launch {
-                                repo.cheer(featured.id, if (featured.myReaction == emoji) null else emoji)
-                                    .onFailure { actionError = it.message }
-                            } },
-                            onStepIn = { actionError = null; roomId = featured.id },
-                            onKnock = {
-                                actionError = null
-                                busy = true
+            NowHeader()
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                when {
+                    deck.isNotEmpty() -> NowMomentDeck(
+                        entries = deck,
+                        pager = pager,
+                        clock = clockNow,
+                        knockState = { id ->
+                            when {
+                                id in knocked -> KnockState.SENT
+                                id == knocking -> KnockState.SENDING
+                                else -> KnockState.AVAILABLE
+                            }
+                        },
+                        onBeWith = { entry -> actionError = null; roomId = entry.moment.id },
+                        onKnock = { entry ->
+                            val id = entry.moment.id
+                            if (knocking == null && id !in knocked) {
+                                knocking = id
                                 scope.launch {
-                                    repo.knock(featured.id).onSuccess { knocked.add(featured.id) }.onFailure { actionError = it.message }
-                                    busy = false
+                                    repo.knock(id).onFailure { knockNotice = "Couldn't knock right now." }
+                                    knocking = null
                                 }
-                            },
-                        )
-                        }
-                        if (deck.size > 1) Text(
-                            "${pager.currentPage + 1} of ${deck.size} · Swipe for more Moments",
-                            color = ViroColors.textMuted,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(top = 8.dp),
-                        )
-                    }
+                            }
+                        },
+                        onDecline = { entry ->
+                            entry.invitationId?.let { invitation -> scope.launch { repo.declineInvitation(invitation) } }
+                        },
+                    )
+                    // Nothing cached and the first fetch failed: say so, keep the shell.
+                    error != null && !loaded -> NowLoadError(onRetry = {
+                        scope.launch { repo.refresh(); repo.refreshInvitations() }
+                    })
+                    !loaded -> NowCardSkeleton()
+                    // Nothing is manufactured to fill the screen. A quiet
+                    // evening is allowed to look like one.
+                    else -> NowEmptyState(showCompose = own == null, onOpenMoment = { startMoment() })
                 }
-
+            }
+            NowDock {
+                when {
+                    knockNotice != null -> NowNotice(knockNotice!!, action = null, onAction = {})
+                    // A failed refresh keeps whatever is already on screen:
+                    // losing the room somebody opened because a request timed
+                    // out is worse than showing it a minute stale.
+                    error != null && loaded -> NowNotice(
+                        "Couldn't refresh Moments.",
+                        action = "Try again",
+                        onAction = { scope.launch { repo.refresh(); repo.refreshInvitations() } },
+                    )
+                }
                 // After whoever is asking for you, never above them. One at a
                 // time, because two would be a feed of advertisements.
                 promos.firstOrNull()?.let { promo ->
-                    item(key = "promo-" + promo.id) {
-                        PromotionStrip(
-                            promo = promo,
-                            onDismiss = { scope.launch { session.promotions.dismiss(promo.id) } },
-                        )
-                    }
+                    PromotionStrip(
+                        promo = promo,
+                        onDismiss = { scope.launch { session.promotions.dismiss(promo.id) } },
+                    )
                 }
-
-                items(secondary, key = { it.id }) { m ->
-                    SecondaryMoment(m = m, clock = clock, onOpen = { actionError = null; roomId = m.id })
+                // Your own Moment is a live state, not an invitation, so it
+                // lives in the dock rather than competing with the deck. With
+                // none running, the dock is where you open one — except when
+                // the empty state is already offering exactly that.
+                if (own != null) {
+                    YourMomentStrip(
+                        own = own,
+                        photoUrl = profile.effectivePhotoUrl,
+                        displayName = profile.displayName,
+                        clock = clockNow,
+                        onReturn = { roomId = own.id },
+                        onManage = { manage = own.id },
+                    )
+                } else if (deck.isNotEmpty() || !loaded) {
+                    NowComposer(onOpenMoment = { startMoment() })
                 }
-
-                if (pendingInvites.isNotEmpty()) {
-                    items(pendingInvites, key = { it.invitationId }) { invitation ->
-                        InvitationRow(
-                            moment = invitation.moment,
-                            onOpen = { roomId = invitation.moment.id },
-                            onDismiss = { scope.launch { repo.declineInvitation(invitation.invitationId) } },
-                        )
-                    }
-                }
-
-                // Nothing is manufactured to fill the screen. A quiet evening
-                // is allowed to look like one.
-                if (featured == null && secondary.isEmpty() && pendingInvites.isEmpty()) {
-                    item(key = "empty") {
-                        if (loaded) {
-                            Column(Modifier.fillMaxWidth().padding(top = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    "Your people are quiet right now.",
-                                    color = ViroColors.textPrimary,
-                                    style = MaterialTheme.typography.titleMedium,
-                                )
-                                Spacer(Modifier.height(6.dp))
-                                Text(
-                                    "Share what you're doing. Company can start here.",
-                                    color = ViroColors.textMuted,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                )
-                                if (own == null) {
-                                    Spacer(Modifier.height(20.dp))
-                                    Button(onClick = { startMoment() }) { Text("Start a Moment") }
-                                }
-                            }
-                        } else {
-                            Text("Checking who's around…", color = ViroColors.textMuted, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-
-                // A failed refresh keeps whatever is already on screen: losing
-                // the room somebody opened because a request timed out is worse
-                // than showing it a minute stale.
-                if (error != null) item(key = "error") {
-                    TextButton(onClick = { scope.launch { repo.refresh() } }) {
-                        Text("Couldn't refresh right now · Try again", color = ViroColors.textMuted)
-                    }
-                }
-                if (actionError != null) item(key = "action-error") {
-                    Text(actionError!!, color = ViroColors.textMuted, style = MaterialTheme.typography.bodySmall)
-                }
-                // Room for the button that floats over the end of the list.
-                if (own == null) item(key = "fab-room") { Spacer(Modifier.height(72.dp)) }
-            }
-        }
-
-        // Opening a Moment cannot depend on nobody else having one. This used
-        // to live only in the empty state, so the moment anybody else was
-        // active it disappeared and there was no way to start your own.
-        if (own == null) {
-            ExtendedFloatingActionButton(
-                onClick = { startMoment() },
-                containerColor = ViroColors.BlueAccent,
-                contentColor = ViroColors.NavyBackground,
-                modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
-            ) {
-                Text("Open a Moment", fontWeight = FontWeight.SemiBold)
             }
         }
       }
@@ -430,144 +396,6 @@ fun NowScreen(
         )
     }
 }
-
-/** One compact card, one primary action (§15): avatar, name, activity, time or
- *  participants, and nothing else — conversations and calls live elsewhere. */
-@Composable
-private fun NowCard(
-    m: MomentDto,
-    clock: Long,
-    primaryLabel: String,
-    onPrimary: () -> Unit,
-    onReact: (String?) -> Unit = {},
-) {
-    val people = m.participantCount ?: 0
-    val left = remainingMinutes(m.endsAt(), clock)
-    Surface(
-        shape = RoundedCornerShape(22.dp),
-        color = ViroColors.surfaceRaised,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column {
-            // The picture is the card. A Moment is somebody making room for
-            // you, and that should be visible before the words are read.
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(158.dp)
-                    .clickable(onClick = onPrimary),
-            ) {
-                com.viroreach.app.moments.engine.MomentActivityArt(
-                    m.intent ?: "BE",
-                    Modifier.fillMaxSize(),
-                )
-                // How much of it is left, and who is already in.
-                Row(
-                    Modifier.align(Alignment.TopEnd).padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    if (people > 1) CardChip("$people here")
-                    CardChip(if (left >= 60) "${left / 60} h left" else "$left min left")
-                }
-                Row(
-                    Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    MomentAvatar(m)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            m.displayName,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            color = androidx.compose.ui.graphics.Color.White,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            m.activity(),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.78f),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = ViroColors.BlueAccent,
-                        modifier = Modifier.clickable(onClick = onPrimary),
-                    ) {
-                        Text(
-                            primaryLabel,
-                            color = ViroColors.NavyBackground,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
-                        )
-                    }
-                }
-            }
-            MomentReactionRow(m, onReact)
-        }
-    }
-}
-
-/** A small fact about a Moment, legible over any of the artwork. */
-@Composable
-private fun CardChip(text: String) {
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.38f),
-    ) {
-        Text(
-            text,
-            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.92f),
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-        )
-    }
-}
-
-/**
- * Reacting to the Moment itself — the small thing to do when joining is the
- * big one. Someone posts that they are free and nobody wants a room yet;
- * without this there is no way to say "I saw that" at all.
- *
- * Counts sit next to the emoji that have any, ranked by the server with the
- * most-chosen first, and tapping your own takes it back.
- */
-@Composable
-private fun MomentReactionRow(m: MomentDto, onReact: (String?) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        for (emoji in momentReactions) {
-            val count = m.reactions.firstOrNull { it.emoji == emoji }?.count ?: 0
-            val mine = m.myReaction == emoji
-            Surface(
-                shape = RoundedCornerShape(50),
-                // The strip sits on the raised card now, so an unchosen
-                // reaction has to be lighter than it rather than the same.
-                color = if (mine) {
-                    ViroColors.BlueAccent.copy(alpha = 0.22f)
-                } else {
-                    androidx.compose.ui.graphics.Color.White.copy(alpha = 0.07f)
-                },
-                modifier = Modifier.padding(end = 6.dp).clickable { onReact(if (mine) null else emoji) },
-            ) {
-                Text(
-                    if (count > 0) "$emoji $count" else emoji,
-                    color = if (mine) ViroColors.BlueAccent else ViroColors.textMuted,
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                )
-            }
-        }
-    }
-}
-
 
 /** The room attached to a Moment: header (who, what, how long, how many),
  *  Chat | People, and nothing the temporary interaction doesn't need (§6). */
@@ -1107,15 +935,6 @@ private fun MomentPage(title: String, onBack: () -> Unit, content: androidx.comp
     }
 }
 
-/** What the host said, or a plain line when they said nothing. */
-private fun MomentDto.invitation(): String = headline()
-
-/** "Cooking dinner · 28 min left", rather than a timer pill off on its own. */
-private fun MomentDto.line(clock: Long): String {
-    val left = remainingMinutes(endsAt(), clock)
-    return activity() + " · " + (if (left >= 60) "another " + (left / 60) + " h" else "another " + left + " min")
-}
-
 /**
  * The person's own Moment: a live state, kept deliberately small.
  *
@@ -1128,17 +947,23 @@ private fun YourMomentStrip(
     own: MomentDto,
     photoUrl: String?,
     displayName: String,
-    clock: Long,
+    clock: () -> Long,
     onReturn: () -> Unit,
     onManage: () -> Unit,
 ) {
+    val end = remember(own.expiresAt) { own.endsAt() }
+    val left by remember(end) { derivedStateOf { remainingPhrase(remainingMinutes(end, clock())) } }
     Surface(
-        shape = RoundedCornerShape(18.dp),
-        color = ViroColors.surfaceRaised,
+        shape = RoundedCornerShape(20.dp),
+        color = if (ViroColors.isLight) ViroColors.surface else ViroColors.surfaceRaised.copy(alpha = 0.96f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (ViroColors.isLight) ViroColors.divider else androidx.compose.ui.graphics.Color.White.copy(alpha = 0.08f),
+        ),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
-            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.clickable(onClick = onManage)) {
@@ -1164,161 +989,13 @@ private fun YourMomentStrip(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    remainingMinutes(own.endsAt(), clock).toString() + " min left",
+                    left,
                     color = ViroColors.textMuted,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            TextButton(onClick = onReturn) {
-                Text("Return", color = ViroColors.BlueAccent, fontWeight = FontWeight.SemiBold)
-            }
-        }
-    }
-}
-
-/**
- * The strongest invitation on the screen, as a doorway rather than a post.
- *
- * What the person said comes first and largest, because "come keep me company"
- * is the reason to walk in and "Cooking" is only the label on the door. Their
- * face sits with their name rather than in a ring in the corner, and the one
- * thing to do is Step in.
- */
-@Composable
-private fun FeaturedMoment(
-    m: MomentDto,
-    clock: Long,
-    invited: Boolean,
-    busy: Boolean,
-    knockSent: Boolean,
-    onReact: (String) -> Unit,
-    onStepIn: () -> Unit,
-    onKnock: () -> Unit,
-) {
-    val words = m.composition() == MomentComposition.WORDS
-    val ink = if (words) ViroColors.textPrimary else androidx.compose.ui.graphics.Color.White
-    var reactionsOpen by remember(m.id) { mutableStateOf(false) }
-    Surface(
-        shape = RoundedCornerShape(24.dp),
-        color = ViroColors.surfaceRaised,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Box(Modifier.fillMaxWidth().heightIn(min = if (words) 240.dp else 320.dp).clickable(onClick = onStepIn)) {
-            if (!words) {
-            com.viroreach.app.moments.engine.MomentActivityArt(m.intent ?: "BE", Modifier.matchParentSize())
-            // Only behind the words, so the scene keeps its own light.
-            Box(
-                Modifier.matchParentSize()
-                    .background(
-                        androidx.compose.ui.graphics.Brush.verticalGradient(
-                            0f to androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f),
-                            0.55f to androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f),
-                            1f to androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.85f),
-                        ),
-                    ),
-            )
-            MomentPresenceEdge(
-                intent = m.intent ?: "BE",
-                modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(),
-            )
-            }
-            if (invited) {
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.45f),
-                    modifier = Modifier.align(Alignment.TopStart).padding(14.dp),
-                ) {
-                    Text(
-                        m.displayName.substringBefore(' ') + " asked for you",
-                        color = androidx.compose.ui.graphics.Color.White,
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                    )
-                }
-            }
-
-            Column(Modifier.fillMaxWidth().padding(18.dp).padding(top = if (invited) 38.dp else 0.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MomentAvatar(m)
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        m.displayName,
-                        color = ink,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(m.age(clock), color = ink.copy(alpha = 0.75f), style = MaterialTheme.typography.labelSmall)
-                }
-                Spacer(Modifier.height(10.dp))
-                // The loudest thing on the card: what they actually said.
-                Text(
-                    m.invitation(),
-                    color = ink,
-                    style = MaterialTheme.typography.headlineSmall,
-                    maxLines = if (words) 5 else 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                m.cardContext()?.let { context ->
-                    Spacer(Modifier.height(6.dp))
-                    Text(context, color = ink.copy(alpha = 0.85f), style = MaterialTheme.typography.bodyLarge)
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    LiveDot()
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        m.line(clock),
-                        color = ink.copy(alpha = 0.72f),
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                com.viroreach.app.moments.engine.MomentMood.of(m.mood)?.let { mood ->
-                    Spacer(Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            m.displayName.substringBefore(' ') + " is ",
-                            color = ink.copy(alpha = 0.72f),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        com.viroreach.app.moments.engine.MoodTag(
-                            mood,
-                            color = ink.copy(alpha = 0.88f),
-                        )
-                    }
-                }
-                WhoIsHere(m, ink.copy(alpha = 0.72f))
-                Spacer(Modifier.height(14.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Button(
-                        onClick = onStepIn,
-                        enabled = !busy,
-                        modifier = Modifier.heightIn(min = 46.dp),
-                    ) {
-                        Text(if (m.composition() == MomentComposition.COMPANY) "Be with them" else "Join", fontWeight = FontWeight.SemiBold)
-                    }
-                    // Only where the room actually takes a knock.
-                    if (m.endsAt() > clock) {
-                        Spacer(Modifier.width(8.dp))
-                        TextButton(onClick = onKnock, enabled = !busy && !knockSent, modifier = Modifier.heightIn(min = 46.dp)) {
-                            Text(if (knockSent) "Knock sent" else "Knock", color = ink.copy(alpha = 0.85f))
-                        }
-                    }
-                    Box {
-                        TextButton(onClick = { reactionsOpen = true }) {
-                            Text(m.myReaction ?: "React", color = ink.copy(alpha = 0.85f))
-                        }
-                        DropdownMenu(expanded = reactionsOpen, onDismissRequest = { reactionsOpen = false }) {
-                            for (emoji in momentReactions) DropdownMenuItem(text = { Text(emoji) }, onClick = {
-                                reactionsOpen = false; onReact(emoji)
-                            })
-                        }
-                    }
-                }
+            TextButton(onClick = onReturn, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text("Return", color = ViroColors.accent, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -1388,60 +1065,6 @@ private fun PromotionStrip(
     }
 }
 
-/** A smaller doorway: enough to recognise the person and what they said. */
-@Composable
-private fun SecondaryMoment(m: MomentDto, clock: Long, onOpen: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = ViroColors.surfaceRaised,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(Modifier.heightIn(min = 108.dp).clickable(onClick = onOpen), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.width(78.dp).height(108.dp)) {
-                if (m.composition() != MomentComposition.WORDS) {
-                com.viroreach.app.moments.engine.MomentActivityArt(m.intent ?: "BE", Modifier.fillMaxSize())
-                MomentPresenceEdge(
-                    intent = m.intent ?: "BE",
-                    modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(),
-                )
-                }
-                Box(Modifier.align(Alignment.Center)) { MomentAvatar(m) }
-            }
-            Column(Modifier.weight(1f).padding(horizontal = 14.dp, vertical = 12.dp)) {
-                Text(
-                    m.displayName,
-                    color = ViroColors.textPrimary,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(m.age(clock), color = ViroColors.textMuted, style = MaterialTheme.typography.labelSmall)
-                Text(
-                    m.invitation(),
-                    color = ViroColors.textPrimary,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    m.line(clock),
-                    color = ViroColors.textMuted,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                com.viroreach.app.moments.engine.MomentMood.of(m.mood)?.let { mood ->
-                    Spacer(Modifier.height(3.dp))
-                    com.viroreach.app.moments.engine.MoodTag(mood)
-                }
-                WhoIsHere(m, ViroColors.textMuted)
-            }
-        }
-    }
-}
-
 /** An invitation still waiting on an answer, with a way to say no. */
 @Composable
 internal fun InvitationRow(moment: MomentDto, onOpen: () -> Unit, onDismiss: () -> Unit) {
@@ -1490,7 +1113,7 @@ internal fun InvitationRow(moment: MomentDto, onOpen: () -> Unit, onDismiss: () 
  * that point the number is the useful part.
  */
 @Composable
-private fun WhoIsHere(m: MomentDto, color: androidx.compose.ui.graphics.Color) {
+internal fun WhoIsHere(m: MomentDto, color: androidx.compose.ui.graphics.Color) {
     val here = m.here
     val total = (m.participantCount ?: 0) - 1
     if (total > 0) {
@@ -1544,7 +1167,7 @@ private fun LiveDot() {
  * and it turns a person into a story to be watched.
  */
 @Composable
-private fun MomentPresenceEdge(intent: String, modifier: Modifier = Modifier) {
+internal fun MomentPresenceEdge(intent: String, modifier: Modifier = Modifier) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val still = remember {
         runCatching {
