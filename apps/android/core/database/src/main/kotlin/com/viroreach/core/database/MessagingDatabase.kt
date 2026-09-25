@@ -320,6 +320,10 @@ interface MessagingDao {
     @Query("UPDATE messages SET cryptoState = :state WHERE type = 'ENCRYPTED' AND cryptoState IS NULL AND conversationId = :conversationId")
     suspend fun settleUnrecoveredSealed(conversationId: String, state: String)
 
+    /** When the newest message from someone else in a chat was sent. */
+    @Query("SELECT MAX(createdAt) FROM messages WHERE conversationId = :conversationId AND senderUserId != :me AND type != 'SYSTEM'")
+    suspend fun latestIncomingAt(conversationId: String, me: String): Long?
+
     /** Incoming messages in a chat that this phone has not been able to open yet. */
     @Query(
         """

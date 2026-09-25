@@ -371,6 +371,15 @@ class MessagingRepository(
             }
         }
         upsertMessages(msgs, "sync")
+        // After the messages are in, so a new one that arrived in this very
+        // sync counts as newer than the last read and keeps its badge.
+        for (c in entities) {
+            if (c.unread == 0 && !c.mentionedUnread) continue
+            val kept = keepLocalRead(c, me)
+            if (kept.unread == 0 && !kept.mentionedUnread) {
+                dao.conversation(c.id)?.let { now -> dao.upsertConversations(listOf(now.copy(unread = 0, mentionedUnread = false))) }
+            }
+        }
     }
 
     /**
@@ -448,6 +457,20 @@ class MessagingRepository(
         val others = ChatJson.reactions(target.reactionsJson).filter { it.userId != row.senderUserId }
         val next = if (emoji.isNullOrBlank()) others else others + ReactionDto(row.senderUserId, emoji)
         dao.upsertMessages(listOf(target.copy(reactionsJson = ChatJson.toJson(next))))
+    }
+
+    /**
+     * The server's unread count, unless this phone already read everything it
+     * counts. "Read" is held back from the server while a message is still
+     * being opened, so its count can lag; what was actually seen here wins, and
+     * only a message newer than that shows as unread again. "Mark as unread"
+     * is the person's own choice and is left alone.
+     */
+    private suspend fun keepLocalRead(c: ConversationEntity, me: String?): ConversationEntity {
+        if (c.unread == 0 && !c.mentionedUnread) return c
+        val readAt = dao.kv(KEY_READ_AT + c.id)?.value?.toLongOrNull() ?: return c
+        val newest = me?.let { dao.latestIncomingAt(c.id, it) } ?: return c
+        return if (newest <= readAt) c.copy(unread = 0, mentionedUnread = false) else c
     }
 
     /**
@@ -1005,12 +1028,17 @@ class MessagingRepository(
         if (conversationId.startsWith(PLACEHOLDER)) return
         scope.launch {
             dao.clearUnread(conversationId)
+            // Remembered here, because the server's count may not hear about
+            // it yet (below) — and the next sync must not bring back a badge
+            // for messages this person has already looked at.
+            val me = myUserId()
+            val newest = me?.let { dao.latestIncomingAt(conversationId, it) } ?: 0L
+            dao.putKv(KvEntity(KEY_READ_AT + conversationId, maxOf(System.currentTimeMillis(), newest).toString()))
             // "Read" tells the sender their words were seen. A message this
             // phone is still opening has not been seen, and telling them it
             // had — while the chat here says it is still coming — is exactly
             // the contradiction a messenger must never show. The receipt goes
             // once everything waiting has opened (see [upsertMessages]).
-            val me = myUserId()
             if (me != null && dao.unopenedIncoming(conversationId, me) > 0) return@launch
             runCatching { api.markRead(conversationId) }
         }
@@ -1992,6 +2020,8 @@ class MessagingRepository(
         private const val RETRY_BATCH = 200
         /** How far back the one-off repair looks per conversation, in pages of 60. */
         private const val REPAIR_PAGES = 10
+        /** When this phone last showed a chat as read, so a lagging server count cannot undo it. */
+        private const val KEY_READ_AT = "read_at:"
         /** Set once the earlier build's unavailable messages have been put back in line. */
         private const val KEY_REQUEUED_V1 = "sealed_requeued_v1"
         /** How often waiting re-send requests are collected from the server. */
